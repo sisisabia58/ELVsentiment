@@ -1,0 +1,11 @@
+{
+  "x_monthly_global_post_reads": 20000,
+  "x_monthly_per_customer_post_reads": 2000,
+  "threads_rolling_24h_reserve": 1500,
+  "threads_rolling_24h_platform": 2200,
+  "schedule_min_interval_hours": 6,
+  "manual_min_interval_seconds": 900,
+  "max_jobs_per_tick": 5,
+  "worker_poll_seconds": 20,
+  "worker_heartbeat_stale_seconds": 90
+}

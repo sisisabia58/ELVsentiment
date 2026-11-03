@@ -1,0 +1,9 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/worker.Dockerfile"
+watchPatterns = ["/apps/worker/**", "/config/**", "/deploy/worker.Dockerfile"]
+
+[deploy]
+startCommand = "python -m sentiment_monitor.scheduler"
+numReplicas = 1
+restartPolicyType = "ALWAYS"

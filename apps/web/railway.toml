@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/web.Dockerfile"
+watchPatterns = ["/apps/web/**", "/config/**", "/deploy/web.Dockerfile"]
+
+[deploy]
+preDeployCommand = ["node src/db/migrate-cli.mjs"]
+startCommand = "npm run start"
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"

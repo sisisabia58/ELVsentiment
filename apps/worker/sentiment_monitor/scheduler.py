@@ -1,0 +1,572 @@
+import os
+import time
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, unquote, urlsplit
+
+from sentiment_monitor.collect_once import gate, sources_allowed
+from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
+from sentiment_monitor.pg_store import PostgresStore
+from sentiment_monitor.x_cost import admit_collection, admit_threads_query, admit_x_read
+
+# Asia/Jakarta is a fixed UTC+7 offset. The daily schedule uses that civil
+# minute, not "24 hours after the worker happened to tick".
+JAKARTA = timezone(timedelta(hours=7))
+
+CLAIM_SQL = """
+select id, customer_id, project_id, kind
+from jobs
+where status = 'queued' and run_after <= now()
+order by run_after asc, id asc
+limit %s
+for update skip locked
+"""
+
+ENQUEUE_SQL = """
+with due as (
+  select s.project_id, s.customer_id,
+         exists (
+           select 1 from jobs j
+           where j.project_id = s.project_id
+             and j.status in ('queued', 'claimed')
+         ) as overlapping
+  from project_schedules s
+  where s.enabled
+    and s.next_run_at is not null
+    and s.next_run_at <= now()
+),
+advanced as (
+  update project_schedules s
+  set next_run_at = case
+    when s.cadence = 'daily' and s.daily_minute is not null then
+      timezone(
+        'Asia/Jakarta',
+        date_trunc('day', timezone('Asia/Jakarta', now()))
+          + make_interval(mins => s.daily_minute)
+          + case
+              when timezone(
+                'Asia/Jakarta',
+                date_trunc('day', timezone('Asia/Jakarta', now()))
+                  + make_interval(mins => s.daily_minute)
+              ) <= now()
+              then interval '1 day'
+              else interval '0'
+            end
+      )
+    else now() + make_interval(hours => s.interval_hours)
+  end
+  from due
+  where s.project_id = due.project_id
+  returning s.customer_id, s.project_id, due.overlapping
+)
+insert into jobs (id, customer_id, project_id, kind, status, run_after, status_detail, created_at)
+select gen_random_uuid(), customer_id, project_id, 'scheduled',
+       case when overlapping then 'deferred' else 'queued' end,
+       now(),
+       case when overlapping then 'skipped_overlap' else null end,
+       now()
+from advanced
+"""
+
+EXPIRE_CLAIMS_SQL = """
+update jobs
+set status = 'failed', status_detail = 'claim_expired'
+where status = 'claimed'
+and claimed_at < now() - make_interval(secs => %s)
+"""
+
+HEARTBEAT_SQL = """
+insert into worker_heartbeat (id, worker_id, last_seen_at)
+values (1, %s, now())
+on conflict (id) do update
+  set worker_id = excluded.worker_id,
+      last_seen_at = excluded.last_seen_at
+"""
+
+_SECRET_NAMES = (
+    "DATABASE_URL",
+    "WORKER_DATABASE_URL",
+    "MIGRATION_DATABASE_URL",
+    "APP_DB_PASSWORD",
+    "WORKER_DB_PASSWORD",
+    "X_BEARER_TOKEN",
+    "THREADS_ACCESS_TOKEN",
+    "TYPESAFE_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+
+def enqueue_due_sql() -> str:
+    return ENQUEUE_SQL
+
+
+def next_daily_run_at(daily_minute: int, now: datetime) -> datetime:
+    """Next Asia/Jakarta occurrence of a minute-of-day, strictly after `now` when that minute has started."""
+    if now.tzinfo is None:
+        raise ValueError("daily_clock_requires_aware_now")
+    minute = max(0, min(1439, int(daily_minute)))
+    local = now.astimezone(JAKARTA)
+    hour, mins = divmod(minute, 60)
+    candidate = local.replace(hour=hour, minute=mins, second=0, microsecond=0)
+    if candidate <= local:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(timezone.utc)
+
+
+ENABLED_SOURCES_SQL = """
+select enabled_sources
+from project_settings
+where project_id = %s
+"""
+
+
+def load_enabled_sources(conn, project_id: str) -> list[str]:
+    rows = conn.execute(ENABLED_SOURCES_SQL, (project_id,)) or []
+    if not rows:
+        return ["x", "threads"]
+    raw = rows[0].get("enabled_sources") if isinstance(rows[0], dict) else None
+    if not isinstance(raw, (list, tuple)):
+        return ["x", "threads"]
+    return [item for item in raw if item in ("x", "threads")]
+
+
+def heartbeat_sql() -> str:
+    return HEARTBEAT_SQL
+
+
+def claim_due_jobs(conn, worker_id: str, limit: int) -> list:
+    rows = conn.execute(CLAIM_SQL, (limit,)) or []
+    for row in rows:
+        conn.execute(
+            "update jobs set status = 'claimed', claimed_by = %s, claimed_at = now() where id = %s",
+            (worker_id, row["id"]),
+        )
+    return rows
+
+
+def record_heartbeat(conn, worker_id: str) -> None:
+    conn.execute(HEARTBEAT_SQL, (worker_id,))
+
+
+def heartbeat_is_stale(last_seen: datetime | None, now: datetime, stale_seconds: int) -> bool:
+    if last_seen is None:
+        return True
+    return (now - last_seen).total_seconds() > stale_seconds
+
+
+def decide_job(gate_code: int) -> tuple[str, str] | None:
+    if gate_code != 0:
+        return ("deferred", "credential_unapproved")
+    return None
+
+
+def _url_password_secrets(value: str) -> set[str]:
+    try:
+        password = urlsplit(value).password
+    except ValueError:
+        return set()
+    if not password:
+        return set()
+    decoded = unquote(password)
+    return {password, decoded, quote(password, safe=""), quote(decoded, safe="")}
+
+
+def format_log(message: str) -> str:
+    secrets: set[str] = set()
+    for name in _SECRET_NAMES:
+        value = os.environ.get(name, "")
+        if not value:
+            continue
+        secrets.add(value)
+        secrets.add(quote(value, safe=""))
+        if "URL" in name:
+            secrets.update(_url_password_secrets(value))
+    redacted = message
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted
+
+
+def _log_exception(error: Exception) -> None:
+    if getattr(error, "_monitor_logged", False):
+        return
+    print(format_log(str(error)))
+    try:
+        error._monitor_logged = True
+    except Exception:
+        return
+
+
+def enqueue_due_schedules(conn, limits) -> None:
+    # The saved interval was checked against the shared minimum. Filtering again
+    # with a worker-only env override would skip schedules the web accepted.
+    if limits.schedule_min_interval_hours < 1:
+        raise ValueError("schedule_min_interval_hours")
+    conn.execute(ENQUEUE_SQL)
+
+
+def release_expired_claims(conn, stale_seconds: int) -> None:
+    conn.execute(EXPIRE_CLAIMS_SQL, (stale_seconds,))
+
+
+def _defer(conn, job_id: str, detail: str) -> None:
+    conn.execute(
+        "update jobs set status = 'deferred', status_detail = %s where id = %s",
+        (detail, job_id),
+    )
+
+
+def _fail(conn, job_id: str, detail: str) -> None:
+    conn.execute(
+        "update jobs set status = 'failed', status_detail = %s where id = %s",
+        (detail, job_id),
+    )
+
+
+def _failure_detail(error: Exception) -> str:
+    response = getattr(error, "response", None)
+    request = getattr(error, "request", None)
+    if request is None and response is not None:
+        request = getattr(response, "request", None)
+    status = getattr(response, "status_code", None) if response is not None else None
+    url = getattr(request, "url", None) if request is not None else None
+    host = getattr(url, "host", None) if url is not None else None
+    if isinstance(host, str):
+        host = host.lower()
+    else:
+        host = None
+    if type(status) is int:
+        if host == "graph.threads.com":
+            return f"threads_http_{status}"
+        if host == "api.x.com":
+            return f"x_http_{status}"
+    return "collection_failed"
+
+
+def active_variants_sql() -> str:
+    return """
+    select text
+    from keyword_variants
+    where project_id = %s and active
+    order by text
+    """
+
+
+def load_active_variants(conn, project_id: str) -> list[str]:
+    rows = conn.execute(active_variants_sql(), (project_id,)) or []
+    return [row["text"] for row in rows]
+
+
+def store_source(
+    conn,
+    job,
+    mentions: list,
+    query_key: str,
+    source: str,
+    next_cursor: str | None,
+    incremental_since=None,
+) -> None:
+    PostgresStore(conn).write_mentions_and_cursor(
+        customer_id=job["customer_id"],
+        project_id=job["project_id"],
+        query_key=query_key,
+        source=source,
+        mentions=mentions,
+        next_cursor=next_cursor,
+        incremental_since=incremental_since,
+    )
+
+
+def _call(connect, fn):
+    conn = connect()
+    try:
+        result = fn(conn)
+        conn.commit()
+        return result
+    except Exception as error:
+        conn.rollback()
+        _log_exception(error)
+        raise
+    finally:
+        conn.close()
+
+
+def _heartbeat_log_seconds(explicit: int | None) -> int:
+    if explicit is not None:
+        return explicit
+    raw = (os.environ.get("WORKER_HEARTBEAT_LOG_SECONDS") or "").strip() or "180"
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("WORKER_HEARTBEAT_LOG_SECONDS") from None
+    if seconds < 1:
+        raise ValueError("WORKER_HEARTBEAT_LOG_SECONDS")
+    return seconds
+
+
+def serve(
+    connect,
+    sleep,
+    limits,
+    worker_id: str,
+    root,
+    fetch_x,
+    fetch_threads,
+    log=print,
+    monotonic=None,
+    heartbeat_log_seconds=None,
+) -> None:
+    if monotonic is None:
+        monotonic = time.monotonic
+    interval = _heartbeat_log_seconds(heartbeat_log_seconds)
+    last_logged = None
+    while True:
+        def claim(conn):
+            release_expired_claims(conn, limits.worker_heartbeat_stale_seconds)
+            record_heartbeat(conn, worker_id)
+            enqueue_due_schedules(conn, limits)
+            jobs = claim_due_jobs(conn, worker_id, limits.max_jobs_per_tick)
+            for job in jobs:
+                job["variants"] = load_active_variants(conn, job["project_id"])
+                job["sources"] = load_enabled_sources(conn, job["project_id"])
+            return gate(root), jobs
+
+        gate_code, jobs = _call(connect, claim)
+        for job in jobs:
+            try:
+                decision = decide_job(gate_code)
+                if decision is not None:
+                    _call(connect, lambda conn, job=job, detail=decision[1]: _defer(conn, job["id"], detail))
+                    continue
+                selected = [item for item in (job.get("sources") or ["x", "threads"]) if item in ("x", "threads")]
+                allowed = sources_allowed(root, os.environ)
+                sources = [item for item in selected if item in allowed]
+                if not sources:
+                    _call(connect, lambda conn, job=job: _defer(conn, job["id"], "sources_unavailable"))
+                    continue
+                blocked_detail = None
+                for variant in job["variants"]:
+                    key = f"{job['customer_id']}:{job['project_id']}:{variant}"
+                    collected = None
+                    if "x" in sources:
+                        def read_state(conn, key=key):
+                            return PostgresStore(conn).source_state(key, "x") or {}
+
+                        state = _call(connect, read_state) or {}
+                        floor_id = numeric_since_id(state.get("incremental_cursor"))
+                        floor_since = state.get("incremental_since")
+
+                        def admit_first(conn, job=job, include_threads=("threads" in sources)):
+                            if include_threads:
+                                return admit_collection(conn, job["customer_id"], 10, limits)
+                            return admit_x_read(conn, job["customer_id"], 10, limits)
+
+                        admission = _call(connect, admit_first)
+                        if not isinstance(admission, int):
+                            blocked_detail = admission.detail
+                            break
+
+                        def fetch_page(cursor, since, since_id, limit, variant=variant):
+                            return fetch_x(variant, limit, cursor, since, since_id)
+
+                        def admit_page(job=job):
+                            return _call(
+                                connect,
+                                lambda conn, job=job: admit_x_read(conn, job["customer_id"], 10, limits),
+                            )
+
+                        collected = collect_newer_x(
+                            fetch_page,
+                            admit_page,
+                            floor_id=floor_id,
+                            floor_since=floor_since,
+                            first_limit=admission,
+                        )
+
+                        def store_x(
+                            conn,
+                            job=job,
+                            mentions=collected.mentions,
+                            key=key,
+                            floor=collected.floor_id,
+                            marker_since=collected.floor_since,
+                        ):
+                            store_source(conn, job, mentions, key, "x", floor, marker_since)
+
+                        _call(connect, store_x)
+                    if "threads" in sources:
+                        if "x" not in sources:
+                            def admit_threads(conn):
+                                return admit_threads_query(conn, limits)
+
+                            blocked = _call(connect, admit_threads)
+                            if blocked is not None:
+                                blocked_detail = blocked.detail
+                                break
+                        threads_mentions, threads_cursor = fetch_threads(variant)
+
+                        def store_threads(
+                            conn,
+                            job=job,
+                            key=key,
+                            threads_mentions=threads_mentions,
+                            threads_cursor=threads_cursor,
+                        ):
+                            store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
+
+                        _call(connect, store_threads)
+                    if collected is not None and collected.blocked_detail:
+                        blocked_detail = collected.blocked_detail
+                        break
+                if job["variants"]:
+                    def finish_job(conn, job=job, blocked_detail=blocked_detail):
+                        if blocked_detail:
+                            _defer(conn, job["id"], blocked_detail)
+                            return
+                        conn.execute(
+                            "update jobs set status = 'succeeded', status_detail = null where id = %s",
+                            (job["id"],),
+                        )
+                        conn.execute(
+                            "update project_schedules set last_collected_at = now() where project_id = %s",
+                            (job["project_id"],),
+                        )
+
+                    _call(connect, finish_job)
+            except Exception as error:
+                _log_exception(error)
+                try:
+                    detail = _failure_detail(error)
+                    _call(
+                        connect,
+                        lambda conn, job=job, detail=detail: _fail(conn, job["id"], detail),
+                    )
+                except Exception as update_error:
+                    _log_exception(update_error)
+        now = monotonic()
+        if last_logged is None or now - last_logged >= interval:
+            log(format_log(f"worker heartbeat id={worker_id}"))
+            last_logged = now
+        sleep(limits.worker_poll_seconds)
+
+
+class CursorRowAdapter:
+    """Map a psycopg cursor onto the row shapes the scheduler already expects.
+
+    Only ``__main__`` connect() wraps a live connection. Scripted tests pass
+    connections whose execute already returns rows and must not use this.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        cursor = self._conn.execute(sql, params)
+        if cursor.description is None:
+            return None
+        compact = " ".join(sql.lower().split())
+        if compact.startswith("select") and "from source_cursors" in compact:
+            row = cursor.fetchone()
+            return {} if row is None else row
+        if _is_counter_select(compact):
+            return _counter_value(cursor.fetchone())
+        return cursor.fetchall()
+
+    def commit(self):
+        # psycopg forbids Connection.commit() inside transaction() and commits
+        # on context exit. Scripted connections have no _num_transactions.
+        if getattr(self._conn, "_num_transactions", 0):
+            return None
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
+    def transaction(self):
+        return self._conn.transaction()
+
+
+def _is_counter_select(compact: str) -> bool:
+    if not compact.startswith("select"):
+        return False
+    if "from x_read_counters" in compact and "for update" in compact:
+        return True
+    return "count" in compact and "from threads_query_log" in compact
+
+
+def _counter_value(row) -> int:
+    if row is None:
+        return 0
+    value = next(iter(row.values())) if isinstance(row, dict) else row[0]
+    return int(value or 0)
+
+
+if __name__ == "__main__":
+    import time
+    import psycopg
+    from sentiment_monitor.limits import load_limits
+    from sentiment_monitor.paths import repo_root
+
+    root = repo_root()
+    limits = load_limits(root / "config" / "limits.json")
+    worker_id = os.environ.get("WORKER_ID", "worker-1")
+
+    def connect():
+        from psycopg.rows import dict_row
+
+        return CursorRowAdapter(
+            psycopg.connect(
+                os.environ["WORKER_DATABASE_URL"],
+                autocommit=False,
+                row_factory=dict_row,
+            )
+        )
+
+    def fetch_x(variant: str, limit: int, cursor: str | None, since=None, since_id: str | None = None):
+        from datetime import datetime
+
+        from sentiment_monitor.collect import fetch_x_with_cursor
+
+        if isinstance(since, str):
+            since = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        rows, next_cursor = fetch_x_with_cursor(
+            variant,
+            os.environ["X_BEARER_TOKEN"],
+            cursor=cursor,
+            since=since,
+            since_id=since_id,
+            limit=limit,
+        )
+        mentions = [
+            {
+                "external_id": row.external_id,
+                "excerpt": row.text,
+                "url": row.url,
+                "author": row.author,
+                "posted_at": row.created_at,
+                "variant": row.variant,
+            }
+            for row in rows
+        ]
+        return mentions, next_cursor
+
+    def fetch_threads(variant: str):
+        from sentiment_monitor.sources.threads import ThreadsSource
+        page = ThreadsSource(os.environ["THREADS_ACCESS_TOKEN"]).fetch_page(variant, limit=25)
+        mentions = [
+            {
+                "external_id": mention.id,
+                "excerpt": mention.text,
+                "url": getattr(mention, "url", None),
+                "author": getattr(mention, "author", None),
+                "posted_at": mention.created_at.isoformat(),
+                "variant": variant,
+            }
+            for mention in page.mentions
+        ]
+        return mentions, page.next_cursor
+
+    serve(connect, time.sleep, limits, worker_id, root, fetch_x, fetch_threads)

@@ -1,0 +1,14 @@
+{
+  "approved": true,
+  "fallbackId": "lainnya",
+  "labels": [
+    { "id": "harga", "label": "Harga", "instructions": "The post is about price, cost, or whether the product is worth the money." },
+    { "id": "kualitas", "label": "Kualitas produk", "instructions": "The post is about product quality, taste, durability, or whether the product works as expected." },
+    { "id": "layanan", "label": "Layanan pelanggan", "instructions": "The post is about customer service, staff, or how the business responded." },
+    { "id": "pengiriman", "label": "Pengiriman", "instructions": "The post is about delivery, shipping time, or a courier." },
+    { "id": "promo", "label": "Promo", "instructions": "The post is about a discount, voucher, or promotion." },
+    { "id": "stok", "label": "Ketersediaan stok", "instructions": "The post is about whether the product is in stock or sold out." },
+    { "id": "kemasan", "label": "Kemasan", "instructions": "The post is about packaging or the condition of the parcel." },
+    { "id": "pengalaman", "label": "Pengalaman pembelian", "instructions": "The post is about the buying experience, checkout, or ordering." }
+  ]
+}

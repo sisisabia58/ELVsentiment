@@ -1,0 +1,8 @@
+{
+  "approved": false,
+  "includes_informal_indonesian": false,
+  "relevance_max_error_rate": null,
+  "sentiment_max_error_rate": null,
+  "topic_min_exact_agreement": null,
+  "uncertain_routing_min_recall": null
+}

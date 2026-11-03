@@ -1,0 +1,14 @@
+{
+  "stack_reviewed": false,
+  "credential_policy": true,
+  "scoring_policy": true,
+  "topic_labels": true,
+  "topic_counting": true,
+  "overview_formula": false,
+  "jev_fallback_rule": false,
+  "eval_criteria": false,
+  "threads_public_search_demonstrated": false,
+  "x_cost_understood": false,
+  "reduced_source_launch": null,
+  "high_impact": false
+}
