@@ -48,4 +48,6 @@ Scoring, topic labels, topic counting, and the shared-operator credential policy
 | `jev_fallback_rule` | **false** | OpenRouter fallback rule stays off. |
 | `x-budget.json` `approved` | **false** | X API budget cap stays off. |
 
+How to start, check, stop, and roll back the production scorer is in `docs/operator-scoring.md`. The scorer is a separate Railway service on the web image. Its start command is `exec node dist/scoring/cli.js --loop` and its working directory is `/app/apps/web`. OpenRouter stays off.
+
 Inside one request, retries are only HTTP 429, HTTP 5xx, and timeouts. A dropped connection (`{ network: true }`) is not retried inside that request. The claim commits before the Jev call and stores `scoring_claimed_at` plus `scoring_attempts`. The next run returns a `scoring` row to `pending` when the claim is older than 180 seconds, or when `scoring_claimed_at` is null, and then scores it again. Each claim counts as one attempt. After 3 attempts, another retryable failure or a stale claim is marked `failed` and is not picked up again. HTTP 4xx other than 429, and an invalid judgment, are marked `failed` on that claim. OpenRouter stays off. To retry one terminal row, set that row's `scoring_status` to `pending` and `scoring_attempts` to 0. Leave rows whose claim is still inside the lease alone.

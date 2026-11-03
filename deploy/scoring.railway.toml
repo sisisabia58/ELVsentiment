@@ -1,0 +1,9 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/web.Dockerfile"
+watchPatterns = ["/apps/web/**", "/config/**", "/deploy/web.Dockerfile", "/deploy/scoring.railway.toml"]
+
+[deploy]
+startCommand = "exec node dist/scoring/cli.js --loop"
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"

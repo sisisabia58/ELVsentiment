@@ -35,7 +35,9 @@ PYTHONPATH=eval apps/worker/.venv/bin/pytest eval -v
 
 Copy `.env.example` for local names. Do not commit a `.env` file. Production values are Railway service variables. Secret values are never printed. `format_log` replaces them with `[redacted]`.
 
-Names: `DATABASE_URL`, `CONFIG_DIR`, `WORKER_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `APP_DB_PASSWORD`, `WORKER_DB_PASSWORD`, `X_BEARER_TOKEN`, `THREADS_ACCESS_TOKEN`, `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `BACKUP_DESTINATION`, `X_MONTHLY_GLOBAL_POST_READS`, `X_MONTHLY_PER_CUSTOMER_POST_READS`, `THREADS_ROLLING_24H_RESERVE`, `SCHEDULE_MIN_INTERVAL_HOURS`, `MANUAL_MIN_INTERVAL_SECONDS`, `MAX_JOBS_PER_TICK`, `WORKER_POLL_SECONDS`, `WORKER_HEARTBEAT_STALE_SECONDS`, `WORKER_HEARTBEAT_LOG_SECONDS`.
+Names: `DATABASE_URL`, `CONFIG_DIR`, `WORKER_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `APP_DB_PASSWORD`, `WORKER_DB_PASSWORD`, `X_BEARER_TOKEN`, `THREADS_ACCESS_TOKEN`, `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `BACKUP_DESTINATION`, `X_MONTHLY_GLOBAL_POST_READS`, `X_MONTHLY_PER_CUSTOMER_POST_READS`, `THREADS_ROLLING_24H_RESERVE`, `SCHEDULE_MIN_INTERVAL_HOURS`, `MANUAL_MIN_INTERVAL_SECONDS`, `MAX_JOBS_PER_TICK`, `WORKER_POLL_SECONDS`, `WORKER_HEARTBEAT_STALE_SECONDS`, `WORKER_HEARTBEAT_LOG_SECONDS`, `SCORE_INTERVAL_SECONDS`.
+
+`SCORE_INTERVAL_SECONDS` is optional. It defaults to 20. The scoring loop sleeps that many seconds after a batch finds no pending mentions. Values below 5, above 3600, or not a number use 20. `npm run score` ignores it. See `docs/operator-scoring.md`.
 
 The web service pre-deploy command is `node src/db/migrate-cli.mjs`.
 

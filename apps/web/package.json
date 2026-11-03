@@ -4,8 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0 --port 43123",
-    "build": "next build",
+    "build": "next build && node scripts/emit-score.mjs",
+    "build:score": "node scripts/emit-score.mjs",
     "start": "next start",
+    "score": "node dist/scoring/cli.js",
+    "score:loop": "exec node dist/scoring/cli.js --loop",
     "lint": "eslint",
     "test": "vitest run",
     "typecheck": "next typegen && tsc --noEmit"
