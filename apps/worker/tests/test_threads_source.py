@@ -1,39 +1,100 @@
-import httpx
-import respx
-from harken.sources import REGISTRY
-from harken.sources.base import Source
+import io
+import json
+import urllib.error
 
-from sentiment_monitor.sources.threads import ThreadsSource, register_threads
-from sentiment_monitor.collect import fetch_threads_page
+import pytest
+
+from sentiment_monitor.sources.collect import collect_project_sources
+from sentiment_monitor.sources.threads import fetch_threads_mentions, normalize_threads_item
 
 
-@respx.mock
-def test_threads_adapter_parses_a_keyword_hit_and_registers():
-    route = respx.get("https://graph.threads.com/v1.0/keyword_search").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": [
-                    {
-                        "id": "1234567890",
-                        "text": "geprek gembus enak",
-                        "media_type": "TEXT",
-                        "permalink": "https://www.threads.com/@ani/post/abcdefg",
-                        "timestamp": "2026-11-01T05:42:03+0000",
-                        "username": "ani",
-                    }
-                ]
-            },
-        )
+def test_threads_mentions_keep_null_posted_at_when_source_omits_timestamp() -> None:
+    mention = normalize_threads_item(
+        {
+            "pk": "th-1",
+            "code": "C123",
+            "caption": {"text": "Kopi Kenangan baru"},
+            "user": {"username": "rina"},
+        },
+        collected_at="2026-04-19T06:00:00Z",
     )
-    candidates, truncated = fetch_threads_page("geprek gembus", "token", since=None, limit=25)
-    sent = route.calls[0].request.url.params
-    assert sent["q"] == "geprek gembus"
-    assert sent["search_type"] == "RECENT"
-    assert sent["search_mode"] == "KEYWORD"
-    assert candidates[0].external_id == "1234567890"
-    assert candidates[0].url == "https://www.threads.com/@ani/post/abcdefg"
-    assert truncated is False
-    register_threads()
-    assert REGISTRY["threads"] is ThreadsSource
-    assert issubclass(ThreadsSource, Source)
+
+    assert mention["external_id"] == "th-1"
+    assert mention["source"] == "threads"
+    assert mention["author"] == "rina"
+    assert mention["text"] == "Kopi Kenangan baru"
+    assert mention["url"] == "https://www.threads.com/@rina/post/C123"
+    assert mention["posted_at"] is None
+    assert mention["collected_at"] == "2026-04-19T06:00:00Z"
+
+
+def test_fetch_threads_calls_scrapecreators_with_id_region_and_api_key() -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        headers = {k.lower(): v for k, v in request.header_items()}
+        seen.append((request.full_url, headers))
+        return Response(
+            json.dumps(
+                {
+                    "success": True,
+                    "posts": [
+                        {
+                            "pk": "th-99",
+                            "code": "D999",
+                            "taken_at": 1776578400,
+                            "caption": {"text": "Suka banget Kopi Kenangan"},
+                            "user": {"username": "budi"},
+                        }
+                    ],
+                }
+            )
+        )
+
+    result = fetch_threads_mentions(
+        "kopi kenangan",
+        "sc-secret-key",
+        "2026-04-19T06:00:00Z",
+        opener=opener,
+    )
+
+    assert len(seen) == 1
+    url, headers = seen[0]
+    assert url.startswith("https://api.scrapecreators.com/v1/threads/search?")
+    assert "query=kopi+kenangan" in url
+    assert "region=ID" in url
+    assert headers.get("x-api-key") == "sc-secret-key"
+    assert result["outcome"] == "empty_or_success"
+    assert len(result["mentions"]) == 1
+    assert result["mentions"][0]["external_id"] == "th-99"
+    assert result["mentions"][0]["posted_at"] == "2026-04-19T06:00:00Z"
+
+
+def test_one_failing_source_does_not_discard_other_sources() -> None:
+    def fail_x():
+        raise urllib.error.HTTPError("https://api.x.com", 503, "unavailable", {}, None)
+
+    def ok_threads():
+        return {
+            "mentions": [
+                normalize_threads_item(
+                    {"id": "th-2", "text": "Masih jalan", "timestamp": "2026-04-19T05:00:00Z"},
+                    collected_at="2026-04-19T06:00:00Z",
+                )
+            ]
+        }
+
+    result = collect_project_sources({"x": fail_x, "threads": ok_threads})
+
+    assert result["sources"]["x"]["state"] == "unavailable"
+    assert result["sources"]["x"]["outcome"] == "failed"
+    assert result["sources"]["threads"]["state"] == "ready"
+    assert len(result["mentions"]) == 1
+    assert result["mentions"][0]["external_id"] == "th-2"

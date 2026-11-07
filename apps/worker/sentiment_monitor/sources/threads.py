@@ -1,10 +1,97 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
+from typing import Any, Callable
+import urllib.request
 
 from harken.models import Mention
 from harken.sources import REGISTRY
 from harken.sources.base import FetchPage, Source
 
-_API = "https://graph.threads.com/v1.0/keyword_search"
+from sentiment_monitor.sources.scrapecreators import (
+    DEFAULT_REGION,
+    dedupe_mentions,
+    fetch_scrapecreators_json,
+    unix_to_iso,
+)
+
+THREADS_SEARCH_PATH = "/v1/threads/search"
+THREADS_SEARCH_URL = f"https://api.scrapecreators.com{THREADS_SEARCH_PATH}"
+
+
+def _extract_threads_text(item: dict[str, Any]) -> str:
+    caption = item.get("caption")
+    if isinstance(caption, dict) and isinstance(caption.get("text"), str):
+        return caption["text"]
+    if isinstance(caption, str):
+        return caption
+    if isinstance(item.get("text"), str):
+        return item["text"]
+    app_info = item.get("text_post_app_info")
+    if isinstance(app_info, dict):
+        fragments = (app_info.get("text_fragments") or {}).get("fragments")
+        if isinstance(fragments, list):
+            parts = [str(f.get("plaintext") or "") for f in fragments if isinstance(f, dict)]
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+    return ""
+
+
+def _extract_threads_author(item: dict[str, Any]) -> str | None:
+    user = item.get("user")
+    if isinstance(user, dict) and isinstance(user.get("username"), str):
+        return user["username"]
+    if isinstance(item.get("username"), str):
+        return item["username"]
+    return None
+
+
+def normalize_threads_item(item: dict[str, Any], collected_at: str) -> dict[str, Any]:
+    external_id = str(item.get("pk") or item.get("id") or item.get("code") or "")
+    author = _extract_threads_author(item)
+    code = item.get("code")
+    url = item.get("url") or item.get("permalink")
+    if not url and author and code:
+        url = f"https://www.threads.com/@{author}/post/{code}"
+    posted_at = unix_to_iso(item.get("taken_at") if item.get("taken_at") is not None else item.get("timestamp"))
+    return {
+        "external_id": external_id,
+        "source": "threads",
+        "author": author,
+        "text": _extract_threads_text(item),
+        "url": url,
+        "posted_at": posted_at,
+        "collected_at": collected_at,
+    }
+
+
+def fetch_threads_mentions(
+    variant: str,
+    api_key: str,
+    collected_at: str,
+    *,
+    region: str = DEFAULT_REGION,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, Any]:
+    payload = fetch_scrapecreators_json(
+        THREADS_SEARCH_PATH,
+        {"query": variant},
+        api_key,
+        region=region,
+        opener=opener,
+    )
+    raw_items = payload.get("posts") or payload.get("items") or payload.get("data") or []
+    items = [
+        normalize_threads_item(item, collected_at)
+        for item in raw_items
+        if isinstance(item, dict)
+    ]
+    mentions = dedupe_mentions(items)
+    return {
+        "mentions": mentions,
+        "outcome": "empty_or_success",
+    }
 
 
 class ThreadsSource(Source):
@@ -27,37 +114,27 @@ class ThreadsSource(Source):
         cursor: str | None = None,
         since: datetime | None = None,
     ) -> FetchPage:
-        del cursor
+        del cursor, limit, since
         if not self.access_token:
-            raise RuntimeError("Threads requires an access token")
-        params = {
-            "q": query,
-            "search_type": "RECENT",
-            "search_mode": "KEYWORD",
-            "fields": "id,text,media_type,permalink,timestamp,username",
-            "limit": str(max(1, min(limit, 100))),
-            "access_token": self.access_token,
-        }
-        if since is not None:
-            params["since"] = str(int(since.timestamp()))
-        with self._client() as client:
-            response = client.get(_API, params=params)
-            response.raise_for_status()
-            data = response.json()
+            raise RuntimeError("Threads requires an API key")
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = fetch_threads_mentions(query, self.access_token, now_iso)
         mentions: list[Mention] = []
-        for post in data.get("data", []):
-            post_id = post.get("id")
-            if not post_id:
+        for item in result.get("mentions", []):
+            ext_id = item.get("external_id")
+            if not ext_id:
                 continue
+            posted = item.get("posted_at")
+            created_at = _parse_timestamp(posted) if isinstance(posted, str) else datetime.now(timezone.utc)
             mentions.append(
                 Mention(
-                    id=str(post_id),
+                    id=str(ext_id),
                     source=self.name,
                     query=query,
-                    author=post.get("username"),
-                    text=post.get("text") or "",
-                    url=post.get("permalink"),
-                    created_at=_parse_timestamp(post.get("timestamp")),
+                    author=item.get("author"),
+                    text=item.get("text") or "",
+                    url=item.get("url"),
+                    created_at=created_at,
                 )
             )
         return FetchPage(mentions, None)
@@ -70,7 +147,7 @@ def register_threads() -> None:
 def _parse_timestamp(value: str | None) -> datetime:
     if value:
         try:
-            return datetime.fromisoformat(value.replace("+0000", "+00:00"))
+            return datetime.fromisoformat(value.replace("Z", "+00:00").replace("+0000", "+00:00"))
         except ValueError:
             pass
     return datetime.now(timezone.utc)
