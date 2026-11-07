@@ -26,6 +26,7 @@ def collection_source_tokens(monkeypatch):
     """Serve tests that approve both files still need non-blank source tokens."""
     monkeypatch.setenv("X_BEARER_TOKEN", "test-x-bearer")
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", "test-threads-token")
+    monkeypatch.setenv("SCRAPECREATORS_API_KEY", "test-scrapecreators-key")
 
 
 class JobLock:
@@ -516,8 +517,26 @@ class _ThreadsCappedConn(_LoopConn):
         return super().execute(sql, params)
 
 
-def test_threads_budget_is_checked_before_any_x_fetch_or_reserve(tmp_path):
+def test_log_redacts_scrapecreators_api_key() -> None:
+    env = {
+        "SCRAPECREATORS_API_KEY": "sc-super-secret",
+        "X_BEARER_TOKEN": "x-secret-value",
+    }
+
+    line = format_log(
+        "collection_failed",
+        detail="token sc-super-secret failed",
+        env=env,
+        job_id="job-1",
+    )
+
+    assert "sc-super-secret" not in line
+    assert "[REDACTED]" in line
+
+
+def test_serve_collects_threads_instagram_and_tiktok_without_threads_reserve_cap(tmp_path):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads", "instagram", "tiktok"]
     fetched = []
 
     def connect():
@@ -535,14 +554,24 @@ def test_threads_budget_is_checked_before_any_x_fetch_or_reserve(tmp_path):
             "worker-1",
             _policy_root(tmp_path, True),
             lambda *_args, **_kwargs: fetched.append("x") or ([], None),
-            lambda *_args, **_kwargs: fetched.append("threads") or ([], None),
+            lambda variant: fetched.append(("threads", variant)) or ([{"external_id": "t1", "excerpt": "t", "url": "https://threads.com/t1", "author": "a", "posted_at": "2026-11-01T00:00:00Z", "variant": variant}], None),
+            fetch_instagram=lambda variant: fetched.append(("instagram", variant)) or ([{"external_id": "ig1", "excerpt": "ig", "url": "https://instagram.com/p/ig1", "author": "b", "posted_at": "2026-11-01T00:00:00Z", "variant": variant}], None),
+            fetch_tiktok=lambda variant: fetched.append(("tiktok", variant)) or ([{"external_id": "tt1", "excerpt": "tt", "url": "https://tiktok.com/@c/video/tt1", "author": "c", "posted_at": "2026-11-01T00:00:00Z", "variant": variant}], None),
         )
 
-    assert fetched == []
+    assert fetched == [
+        ("threads", "geprek gembus"),
+        ("instagram", "geprek gembus"),
+        ("tiktok", "geprek gembus"),
+    ]
     joined = "\n".join(sql for sql, _params in world.calls).lower()
-    assert "insert into x_read_counters" not in joined
-    assert "insert into threads_query_log" not in joined
-    assert any(params and "threads_budget" in (params or ()) for _sql, params in world.calls)
+    assert "threads_query_log" not in joined
+    cursor_sources = [
+        params[2]
+        for sql, params in world.calls
+        if "insert into source_cursors" in sql.lower() and params
+    ]
+    assert cursor_sources == ["threads", "instagram", "tiktok"]
 
 
 class _SecondXPageCapped(_LoopConn):
@@ -896,6 +925,50 @@ def test_failure_detail_reads_the_host_without_stringifying_the_url():
     assert _failure_detail(_http_error("boom", "API.X.COM", 500)) == "x_http_500"
     assert _failure_detail(_http_error("boom", "example.com", 500)) == "collection_failed"
     assert _failure_detail(RuntimeError("boom")) == "collection_failed"
+
+
+def test_failure_detail_and_record_source_failure_for_scrapecreators_and_x():
+    import urllib.error
+    from sentiment_monitor.scheduler import ALL_SOURCES, load_enabled_sources, record_source_failure
+
+    assert ALL_SOURCES == ("x", "threads", "instagram", "tiktok")
+
+    class _FakeConn:
+        def __init__(self, rows=None):
+            self.rows = rows
+            self.calls = []
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+            return self.rows
+
+    assert load_enabled_sources(_FakeConn([]), "p1") == ["x", "threads", "instagram", "tiktok"]
+    assert load_enabled_sources(
+        _FakeConn([{"enabled_sources": ["threads", "instagram", "tiktok", "unknown"]}]),
+        "p1",
+    ) == ["threads", "instagram", "tiktok"]
+
+    ig_402 = urllib.error.HTTPError(
+        url="https://api.scrapecreators.com/v2/instagram/reels/search?query=a&region=ID",
+        code=402,
+        msg="Payment Required",
+        hdrs=None,
+        fp=None,
+    )
+    x_429 = urllib.error.HTTPError(
+        url="https://api.x.com/2/tweets/search/recent?query=a",
+        code=429,
+        msg="Too Many Requests",
+        hdrs=None,
+        fp=None,
+    )
+    assert _failure_detail(ig_402, source="instagram") == "instagram_http_402"
+    assert _failure_detail(x_429, source="instagram") == "x_http_429"
+
+    conn = _FakeConn()
+    assert record_source_failure(conn, "cust-1", "proj-1", "instagram", "instagram_http_402") == "rate_limited"
+    assert record_source_failure(conn, "cust-1", "proj-1", "tiktok", "tiktok_http_401") == "authorization_failed"
+    assert record_source_failure(conn, "cust-1", "proj-1", "threads", "threads_http_500") == "unavailable"
 
 
 def test_fetch_error_is_redacted_and_marks_the_job_failed(tmp_path, monkeypatch, capfd):

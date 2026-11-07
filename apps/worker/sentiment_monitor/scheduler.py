@@ -1,6 +1,8 @@
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Mapping
+import urllib.error
 from urllib.parse import quote, unquote, urlsplit
 
 from sentiment_monitor.collect_once import gate, sources_allowed
@@ -11,6 +13,8 @@ from sentiment_monitor.x_cost import admit_collection, admit_threads_query, admi
 # Asia/Jakarta is a fixed UTC+7 offset. The daily schedule uses that civil
 # minute, not "24 hours after the worker happened to tick".
 JAKARTA = timezone(timedelta(hours=7))
+
+ALL_SOURCES = ("x", "threads", "instagram", "tiktok")
 
 CLAIM_SQL = """
 select id, customer_id, project_id, kind
@@ -89,6 +93,7 @@ _SECRET_NAMES = (
     "APP_DB_PASSWORD",
     "WORKER_DB_PASSWORD",
     "X_BEARER_TOKEN",
+    "SCRAPECREATORS_API_KEY",
     "THREADS_ACCESS_TOKEN",
     "TYPESAFE_API_KEY",
     "OPENROUTER_API_KEY",
@@ -122,11 +127,12 @@ where project_id = %s
 def load_enabled_sources(conn, project_id: str) -> list[str]:
     rows = conn.execute(ENABLED_SOURCES_SQL, (project_id,)) or []
     if not rows:
-        return ["x", "threads"]
+        return list(ALL_SOURCES)
     raw = rows[0].get("enabled_sources") if isinstance(rows[0], dict) else None
     if not isinstance(raw, (list, tuple)):
-        return ["x", "threads"]
-    return [item for item in raw if item in ("x", "threads")]
+        return list(ALL_SOURCES)
+    filtered = [item for item in raw if item in ALL_SOURCES]
+    return filtered or list(ALL_SOURCES)
 
 
 def heartbeat_sql() -> str:
@@ -170,20 +176,31 @@ def _url_password_secrets(value: str) -> set[str]:
     return {password, decoded, quote(password, safe=""), quote(decoded, safe="")}
 
 
-def format_log(message: str) -> str:
+def format_log(
+    message: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    **fields: Any,
+) -> str:
+    source_env = os.environ if env is None else env
+    replacement = "[REDACTED]" if env is not None or fields else "[redacted]"
     secrets: set[str] = set()
     for name in _SECRET_NAMES:
-        value = os.environ.get(name, "")
+        value = source_env.get(name, "")
         if not value:
             continue
         secrets.add(value)
         secrets.add(quote(value, safe=""))
         if "URL" in name:
             secrets.update(_url_password_secrets(value))
-    redacted = message
+    combined = message
+    if fields:
+        suffix = " ".join(f"{key}={val}" for key, val in fields.items())
+        combined = f"{message} {suffix}"
+    redacted = combined
     for secret in sorted(secrets, key=len, reverse=True):
         if secret:
-            redacted = redacted.replace(secret, "[redacted]")
+            redacted = redacted.replace(secret, replacement)
     return redacted
 
 
@@ -223,7 +240,40 @@ def _fail(conn, job_id: str, detail: str) -> None:
     )
 
 
-def _failure_detail(error: Exception) -> str:
+def record_source_failure(conn, customer_id: str, project_id: str, source: str, detail: str) -> str:
+    lowered = (detail or "").lower()
+    if "401" in lowered:
+        state = "authorization_failed"
+    elif "429" in lowered or "402" in lowered or "cap" in lowered or "budget" in lowered:
+        state = "rate_limited"
+    else:
+        state = "unavailable"
+    conn.execute(
+        """
+        insert into source_status (customer_id, project_id, source, state, outcome, detail, updated_at)
+        values (%s, %s, %s, %s, 'failed', %s, now())
+        on conflict (project_id, source) do update
+          set state = excluded.state,
+              outcome = excluded.outcome,
+              detail = excluded.detail,
+              updated_at = excluded.updated_at
+        """,
+        (customer_id, project_id, source, state, detail),
+    )
+    return state
+
+
+def _failure_detail(error: Exception, source: str = "threads") -> str:
+    if isinstance(error, urllib.error.HTTPError):
+        url_str = getattr(error, "url", None) or ""
+        try:
+            host = (urlsplit(str(url_str)).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host == "api.x.com":
+            return f"x_http_{error.code}"
+        return f"{source}_http_{error.code}"
+
     response = getattr(error, "response", None)
     request = getattr(error, "request", None)
     if request is None and response is not None:
@@ -236,10 +286,12 @@ def _failure_detail(error: Exception) -> str:
     else:
         host = None
     if type(status) is int:
-        if host == "graph.threads.com":
+        if host in ("graph.threads.com", "graph.threads.net"):
             return f"threads_http_{status}"
         if host == "api.x.com":
             return f"x_http_{status}"
+        if host == "api.scrapecreators.com":
+            return f"{source}_http_{status}"
     return "collection_failed"
 
 
@@ -304,6 +356,36 @@ def _heartbeat_log_seconds(explicit: int | None) -> int:
     return seconds
 
 
+def _unpack_fetched(result: Any, variant: str) -> tuple[list[dict[str, Any]], str | None]:
+    if isinstance(result, tuple) and len(result) == 2:
+        raw_mentions, next_cursor = result
+    elif isinstance(result, dict):
+        raw_mentions = result.get("mentions") or []
+        next_cursor = result.get("next_cursor")
+    else:
+        raw_mentions = []
+        next_cursor = None
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_mentions:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if "excerpt" not in row:
+            row["excerpt"] = row.get("text") or ""
+        if "variant" not in row:
+            row["variant"] = variant
+        normalized.append(row)
+    return normalized, next_cursor
+
+
+def admit_threads_queries(conn, limits) -> tuple[bool, str | None]:
+    blocked = admit_threads_query(conn, limits)
+    if blocked is not None:
+        return False, blocked.detail
+    return True, None
+
+
 def serve(
     connect,
     sleep,
@@ -315,6 +397,8 @@ def serve(
     log=print,
     monotonic=None,
     heartbeat_log_seconds=None,
+    fetch_instagram: Callable[[str], Any] | None = None,
+    fetch_tiktok: Callable[[str], Any] | None = None,
 ) -> None:
     if monotonic is None:
         monotonic = time.monotonic
@@ -333,12 +417,13 @@ def serve(
 
         gate_code, jobs = _call(connect, claim)
         for job in jobs:
+            current_source = "threads"
             try:
                 decision = decide_job(gate_code)
                 if decision is not None:
                     _call(connect, lambda conn, job=job, detail=decision[1]: _defer(conn, job["id"], detail))
                     continue
-                selected = [item for item in (job.get("sources") or ["x", "threads"]) if item in ("x", "threads")]
+                selected = [item for item in (job.get("sources") or list(ALL_SOURCES)) if item in ALL_SOURCES]
                 allowed = sources_allowed(root, os.environ)
                 sources = [item for item in selected if item in allowed]
                 if not sources:
@@ -349,6 +434,7 @@ def serve(
                     key = f"{job['customer_id']}:{job['project_id']}:{variant}"
                     collected = None
                     if "x" in sources:
+                        current_source = "x"
                         def read_state(conn, key=key):
                             return PostgresStore(conn).source_state(key, "x") or {}
 
@@ -356,9 +442,7 @@ def serve(
                         floor_id = numeric_since_id(state.get("incremental_cursor"))
                         floor_since = state.get("incremental_since")
 
-                        def admit_first(conn, job=job, include_threads=("threads" in sources)):
-                            if include_threads:
-                                return admit_collection(conn, job["customer_id"], 10, limits)
+                        def admit_first(conn, job=job):
                             return admit_x_read(conn, job["customer_id"], 10, limits)
 
                         admission = _call(connect, admit_first)
@@ -394,16 +478,9 @@ def serve(
                             store_source(conn, job, mentions, key, "x", floor, marker_since)
 
                         _call(connect, store_x)
-                    if "threads" in sources:
-                        if "x" not in sources:
-                            def admit_threads(conn):
-                                return admit_threads_query(conn, limits)
-
-                            blocked = _call(connect, admit_threads)
-                            if blocked is not None:
-                                blocked_detail = blocked.detail
-                                break
-                        threads_mentions, threads_cursor = fetch_threads(variant)
+                    if "threads" in sources and fetch_threads is not None:
+                        current_source = "threads"
+                        threads_mentions, threads_cursor = _unpack_fetched(fetch_threads(variant), variant)
 
                         def store_threads(
                             conn,
@@ -415,6 +492,34 @@ def serve(
                             store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
 
                         _call(connect, store_threads)
+                    if "instagram" in sources and fetch_instagram is not None:
+                        current_source = "instagram"
+                        ig_mentions, ig_cursor = _unpack_fetched(fetch_instagram(variant), variant)
+
+                        def store_instagram(
+                            conn,
+                            job=job,
+                            key=key,
+                            ig_mentions=ig_mentions,
+                            ig_cursor=ig_cursor,
+                        ):
+                            store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
+
+                        _call(connect, store_instagram)
+                    if "tiktok" in sources and fetch_tiktok is not None:
+                        current_source = "tiktok"
+                        tt_mentions, tt_cursor = _unpack_fetched(fetch_tiktok(variant), variant)
+
+                        def store_tiktok(
+                            conn,
+                            job=job,
+                            key=key,
+                            tt_mentions=tt_mentions,
+                            tt_cursor=tt_cursor,
+                        ):
+                            store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
+
+                        _call(connect, store_tiktok)
                     if collected is not None and collected.blocked_detail:
                         blocked_detail = collected.blocked_detail
                         break
@@ -436,7 +541,7 @@ def serve(
             except Exception as error:
                 _log_exception(error)
                 try:
-                    detail = _failure_detail(error)
+                    detail = _failure_detail(error, source=current_source)
                     _call(
                         connect,
                         lambda conn, job=job, detail=detail: _fail(conn, job["id"], detail),
@@ -554,19 +659,32 @@ if __name__ == "__main__":
         return mentions, next_cursor
 
     def fetch_threads(variant: str):
-        from sentiment_monitor.sources.threads import ThreadsSource
-        page = ThreadsSource(os.environ["THREADS_ACCESS_TOKEN"]).fetch_page(variant, limit=25)
-        mentions = [
-            {
-                "external_id": mention.id,
-                "excerpt": mention.text,
-                "url": getattr(mention, "url", None),
-                "author": getattr(mention, "author", None),
-                "posted_at": mention.created_at.isoformat(),
-                "variant": variant,
-            }
-            for mention in page.mentions
-        ]
-        return mentions, page.next_cursor
+        from sentiment_monitor.sources.threads import fetch_threads_mentions
 
-    serve(connect, time.sleep, limits, worker_id, root, fetch_x, fetch_threads)
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return fetch_threads_mentions(variant, os.environ["SCRAPECREATORS_API_KEY"], now_iso)
+
+    def fetch_instagram(variant: str):
+        from sentiment_monitor.sources.instagram import fetch_instagram_mentions
+
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return fetch_instagram_mentions(variant, os.environ["SCRAPECREATORS_API_KEY"], now_iso)
+
+    def fetch_tiktok(variant: str):
+        from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions
+
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return fetch_tiktok_mentions(variant, os.environ["SCRAPECREATORS_API_KEY"], now_iso)
+
+    serve(
+        connect,
+        time.sleep,
+        limits,
+        worker_id,
+        root,
+        fetch_x,
+        fetch_threads,
+        fetch_instagram=fetch_instagram,
+        fetch_tiktok=fetch_tiktok,
+    )
+
