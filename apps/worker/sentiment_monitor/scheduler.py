@@ -250,11 +250,10 @@ def record_source_failure(conn, customer_id: str, project_id: str, source: str, 
         state = "unavailable"
     conn.execute(
         """
-        insert into source_status (customer_id, project_id, source, state, outcome, detail, updated_at)
-        values (%s, %s, %s, %s, 'failed', %s, now())
-        on conflict (project_id, source) do update
+        insert into source_status (customer_id, project_id, source, state, detail, updated_at)
+        values (%s, %s, %s, %s, %s, now())
+        on conflict (customer_id, project_id, source) do update
           set state = excluded.state,
-              outcome = excluded.outcome,
               detail = excluded.detail,
               updated_at = excluded.updated_at
         """,

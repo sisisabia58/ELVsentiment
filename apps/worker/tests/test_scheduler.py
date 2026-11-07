@@ -969,6 +969,13 @@ def test_failure_detail_and_record_source_failure_for_scrapecreators_and_x():
     assert record_source_failure(conn, "cust-1", "proj-1", "instagram", "instagram_http_402") == "rate_limited"
     assert record_source_failure(conn, "cust-1", "proj-1", "tiktok", "tiktok_http_401") == "authorization_failed"
     assert record_source_failure(conn, "cust-1", "proj-1", "threads", "threads_http_500") == "unavailable"
+    assert len(conn.calls) == 3
+    for sql, params in conn.calls:
+        lowered = " ".join(sql.lower().split())
+        assert "insert into source_status (customer_id, project_id, source, state, detail, updated_at)" in lowered
+        assert "on conflict (customer_id, project_id, source) do update" in lowered
+        assert "outcome" not in lowered
+        assert len(params) == 5
 
 
 def test_fetch_error_is_redacted_and_marks_the_job_failed(tmp_path, monkeypatch, capfd):
