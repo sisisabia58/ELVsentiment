@@ -302,3 +302,66 @@ def test_postgres16_daily_wib_minute_and_overlap_skip(pg16):
     ).fetchone()
     assert overlap == ("deferred", "skipped_overlap")
     assert advanced[0] is True
+
+
+def test_migration_009_scrapecreators_sources_sql_exists_and_expands_source_constraints():
+    migration_path = SQL_DIR / "009_scrapecreators_sources.sql"
+    assert migration_path.is_file(), "009_scrapecreators_sources.sql must exist"
+    sql = migration_path.read_text(encoding="utf-8").lower()
+    for constraint in (
+        "mentions_source_check",
+        "source_status_source_check",
+        "source_cursors_source_check",
+        "project_settings_enabled_sources_check",
+    ):
+        assert f"drop constraint if exists {constraint}" in sql
+        assert f"add constraint {constraint}" in sql
+    for source in ("'x'", "'threads'", "'instagram'", "'tiktok'"):
+        assert source in sql
+    assert "alter table project_settings alter column enabled_sources" in sql
+    assert "set default array['x', 'threads', 'instagram', 'tiktok']" in sql
+
+
+def test_postgres16_scrapecreators_sources_constraints(pg16):
+    conn = pg16
+    _seed(conn)
+    conn.execute("begin")
+    conn.execute(
+        """
+        insert into project_settings (project_id, customer_id, source_filter, enabled_sources)
+        values (%s, %s, 'all', array['x', 'threads', 'instagram', 'tiktok']::text[])
+        """,
+        (PROJECT_A, CUSTOMER_A),
+    )
+    for idx, source in enumerate(("instagram", "tiktok"), start=1):
+        conn.execute(
+            """
+            insert into mentions (
+              id, customer_id, project_id, source, external_id, excerpt,
+              posted_at, collected_at, matched_variants, scoring_status
+            )
+            values (%s, %s, %s, %s, %s, 'uji', now(), now(), array['geprek']::text[], 'pending')
+            """,
+            (f"dddddddd-dddd-4ddd-8ddd-ddddddddddd{idx}", CUSTOMER_A, PROJECT_A, source, f"ext-{source}"),
+        )
+        conn.execute(
+            """
+            insert into source_status (customer_id, project_id, source, state, detail, updated_at)
+            values (%s, %s, %s, 'ready', 'ok', now())
+            """,
+            (CUSTOMER_A, PROJECT_A, source),
+        )
+        conn.execute(
+            """
+            insert into source_cursors (customer_id, query_key, source)
+            values (%s, %s, %s)
+            """,
+            (CUSTOMER_A, f"qk-{source}", source),
+        )
+    conn.commit()
+    enabled = conn.execute(
+        "select enabled_sources from project_settings where project_id = %s",
+        (PROJECT_A,),
+    ).fetchone()
+    assert list(enabled[0]) == ["x", "threads", "instagram", "tiktok"]
+

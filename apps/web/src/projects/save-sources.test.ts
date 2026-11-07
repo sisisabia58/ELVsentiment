@@ -109,4 +109,52 @@ describe("saving sources", () => {
     );
     expect(saved).toEqual({ ok: false, error: "Pilih setidaknya satu sumber." });
   });
+
+  it("permits instagram and tiktok in project_settings, mentions, source_status, and source_cursors after migration 009", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "owner@example.com", password: "sandi-panjang" });
+    const project = await createProject(db, owner.customerId, "Kedai Contoh");
+
+    const defaultRow = await withCustomer(db, owner.customerId, () =>
+      db.query<{ enabled_sources: string[] }>("select enabled_sources from project_settings where project_id = $1", [
+        project.projectId,
+      ]),
+    );
+    expect(defaultRow.rows[0]?.enabled_sources).toEqual(["x", "threads", "instagram", "tiktok"]);
+
+    await withCustomer(db, owner.customerId, async () => {
+      await db.query("update project_settings set enabled_sources = $1 where project_id = $2", [
+        ["x", "threads", "instagram", "tiktok"],
+        project.projectId,
+      ]);
+      for (const source of ["instagram", "tiktok"] as const) {
+        await db.query(
+          `insert into mentions (
+             id, customer_id, project_id, source, external_id, excerpt,
+             posted_at, collected_at, matched_variants, scoring_status
+           ) values ($1, $2, $3, $4, $5, 'uji', now(), now(), $6, 'pending')`,
+          [randomUUID(), owner.customerId, project.projectId, source, `ext-${source}`, ["kedai contoh"]],
+        );
+        await db.query(
+          `insert into source_status (customer_id, project_id, source, state, detail, updated_at)
+           values ($1, $2, $3, 'ready', 'ok', now())`,
+          [owner.customerId, project.projectId, source],
+        );
+        await db.query(
+          `insert into source_cursors (customer_id, query_key, source)
+           values ($1, $2, $3)`,
+          [owner.customerId, `${project.projectId}:${source}`, source],
+        );
+      }
+    });
+
+    const row = await withCustomer(db, owner.customerId, () =>
+      db.query<{ enabled_sources: string[] }>("select enabled_sources from project_settings where project_id = $1", [
+        project.projectId,
+      ]),
+    );
+    expect(row.rows[0]?.enabled_sources).toEqual(["x", "threads", "instagram", "tiktok"]);
+  });
 });
+
