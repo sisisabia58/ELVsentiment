@@ -38,7 +38,7 @@ describe("project settings", () => {
     const x = screen.getByRole("checkbox", { name: /^X/ }) as HTMLInputElement;
     expect(threads.disabled).toBe(true);
     expect(threads.checked).toBe(false);
-    expect(screen.getByText("Tidak tersedia")).toBeTruthy();
+    expect(screen.getByText("Sumber Threads sedang tidak tersedia, kami sedang memperbaikinya.")).toBeTruthy();
     expect(x.disabled).toBe(false);
     expect(x.checked).toBe(true);
     expect(screen.queryByText(/Asia\/Jakarta/)).toBeNull();

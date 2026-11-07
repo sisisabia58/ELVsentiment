@@ -1,17 +1,23 @@
 "use client";
 
-import { workingSources, type SourceCredentials } from "@/monitor/onboarding-draft";
+import {
+  ALL_SOURCES,
+  SOURCE_NAME,
+  workingSources,
+  type SourceCredentials,
+  type SourceId,
+} from "@/monitor/onboarding-draft";
 
 export function SourceChoices(props: {
   credentials: SourceCredentials;
-  selected: ("x" | "threads")[];
-  onChange: (next: ("x" | "threads")[]) => void;
+  selected: SourceId[];
+  onChange: (next: SourceId[]) => void;
 }) {
   return (
     <>
-      {(["x", "threads"] as const).map((source) => {
-        const available = props.credentials[source];
-        const label = source === "x" ? "X" : "Threads";
+      {ALL_SOURCES.map((source) => {
+        const available = Boolean(props.credentials[source]);
+        const label = SOURCE_NAME[source];
         return (
           <label key={source} className="flex min-h-11 items-center gap-2 text-sm">
             <input
@@ -31,7 +37,9 @@ export function SourceChoices(props: {
               }}
             />
             <span>{label}</span>
-            {available ? null : <span>Tidak tersedia</span>}
+            {available ? null : (
+              <span>{`Sumber ${label} sedang tidak tersedia, kami sedang memperbaikinya.`}</span>
+            )}
           </label>
         );
       })}

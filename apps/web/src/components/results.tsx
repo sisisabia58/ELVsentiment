@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { scoringFailureCopy } from "@/monitor/copy";
+import { SOURCE_NAME, type SourceId } from "@/monitor/policy";
 import { collectionSentence, type CollectionOutcome } from "@/projects/dashboard-status";
 
 const SENTIMENT_TEXT = { positive: "Positif", neutral: "Netral", negative: "Negatif" } as const;
@@ -118,7 +119,7 @@ export function TopicPanel(props: { counts: { label: string; count: number }[]; 
 type MentionRow = {
   id: string;
   excerpt: string;
-  source: "x" | "threads";
+  source: SourceId;
   url: string;
   postedAt: string;
   relevance: "relevant" | "irrelevant" | null;
@@ -148,7 +149,7 @@ export function MentionFeed(props: { mentions: MentionRow[] }) {
           {props.mentions.map((mention) => (
             <li key={mention.id}>
               <p>{mention.excerpt}</p>
-              <p>{mention.source === "x" ? "X" : "Threads"}</p>
+              <p>{SOURCE_NAME[mention.source]}</p>
               <p>{mention.postedAt}</p>
               <p>{mentionStatus(mention)}</p>
               {mention.relevance === "relevant" ? <p>Relevan</p> : mention.relevance === "irrelevant" ? <p>Tidak relevan</p> : null}

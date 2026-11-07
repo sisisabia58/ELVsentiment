@@ -7,7 +7,16 @@ import { Check } from "lucide-react";
 import { LogoutForm } from "@/components/logout-form";
 import { generateCandidates } from "@/domain/variants";
 import { ONBOARDING_BRAND_HINT, ONBOARDING_SCHEDULE_HINT } from "@/monitor/copy";
-import { listedKeywords, workingSources, type OnboardingDraft, type OnboardingDraftFields } from "@/monitor/onboarding-draft";
+import {
+  ALL_SOURCES,
+  SOURCE_NAME,
+  listedKeywords,
+  workingSources,
+  type OnboardingDraft,
+  type OnboardingDraftFields,
+  type SourceCredentials,
+  type SourceId,
+} from "@/monitor/onboarding-draft";
 import type { ScheduleChoice } from "@/monitor/schedule-choice";
 import { choiceLabel } from "@/monitor/schedule-choice";
 import { clearOnboardingDraftAction, saveOnboardingDraftAction } from "@/app/onboarding/draft-actions";
@@ -23,13 +32,13 @@ type Existing = {
   projectId: string;
   brandName: string;
   keywords: string[];
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
 };
 
 export function OnboardingWizard(props: {
   existing: Existing | null;
-  credentials: { x: boolean; threads: boolean };
+  credentials: SourceCredentials;
   initial?: Pick<OnboardingDraft, "step" | "brand" | "keywords" | "sources" | "schedule">;
   onRun: (projectId: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
@@ -41,8 +50,8 @@ export function OnboardingWizard(props: {
       (props.existing?.keywords.length ? props.existing.keywords : props.existing ? [props.existing.brandName] : []),
   );
   const [draftKeyword, setDraftKeyword] = useState("");
-  const [sources, setSources] = useState<("x" | "threads")[]>(
-    workingSources(props.initial?.sources ?? props.existing?.sources ?? ["x", "threads"], props.credentials),
+  const [sources, setSources] = useState<SourceId[]>(
+    workingSources(props.initial?.sources ?? props.existing?.sources ?? ALL_SOURCES, props.credentials),
   );
   const [schedule, setSchedule] = useState<ScheduleChoice>(
     props.initial?.schedule ?? props.existing?.schedule ?? { mode: "off", intervalHours: 6 },
@@ -59,7 +68,7 @@ export function OnboardingWizard(props: {
 
   const candidates = generateCandidates(brand);
   const visibleKeywords = listedKeywords(candidates, keywords);
-  const availableSources = (["x", "threads"] as const).filter((source) => props.credentials[source]);
+  const availableSources = ALL_SOURCES.filter((source) => Boolean(props.credentials[source]));
   const canNext =
     step === 1 ? brand.trim().length > 0 : step === 2 ? keywords.length > 0 : step === 3 ? availableSources.length === 0 || sources.length > 0 : true;
 
@@ -316,7 +325,7 @@ export function OnboardingWizard(props: {
                 </div>
                 <div>
                   <dt className="text-muted-foreground">Sumber</dt>
-                  <dd>{sources.map((source) => (source === "x" ? "X" : "Threads")).join(", ")}</dd>
+                  <dd>{sources.map((s) => SOURCE_NAME[s]).join(", ")}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">Jadwal</dt>

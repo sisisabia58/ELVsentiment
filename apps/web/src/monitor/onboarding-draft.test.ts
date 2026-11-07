@@ -42,6 +42,18 @@ describe("onboarding draft", () => {
     expect(workingSources(["x", "threads"], { x: true, threads: false })).toEqual(["x"]);
     expect(workingSources(["x", "threads"], { x: false, threads: false })).toEqual([]);
     expect(workingSources(["threads"], { x: true, threads: true })).toEqual(["threads"]);
+    expect(
+      workingSources(["x", "threads", "instagram", "tiktok"], {
+        x: false,
+        threads: true,
+        instagram: true,
+        tiktok: true,
+      }),
+    ).toEqual(["threads", "instagram", "tiktok"]);
+    const parsed = parseOnboardingDraft(
+      JSON.stringify(draft({ sources: ["x", "threads", "instagram", "tiktok"] })),
+    );
+    expect(parsed?.sources).toEqual(["x", "threads", "instagram", "tiktok"]);
   });
 
   it("restores the URL step and the saved field values together", () => {

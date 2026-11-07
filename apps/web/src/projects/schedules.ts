@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
-import { sourceCredentials } from "../monitor/policy";
+import type { SourceCredentials } from "../monitor/onboarding-draft";
+import { ALL_SOURCES, sourceCredentials, type SourceId } from "../monitor/policy";
 import { nextDailyInstant } from "../monitor/schedule-choice";
 
 export type ScheduleLimits = {
@@ -124,14 +125,17 @@ export async function saveSchedule(
   return withCustomer(db, customerId, () => applySchedule(db, customerId, projectId, normalized.value));
 }
 
-function enabledSources(value: unknown): ("x" | "threads")[] {
-  if (value == null) return ["x", "threads"];
+function enabledSources(value: unknown): SourceId[] {
+  if (value == null) return [...ALL_SOURCES];
   const items = Array.isArray(value)
     ? value
     : typeof value === "string"
       ? value.replace(/^\{|\}$/g, "").split(",").map((item) => item.trim()).filter(Boolean)
       : [];
-  return items.filter((item): item is "x" | "threads" => item === "x" || item === "threads");
+  return items.filter(
+    (item): item is SourceId =>
+      item === "x" || item === "threads" || item === "instagram" || item === "tiktok",
+  );
 }
 
 export async function requestManualRun(
@@ -140,7 +144,7 @@ export async function requestManualRun(
   projectId: string,
   now: Date,
   limits: ScheduleLimits = readLimits(),
-  credentials: { x: boolean; threads: boolean } = sourceCredentials(),
+  credentials: SourceCredentials = sourceCredentials(),
 ): Promise<
   | { ok: true; jobId: string }
   | { ok: false; reason: "manual_rate_limited"; retryAt: string }
@@ -154,7 +158,7 @@ export async function requestManualRun(
       [projectId],
     );
     const selected = enabledSources(settings.rows.length === 0 ? null : settings.rows[0]?.enabled_sources);
-    if (!selected.some((source) => credentials[source])) {
+    if (!selected.some((source) => Boolean(credentials[source]))) {
       return { ok: false as const, reason: "sources_unavailable" as const };
     }
     const recent = await db.query<{ created_at: string }>(

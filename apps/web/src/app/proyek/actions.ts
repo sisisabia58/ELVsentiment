@@ -5,14 +5,14 @@ import { withSessionDeps } from "@/auth/request-session";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { ownsProject, saveProjectConfiguration } from "@/projects/handlers";
 import { readLimits, saveSchedule } from "@/projects/schedules";
-import { sourceCredentials } from "@/monitor/policy";
+import { sourceCredentials, type SourceId } from "@/monitor/policy";
 import { toPersist, type ScheduleChoice } from "@/monitor/schedule-choice";
 
 export async function saveProjectSettingsAction(input: {
   projectId: string;
   brandName: string;
   variants: string[];
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
 }): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   const result = await withSessionDeps(async (deps) => {

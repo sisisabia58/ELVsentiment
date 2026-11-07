@@ -3,7 +3,7 @@ import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
 import { effectOfKeywordEdit } from "../domain/keyword-history";
 import { generateCandidates, validateVariantList } from "../domain/variants";
-import { workingSources, type SourceCredentials } from "../monitor/onboarding-draft";
+import { asSources, workingSources, type SourceCredentials, type SourceId } from "../monitor/onboarding-draft";
 import { applySchedule, normalizeSchedule, readLimits, type ScheduleLimits } from "./schedules";
 import type { ScheduleChoice } from "../monitor/schedule-choice";
 import { toPersist } from "../monitor/schedule-choice";
@@ -100,6 +100,24 @@ async function replaceActiveVariants(
   }
 }
 
+export async function saveProjectSources(
+  db: Queryable,
+  customerId: string,
+  projectId: string,
+  sources: readonly SourceId[],
+): Promise<{ ok: true; sources: SourceId[] } | { ok: false; error: string }> {
+  const valid = asSources(sources);
+  if (valid.length === 0) return { ok: false, error: "Pilih setidaknya satu sumber." };
+  return withCustomer(db, customerId, async () => {
+    const owned = await db.query<{ id: string }>("select id from projects where id = $1", [projectId]);
+    if (owned.rows.length !== 1) {
+      return { ok: false as const, error: "Halaman tidak ditemukan atau Anda tidak memiliki akses." };
+    }
+    await db.query("update project_settings set enabled_sources = $1 where project_id = $2", [valid, projectId]);
+    return { ok: true as const, sources: valid };
+  });
+}
+
 export async function saveProjectConfiguration(
   db: Queryable,
   customerId: string,
@@ -107,17 +125,19 @@ export async function saveProjectConfiguration(
     projectId: string;
     brandName: string;
     variants: string[];
-    sources: ("x" | "threads")[];
+    sources: SourceId[];
     schedule: ScheduleChoice;
     now?: Date;
   },
   limits: ScheduleLimits = readLimits(),
   // Fail closed. The settings action passes sourceCredentials(); a caller that
   // omits them must not store X or Threads.
-  credentials: SourceCredentials = { x: false, threads: false },
+  credentials: SourceCredentials = { x: false, threads: false, instagram: false, tiktok: false },
 ): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   const sources = workingSources(input.sources, credentials);
-  const anyConfigured = credentials.x || credentials.threads;
+  const anyConfigured = Boolean(
+    credentials.x || credentials.threads || credentials.instagram || credentials.tiktok,
+  );
   if (!input.brandName.trim()) return { ok: false, error: "Masukkan nama merek." };
   if (anyConfigured && sources.length === 0) return { ok: false, error: "Pilih setidaknya satu sumber." };
   const validated = validateVariantList(input.variants);

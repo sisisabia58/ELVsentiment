@@ -91,9 +91,24 @@ export function reviewTopicChoices(
   return [...policy.topicLabels, { id: fallback, label: "Lainnya" }];
 }
 
-export function sourceCredentials(env: Record<string, string | undefined> = process.env): { x: boolean; threads: boolean } {
+export type SourceId = "x" | "threads" | "instagram" | "tiktok";
+export const ALL_SOURCES: readonly SourceId[] = ["x", "threads", "instagram", "tiktok"];
+export const SOURCE_NAME: Record<SourceId, string> = {
+  x: "X",
+  threads: "Threads",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+};
+
+export function sourceCredentials(
+  env: Record<string, string | undefined> = process.env,
+): Record<SourceId, boolean> {
+  const sc = Boolean(env.SCRAPECREATORS_API_KEY?.trim() || env.THREADS_ACCESS_TOKEN?.trim());
+  const scOnly = Boolean(env.SCRAPECREATORS_API_KEY?.trim());
   return {
     x: Boolean(env.X_BEARER_TOKEN?.trim()),
-    threads: Boolean(env.THREADS_ACCESS_TOKEN?.trim()),
+    threads: sc,
+    instagram: scOnly,
+    tiktok: scOnly,
   };
 }

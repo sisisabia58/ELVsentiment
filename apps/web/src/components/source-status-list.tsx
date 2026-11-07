@@ -1,5 +1,7 @@
 "use client";
 
+import { SOURCE_NAME, type SourceId } from "@/monitor/policy";
+
 const STATE_LABEL = {
   ready: "Siap",
   unavailable: "Tidak tersedia",
@@ -15,7 +17,7 @@ const DETAIL_LABEL: Record<string, string> = {
 
 export function SourceStatusList(props: {
   reports: {
-    source: "x" | "threads";
+    source: SourceId;
     state: keyof typeof STATE_LABEL;
     outcome: "success" | "failed" | "empty_unconfirmed";
     fetchedCount: number | null;
@@ -26,10 +28,10 @@ export function SourceStatusList(props: {
     <ul className="flex flex-col gap-3">
       {props.reports.map((report) => (
         <li key={`${report.source}-${report.outcome}-${"detail" in report ? report.detail ?? "" : ""}`}>
-          <p>{report.source === "x" ? "X" : "Threads"}</p>
+          <p>{SOURCE_NAME[report.source]}</p>
           <p>
             {report.state === "unavailable"
-              ? `Status ${report.source === "x" ? "X" : "Threads"}: Tidak tersedia`
+              ? `Status ${SOURCE_NAME[report.source]}: Tidak tersedia`
               : STATE_LABEL[report.state]}
           </p>
           {report.outcome === "failed" ? <p>Pengumpulan gagal. Ini bukan nol sebutan.</p> : null}

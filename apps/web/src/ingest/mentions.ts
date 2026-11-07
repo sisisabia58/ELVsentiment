@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
+import type { SourceId } from "../monitor/policy";
 
 export async function ingestMention(
   db: Queryable,
   input: {
     customerId: string;
     projectId: string;
-    source: "x" | "threads";
+    source: SourceId;
     externalId: string;
     variant: string;
     excerpt: string;
@@ -41,3 +42,5 @@ export async function ingestMention(
     return { id, result: "inserted" as const };
   });
 }
+
+export const insertMention = ingestMention;

@@ -175,7 +175,12 @@ describe("workspace loader", () => {
     expect(workspace.displayName).toBe("Rina Wulandari");
     expect(workspace.mentions).toHaveLength(1);
     expect(workspace.mentions[0]?.sentiment).toBe("positive");
-    expect(workspace.sources.map((source) => source.state)).toEqual(["unavailable", "unavailable"]);
+    expect(workspace.sources.map((source) => source.state)).toEqual([
+      "unavailable",
+      "unavailable",
+      "unavailable",
+      "unavailable",
+    ]);
     const dashboard = dashboardFor(workspace, "7", "all", now);
     expect(dashboard.score.kind).toBe("score");
     if (dashboard.score.kind === "score") expect(Math.round(dashboard.score.value)).toBe(100);

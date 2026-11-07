@@ -3,7 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { registerOwner } from "../auth/accounts";
 import { applyMigration, pgliteQueryable, withCustomer } from "../db/migrate";
-import { createProject, saveProjectConfiguration } from "./handlers";
+import { createProject, saveProjectConfiguration, saveProjectSources } from "./handlers";
 import { readLimits } from "./schedules";
 
 describe("saving sources", () => {
@@ -108,6 +108,45 @@ describe("saving sources", () => {
       { x: true, threads: false },
     );
     expect(saved).toEqual({ ok: false, error: "Pilih setidaknya satu sumber." });
+  });
+
+  it("saves all four sources via saveProjectSources and saveProjectConfiguration", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "owner@example.com", password: "sandi-panjang" });
+    const project = await createProject(db, owner.customerId, "Kedai Contoh");
+
+    const direct = await saveProjectSources(db, owner.customerId, project.projectId, [
+      "x",
+      "threads",
+      "instagram",
+      "tiktok",
+    ]);
+    expect(direct).toEqual({
+      ok: true,
+      sources: ["x", "threads", "instagram", "tiktok"],
+    });
+
+    const saved = await saveProjectConfiguration(
+      db,
+      owner.customerId,
+      {
+        projectId: project.projectId,
+        brandName: "Kedai Contoh",
+        variants: ["kedai contoh"],
+        sources: ["x", "threads", "instagram", "tiktok"],
+        schedule: { mode: "off", intervalHours: 6 },
+      },
+      readLimits(),
+      { x: true, threads: true, instagram: true, tiktok: true },
+    );
+    expect(saved.ok).toBe(true);
+    const row = await withCustomer(db, owner.customerId, () =>
+      db.query<{ enabled_sources: string[] }>("select enabled_sources from project_settings where project_id = $1", [
+        project.projectId,
+      ]),
+    );
+    expect(row.rows[0]?.enabled_sources).toEqual(["x", "threads", "instagram", "tiktok"]);
   });
 
   it("permits instagram and tiktok in project_settings, mentions, source_status, and source_cursors after migration 009", async () => {

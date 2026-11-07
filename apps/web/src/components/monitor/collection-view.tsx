@@ -5,6 +5,7 @@ import { formatWib } from "@/monitor/format";
 import { projectHref } from "@/monitor/links";
 import type { Workspace } from "@/monitor/load";
 import { sourceHealthCopy } from "@/monitor/load";
+import { SOURCE_NAME } from "@/monitor/policy";
 import { choiceLabel } from "@/monitor/schedule-choice";
 import { EmptyState, PageHeader, Panel } from "./bits";
 import { Frame } from "./shell";
@@ -44,7 +45,7 @@ export function CollectionView(props: {
         <div className="mt-6 flex flex-col gap-4 lg:gap-5">
           <div className="grid gap-4 sm:grid-cols-2">
             {props.workspace.sources.map((health) => (
-              <Panel key={health.source} title={health.source === "x" ? "X" : "Threads"}>
+              <Panel key={health.source} title={SOURCE_NAME[health.source]}>
                 <p className="text-sm leading-6">{sourceHealthCopy(health)}</p>
                 <p className="mt-2 text-xs text-muted-foreground">
                   {health.lastSuccessAt ? `Berhasil terakhir ${formatWib(health.lastSuccessAt)}` : "Belum ada pengumpulan yang berhasil dari sumber ini."}

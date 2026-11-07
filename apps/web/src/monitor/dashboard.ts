@@ -1,9 +1,10 @@
 import { overviewScore } from "../domain/aggregates";
 import { describeChange, type ChangeTone } from "./format";
+import type { SourceId } from "./policy";
 import type { PresentedMention, Sentiment } from "./present";
 import { inWindow, rangeWindow, type RangeKey, type RangeWindow } from "./range";
 
-export type SourceKey = "all" | "x" | "threads";
+export type SourceKey = "all" | SourceId;
 
 export type ChartPoint = {
   date: string;

@@ -2,6 +2,7 @@ import { attentionDecision } from "../domain/attention";
 import { displayOf, type OwnerCorrection } from "../domain/display";
 import { failedScoring, routeJudgment, type ParsedJudgment, type ScoringPolicy } from "../domain/routing";
 import { initialsFrom } from "./format";
+import type { SourceId } from "./policy";
 
 export type Sentiment = "positive" | "neutral" | "negative";
 export type MentionBucket = "included" | "excluded" | "not_sure" | "failed" | "pending" | "policy_unapproved";
@@ -9,7 +10,7 @@ export type UncertainField = "relevansi" | "sentimen" | "topik";
 
 export type StoredMention = {
   id: string;
-  source: "x" | "threads";
+  source: SourceId;
   excerpt: string;
   url: string | null;
   author: string | null;
@@ -30,7 +31,7 @@ export type StoredMention = {
 
 export type PresentedMention = {
   id: string;
-  source: "x" | "threads";
+  source: SourceId;
   excerpt: string;
   url: string | null;
   authorLabel: string;

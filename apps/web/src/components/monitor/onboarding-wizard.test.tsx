@@ -81,7 +81,7 @@ describe("onboarding wizard", () => {
     const threads = screen.getByRole("checkbox", { name: /^Threads/ }) as HTMLInputElement;
     expect(x.disabled).toBe(true);
     expect(x.checked).toBe(false);
-    expect(screen.getByText("Tidak tersedia")).toBeTruthy();
+    expect(screen.getByText("Sumber X sedang tidak tersedia, kami sedang memperbaikinya.")).toBeTruthy();
     expect(threads.disabled).toBe(false);
     fireEvent.click(x);
     expect(x.checked).toBe(false);

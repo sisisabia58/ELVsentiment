@@ -1,4 +1,5 @@
 import type { Queryable } from "../db/migrate";
+import { ALL_SOURCES, SOURCE_NAME, type SourceId } from "../monitor/policy";
 
 export type LatestJobStatus = "queued" | "claimed" | "succeeded" | "deferred" | "failed";
 export type CollectionOutcome = "none" | "failed" | "succeeded" | "queued" | "claimed";
@@ -66,11 +67,14 @@ const STATE_LABEL: Record<string, string> = {
   rate_limited: "Batas permintaan tercapai",
 };
 
-const SOURCE_LABEL: Record<string, string> = { x: "X", threads: "Threads" };
+const SOURCE_LABEL: Record<string, string> = SOURCE_NAME;
 
 export function sourceStateSummary(rows: { source: string; state: string }[]): string {
   if (rows.length === 0) return "Status sumber belum tercatat.";
-  const order = (source: string) => (source === "x" ? 0 : source === "threads" ? 1 : 2);
+  const order = (source: string) => {
+    const index = ALL_SOURCES.indexOf(source as SourceId);
+    return index === -1 ? ALL_SOURCES.length : index;
+  };
   return [...rows]
     .sort((left, right) => order(left.source) - order(right.source))
     .map((row) => `Status ${SOURCE_LABEL[row.source] ?? row.source}: ${STATE_LABEL[row.state] ?? row.state}`)

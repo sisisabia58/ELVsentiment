@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Info } from "lucide-react";
-import { workingSources, type SourceCredentials } from "@/monitor/onboarding-draft";
+import { workingSources, type SourceCredentials, type SourceId } from "@/monitor/onboarding-draft";
 import type { ScheduleChoice } from "@/monitor/schedule-choice";
 import { saveProjectSettingsAction } from "@/app/proyek/actions";
 import { Panel } from "./bits";
@@ -14,7 +14,7 @@ export function SettingsForm(props: {
   projectId: string;
   brandName: string;
   keywords: string[];
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
   credentials: SourceCredentials;
 }) {

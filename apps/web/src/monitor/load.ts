@@ -3,7 +3,8 @@ import { withCustomer } from "../db/migrate";
 import type { OwnerCorrection } from "../domain/display";
 import type { ScheduleLimits } from "../projects/schedules";
 import { buildDashboard, type DashboardModel, type SourceKey } from "./dashboard";
-import { readMonitorPolicy, reviewTopicChoices, sourceCredentials } from "./policy";
+import { asSources, type SourceCredentials } from "./onboarding-draft";
+import { ALL_SOURCES, readMonitorPolicy, reviewTopicChoices, SOURCE_NAME, sourceCredentials, type SourceId } from "./policy";
 import { presentMention, type PresentedMention, type Sentiment, type StoredMention } from "./present";
 import { parseRangeKey, type RangeKey } from "./range";
 import { choiceFromRow, type ScheduleChoice } from "./schedule-choice";
@@ -12,7 +13,7 @@ export type ProjectSummary = {
   id: string;
   name: string;
   initials: string;
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
   nextRunAt: string | null;
   lastCollectedAt: string | null;
@@ -20,7 +21,7 @@ export type ProjectSummary = {
 };
 
 export type SourceHealth = {
-  source: "x" | "threads";
+  source: SourceId;
   state: "ready" | "unavailable" | "authorization_failed" | "rate_limited";
   detail: string;
   lastSuccessAt: string | null;
@@ -56,7 +57,7 @@ export type Workspace = {
   topicLabels: { id: string; label: string }[];
   topicCountingApproved: boolean;
   highImpact: boolean;
-  credentials: { x: boolean; threads: boolean };
+  credentials: SourceCredentials;
 };
 
 function iso(value: string | Date | null | undefined): string | null {
@@ -117,20 +118,19 @@ const SOURCE_COPY: Record<SourceHealth["state"], string> = {
 export const SOURCES_UNAVAILABLE_COPY = "Sumber yang dipilih sedang tidak tersedia, kami sedang memperbaikinya.";
 
 export function selectedSourcesReady(
-  sources: readonly ("x" | "threads")[],
+  sources: readonly SourceId[],
   health: readonly SourceHealth[],
 ): boolean {
   return sources.some((source) => health.some((item) => item.source === source && item.configured));
 }
 
 export function sourceHealthCopy(health: SourceHealth): string {
+  const name = SOURCE_NAME[health.source];
   if (!health.configured || health.state === "unavailable") {
-    return health.source === "x"
-      ? "Sumber X sedang tidak tersedia, kami sedang memperbaikinya."
-      : "Sumber Threads sedang tidak tersedia, kami sedang memperbaikinya.";
+    return `Sumber ${name} sedang tidak tersedia, kami sedang memperbaikinya.`;
   }
   if (health.state === "rate_limited") {
-    return `Pengumpulan dari ${health.source === "x" ? "X" : "Threads"} dibatasi sementara. Waktu tersedia kembali belum diketahui.`;
+    return `Pengumpulan dari ${name} dibatasi sementara. Waktu tersedia kembali belum diketahui.`;
   }
   if (health.state === "authorization_failed") return "Otorisasi sumber gagal. Akses sumber dikelola oleh kami.";
   return SOURCE_COPY[health.state];
@@ -138,7 +138,7 @@ export function sourceHealthCopy(health: SourceHealth): string {
 
 type MentionSql = {
   id: string;
-  source: "x" | "threads";
+  source: SourceId;
   excerpt: string;
   url: string | null;
   author: string | null;
@@ -229,12 +229,12 @@ export async function loadWorkspace(
        order by p.created_at desc, p.id`,
     );
     const projects: ProjectSummary[] = projectRows.rows.map((row) => {
-      const sources = asTextArray(row.enabled_sources).filter((item): item is "x" | "threads" => item === "x" || item === "threads");
+      const sources = asSources(asTextArray(row.enabled_sources));
       return {
         id: row.id,
         name: row.brand_name,
         initials: initials(row.brand_name),
-        sources: sources.length > 0 ? sources : ["x", "threads"],
+        sources: sources.length > 0 ? sources : [...ALL_SOURCES],
         schedule: choiceFromRow({
           enabled: row.enabled === true,
           intervalHours: row.interval_hours ?? 6,
@@ -294,15 +294,15 @@ export async function loadWorkspace(
       [project.id],
     );
     const statusRows = await db.query<{
-      source: "x" | "threads";
+      source: SourceId;
       state: SourceHealth["state"];
       detail: string;
       last_success_at: string | Date | null;
     }>("select source, state, detail, last_success_at from source_status where project_id = $1", [project.id]);
     const recorded = new Map(statusRows.rows.map((row) => [row.source, row]));
-    const sources: SourceHealth[] = (["x", "threads"] as const).map((source) => {
+    const sources: SourceHealth[] = ALL_SOURCES.map((source) => {
       const row = recorded.get(source);
-      const configured = credentials[source];
+      const configured = Boolean(credentials[source]);
       const state = !configured ? "unavailable" : (row?.state ?? "unavailable");
       return {
         source,
@@ -389,7 +389,10 @@ export async function loadWorkspace(
 
 export function dashboardFor(workspace: Workspace, rangeValue: string | undefined, sourceValue: string | undefined, now: Date): DashboardModel {
   const range: RangeKey = parseRangeKey(rangeValue);
-  const source: SourceKey = sourceValue === "x" || sourceValue === "threads" ? sourceValue : "all";
+  const source: SourceKey =
+    sourceValue === "x" || sourceValue === "threads" || sourceValue === "instagram" || sourceValue === "tiktok"
+      ? sourceValue
+      : "all";
   const mentions = workspace.mentions;
   return buildDashboard({
     mentions,

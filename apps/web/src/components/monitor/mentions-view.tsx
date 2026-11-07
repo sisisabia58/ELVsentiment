@@ -215,6 +215,8 @@ function FilterBar(props: {
         <FilterChip href={href({ sumber: undefined, halaman: undefined })} current={!props.source} label="Semua sumber" />
         <FilterChip href={href({ sumber: "x", halaman: undefined })} current={props.source === "x"} label="X" />
         <FilterChip href={href({ sumber: "threads", halaman: undefined })} current={props.source === "threads"} label="Threads" />
+        <FilterChip href={href({ sumber: "instagram", halaman: undefined })} current={props.source === "instagram"} label="Instagram" />
+        <FilterChip href={href({ sumber: "tiktok", halaman: undefined })} current={props.source === "tiktok"} label="TikTok" />
       </div>
       {props.mode === "sebutan" ? (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Sentimen">
@@ -251,7 +253,7 @@ function rowsFor(
 ): PresentedMention[] {
   return workspace.mentions.filter((mention) => {
     if (mention.postedAt && !inWindow(mention.postedAt, start, end)) return false;
-    if (source === "x" || source === "threads") {
+    if (source === "x" || source === "threads" || source === "instagram" || source === "tiktok") {
       if (mention.source !== source) return false;
     }
     if (sentiment && mention.sentiment !== sentiment) return false;

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Activity } from "lucide-react";
 import { cn } from "cn";
 import { describeChange, formatNumber, formatSigned } from "@/monitor/format";
+import { SOURCE_NAME, type SourceId } from "@/monitor/policy";
 
 export function Wordmark() {
   return (
@@ -140,13 +141,20 @@ export function SentimentTag(props: { sentiment: "positive" | "neutral" | "negat
   return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", item.className)}>{item.label}</span>;
 }
 
-export function SourceMark(props: { source: "x" | "threads" }) {
+const SOURCE_BADGE: Record<SourceId, string> = {
+  x: "X",
+  threads: "@",
+  instagram: "IG",
+  tiktok: "TT",
+};
+
+export function SourceMark(props: { source: SourceId }) {
   return (
     <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
       <span className="grid size-4 place-items-center rounded-full bg-foreground text-[9px] font-semibold text-primary-foreground" aria-hidden="true">
-        {props.source === "x" ? "X" : "T"}
+        {SOURCE_BADGE[props.source]}
       </span>
-      {props.source === "x" ? "X" : "Threads"}
+      {SOURCE_NAME[props.source]}
     </span>
   );
 }

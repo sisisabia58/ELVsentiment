@@ -3,7 +3,7 @@ import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
 import type { OwnerCorrection } from "../domain/display";
 import { presentMention, type Sentiment } from "./present";
-import { readMonitorPolicy, reviewTopicChoices } from "./policy";
+import { readMonitorPolicy, reviewTopicChoices, type SourceId } from "./policy";
 
 export async function setMentionRead(
   db: Queryable,
@@ -48,7 +48,7 @@ export async function saveMentionReview(
   return withCustomer(db, customerId, async () => {
     const rows = await db.query<{
       id: string;
-      source: "x" | "threads";
+      source: SourceId;
       excerpt: string;
       url: string | null;
       author: string | null;
@@ -154,7 +154,7 @@ export async function attentionStillEligible(db: Queryable, customerId: string, 
   const rows = await withCustomer(db, customerId, () =>
     db.query<{
       id: string;
-      source: "x" | "threads";
+      source: SourceId;
       excerpt: string;
       url: string | null;
       author: string | null;

@@ -1,4 +1,7 @@
+import { ALL_SOURCES, SOURCE_NAME, type SourceId } from "./policy";
 import type { ScheduleChoice } from "./schedule-choice";
+
+export { ALL_SOURCES, SOURCE_NAME, type SourceId };
 
 export const ONBOARDING_DRAFT_COOKIE = "onboarding_draft";
 export const ONBOARDING_DRAFT_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
@@ -16,7 +19,7 @@ export type OnboardingDraft = {
   step: number;
   brand: string;
   keywords: string[];
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
 };
 
@@ -26,11 +29,24 @@ export type OnboardingDraftFields = {
   step: number;
   brand: string;
   keywords: string[];
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
 };
 
-export type SourceCredentials = { x: boolean; threads: boolean };
+export type SourceCredentials = {
+  x: boolean;
+  threads: boolean;
+  instagram?: boolean;
+  tiktok?: boolean;
+};
+
+export function asSources(value: unknown): SourceId[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is SourceId =>
+      item === "x" || item === "threads" || item === "instagram" || item === "tiktok",
+  );
+}
 
 export function listedKeywords(candidates: readonly string[], selected: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -44,22 +60,22 @@ export function listedKeywords(candidates: readonly string[], selected: readonly
 }
 
 export function workingSources(
-  requested: readonly ("x" | "threads")[],
+  requested: readonly SourceId[],
   credentials: SourceCredentials,
-): ("x" | "threads")[] {
-  return requested.filter((source) => credentials[source]);
+): SourceId[] {
+  return requested.filter((source) => Boolean(credentials[source]));
 }
 
 // The furthest step the saved fields can open. A later langkah is out of order.
 export function allowedOnboardingStep(input: {
   brand: string;
   keywords: readonly string[];
-  sources: readonly ("x" | "threads")[];
+  sources: readonly SourceId[];
   credentials: SourceCredentials;
 }): number {
   if (input.brand.trim().length === 0) return 1;
   if (input.keywords.length === 0) return 2;
-  const available = (["x", "threads"] as const).filter((source) => input.credentials[source]);
+  const available = ALL_SOURCES.filter((source) => Boolean(input.credentials[source]));
   const selected = input.sources.filter((source) => available.includes(source));
   if (available.length > 0 && selected.length === 0) return 3;
   return 5;
@@ -131,9 +147,7 @@ export function parseOnboardingDraft(raw: string | null | undefined): Onboarding
       return null;
     }
     if (!record.keywords.every((item) => typeof item === "string")) return null;
-    const sources = Array.isArray(record.sources)
-      ? record.sources.filter((item): item is "x" | "threads" => item === "x" || item === "threads")
-      : [];
+    const sources = asSources(record.sources);
     const schedule = parseSchedule(record.schedule);
     if (!schedule) return null;
     const projectId = typeof record.projectId === "string" ? record.projectId : null;
@@ -175,7 +189,7 @@ export function resolveOnboardingState(input: {
     projectId: string;
     brandName: string;
     keywords: string[];
-    sources: ("x" | "threads")[];
+    sources: SourceId[];
     schedule: ScheduleChoice;
   } | null;
   credentials: SourceCredentials;
@@ -183,14 +197,14 @@ export function resolveOnboardingState(input: {
   step: number;
   brand: string;
   keywords: string[];
-  sources: ("x" | "threads")[];
+  sources: SourceId[];
   schedule: ScheduleChoice;
 } {
   const blank = {
     step: 1,
     brand: "",
     keywords: [] as string[],
-    sources: workingSources(["x", "threads"], input.credentials),
+    sources: workingSources(ALL_SOURCES, input.credentials),
     schedule: { mode: "off" as const, intervalHours: 6 },
   };
   if (input.fresh) {
