@@ -1047,7 +1047,13 @@ def test_fetch_error_is_redacted_and_marks_the_job_failed(tmp_path, monkeypatch,
     assert "URL-STRING-FORM" not in captured.out
     assert "URL-STRING-FORM" not in captured.err
     assert "Traceback" not in captured.err
-    assert captured.out == "[redacted] [redacted]\nworker heartbeat id=worker-1\n"
+    collection = [
+        line
+        for line in captured.out.splitlines()
+        if line.startswith("source_collection") and "detail=threads_http_401" in line
+    ]
+    assert len(collection) == 1
+    assert "source=threads" in collection[0]
     assert captured.err == ""
     failed = [
         (sql, params)
@@ -1106,11 +1112,11 @@ def test_failed_status_update_is_redacted_and_the_loop_continues(tmp_path, monke
         )
 
     captured = capfd.readouterr()
-    assert captured.out == "[redacted] [redacted]\n[redacted] [redacted]\nworker heartbeat id=worker-1\n"
     assert captured.err == ""
     assert token not in captured.out
     assert quoted not in captured.out
     assert "URL-STRING-FORM" not in captured.out
+    assert "RuntimeError unknown_error" in captured.out
 
 
 def test_fetch_x_with_cursor_keeps_the_harken_cursor(monkeypatch):
@@ -1294,3 +1300,194 @@ def test_cursor_adapter_maps_psycopg_cursors_onto_the_row_contract():
     assert "CursorRowAdapter(" in main
     body = source.split('if __name__ == "__main__":', 1)[0]
     assert "CursorRowAdapter(" not in body
+
+
+def test_serve_writes_ready_after_success_and_logs_safe_counts(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [
+                {"external_id": "1", "excerpt": "aman", "url": None, "author": "a", "posted_at": "2026-11-01T00:00:00Z", "variant": variant},
+                {"external_id": "1", "excerpt": "aman", "url": None, "author": "a", "posted_at": "2026-11-01T00:00:00Z", "variant": variant},
+            ],
+            "counts": {"returned": 3, "parsed": 2, "deduplicated": 1},
+            "credits_charged": 2,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    status = [params for sql, params in world.calls if "insert into source_status" in sql.lower()]
+    assert status and status[-1][2] == "threads"
+    collection_line = next(line for line in lines if line.startswith("source_collection"))
+    assert "job_id=job-1" in collection_line
+    assert "project_id=project-1" in collection_line
+    assert "source=threads" in collection_line
+    assert "returned=3" in collection_line
+    assert "parsed=2" in collection_line
+    assert "deduplicated=1" in collection_line
+    assert "saved=" in collection_line
+    assert "credits_charged=2" in collection_line
+    assert "geprek" not in collection_line
+    assert "aman" not in collection_line
+
+
+def test_provider_failure_writes_failure_and_fails_with_safe_detail(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+
+    def fetch_threads(_variant):
+        raise ScrapeCreatorsError("success_false", credits_charged=4)
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+        )
+
+    status_params = [params for sql, params in world.calls if "insert into source_status" in sql.lower()]
+    assert status_params == [("customer-a", "project-1", "threads", "unavailable", "threads_success_false")]
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql.lower() and "claim_expired" not in sql.lower()]
+    assert failed == [("threads_success_false", "job-1")]
+
+
+def test_status_write_failure_does_not_replace_provider_detail(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    class StatusFailConn(_LoopConn):
+        def execute(self, sql, params=None):
+            if "insert into source_status" in sql.lower():
+                raise RuntimeError("status write failed with secret provider text")
+            return super().execute(sql, params)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+
+    def fetch_threads(_variant):
+        raise ScrapeCreatorsError("http_401", http_status=401)
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: StatusFailConn(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+        )
+
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql.lower() and "claim_expired" not in sql.lower()]
+    assert failed == [("threads_http_401", "job-1")]
+
+
+def test_status_write_failure_on_success_keeps_mentions_and_succeeds_the_job(tmp_path):
+    class StatusFailConn(_LoopConn):
+        def execute(self, sql, params=None):
+            if "insert into source_status" in sql.lower():
+                raise RuntimeError("status write failed")
+            return super().execute(sql, params)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "aman", "url": None, "author": "a", "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: StatusFailConn(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    joined = "\n".join(sql for sql, _params in world.calls).lower()
+    mention_at = joined.index("insert into mentions")
+    cursor_at = joined.index("insert into source_cursors", mention_at)
+    succeeded_at = joined.index("status = 'succeeded'", cursor_at)
+    assert mention_at < cursor_at < succeeded_at
+    assert any(line.startswith("source_status_write_failed") for line in lines)
+
+
+def test_storage_failure_does_not_write_source_status(tmp_path):
+    class StoreFailConn(_LoopConn):
+        def execute(self, sql, params=None):
+            if "insert into mentions" in sql.lower():
+                raise RuntimeError("database unavailable")
+            return super().execute(sql, params)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "aman", "url": None, "author": "a", "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: StoreFailConn(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+        )
+
+    assert not any("insert into source_status" in sql.lower() for sql, _params in world.calls)
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql.lower() and "claim_expired" not in sql.lower()]
+    assert failed == [("storage_failed", "job-1")]
+
+
+def test_safe_error_label_never_prints_raw_provider_text():
+    from sentiment_monitor.scheduler import _safe_error_label
+
+    label = _safe_error_label(RuntimeError("keyword rahasia https://api.x.com/?q=rahasia secret-key"))
+    assert label == "RuntimeError unknown_error"
+    assert "rahasia" not in label
+    assert "secret-key" not in label

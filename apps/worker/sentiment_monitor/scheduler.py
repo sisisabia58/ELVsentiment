@@ -206,10 +206,17 @@ def format_log(
     return redacted
 
 
+def _safe_error_label(error: Exception) -> str:
+    code = getattr(error, "detail", None) or getattr(error, "code", None)
+    if not isinstance(code, str) or not re.fullmatch(r"[a-z0-9_]+", code):
+        code = "unknown_error"
+    return f"{type(error).__name__} {code}"
+
+
 def _log_exception(error: Exception) -> None:
     if getattr(error, "_monitor_logged", False):
         return
-    print(format_log(str(error)))
+    print(format_log(_safe_error_label(error)))
     try:
         error._monitor_logged = True
     except Exception:
@@ -386,12 +393,20 @@ def _heartbeat_log_seconds(explicit: int | None) -> int:
     return seconds
 
 
-def _unpack_fetched(result: Any, variant: str) -> tuple[list[dict[str, Any]], str | None]:
+def _unpack_fetched(
+    result: Any, variant: str
+) -> tuple[list[dict[str, Any]], str | None, dict[str, int], int | None]:
+    credits: int | None = None
     if isinstance(result, tuple) and len(result) == 2:
         raw_mentions, next_cursor = result
     elif isinstance(result, dict):
         raw_mentions = result.get("mentions") or []
         next_cursor = result.get("next_cursor")
+        raw_credits = result.get("credits_charged")
+        if type(raw_credits) is int:
+            credits = raw_credits
+        elif isinstance(raw_credits, float) and raw_credits.is_integer():
+            credits = int(raw_credits)
     else:
         raw_mentions = []
         next_cursor = None
@@ -406,7 +421,105 @@ def _unpack_fetched(result: Any, variant: str) -> tuple[list[dict[str, Any]], st
         if "variant" not in row:
             row["variant"] = variant
         normalized.append(row)
-    return normalized, next_cursor
+
+    counts = {
+        "returned": len(raw_mentions),
+        "parsed": len(normalized),
+        "deduplicated": 0,
+    }
+    if isinstance(result, dict):
+        raw_counts = result.get("counts")
+        if isinstance(raw_counts, dict):
+            values = [raw_counts.get(key) for key in ("returned", "parsed", "deduplicated")]
+            if all(type(value) is int and value >= 0 for value in values):
+                counts = {
+                    "returned": values[0],
+                    "parsed": values[1],
+                    "deduplicated": values[2],
+                }
+    return normalized, next_cursor, counts, credits
+
+
+class SourceFetchError(Exception):
+    def __init__(
+        self,
+        detail: str,
+        state: str,
+        *,
+        http_status: int | None = None,
+        credits_charged: int | None = None,
+    ) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.state = state
+        self.http_status = http_status
+        self.credits_charged = credits_charged
+
+
+def _guarded_fetch(source: str, fetch):
+    try:
+        return fetch()
+    except SourceFetchError:
+        raise
+    except ScrapeCreatorsError as error:
+        raise SourceFetchError(
+            f"{source}_{error.code}",
+            source_failure_state(error.code, error.http_status),
+            http_status=error.http_status,
+            credits_charged=error.credits_charged,
+        ) from None
+    except Exception as error:
+        detail = _failure_detail(error, source)
+        status = getattr(error, "code", None)
+        if type(status) is not int:
+            status = None
+        raise SourceFetchError(
+            detail,
+            source_failure_state(detail, status),
+            http_status=status,
+        ) from None
+
+
+def _log_collection(
+    log,
+    job,
+    source: str,
+    outcome: str,
+    counts: dict[str, int],
+    saved: int,
+    *,
+    http_status: int | None = None,
+    credits: int | None = None,
+    detail: str = "ok",
+) -> None:
+    line = (
+        f"source_collection job_id={job['id']} project_id={job['project_id']} source={source} "
+        f"outcome={outcome} returned={counts['returned']} parsed={counts['parsed']} "
+        f"deduplicated={counts['deduplicated']} saved={saved} "
+        f"http_status={http_status if http_status is not None else '-'} "
+        f"credits_charged={credits if credits is not None else '-'} detail={detail}"
+    )
+    log(format_log(line))
+
+
+def _log_status_write_failed(log, job, source: str, error: Exception) -> None:
+    line = (
+        f"source_status_write_failed job_id={job['id']} project_id={job['project_id']} "
+        f"source={source} error={_safe_error_label(error)}"
+    )
+    log(format_log(line))
+
+
+def _record_source_ready(connect, log, job, source: str) -> None:
+    try:
+        _call(
+            connect,
+            lambda conn: record_source_success(
+                conn, job["customer_id"], job["project_id"], source
+            ),
+        )
+    except Exception as status_error:
+        _log_status_write_failed(log, job, source, status_error)
 
 
 def admit_threads_queries(conn, limits) -> tuple[bool, str | None]:
@@ -481,7 +594,10 @@ def serve(
                             break
 
                         def fetch_page(cursor, since, since_id, limit, variant=variant):
-                            return fetch_x(variant, limit, cursor, since, since_id)
+                            return _guarded_fetch(
+                                "x",
+                                lambda: fetch_x(variant, limit, cursor, since, since_id),
+                            )
 
                         def admit_page(job=job):
                             return _call(
@@ -496,21 +612,32 @@ def serve(
                             floor_since=floor_since,
                             first_limit=admission,
                         )
+                        x_mentions = list(collected.mentions)
+                        x_counts = {
+                            "returned": len(x_mentions),
+                            "parsed": len(x_mentions),
+                            "deduplicated": 0,
+                        }
 
                         def store_x(
                             conn,
                             job=job,
-                            mentions=collected.mentions,
+                            mentions=x_mentions,
                             key=key,
                             floor=collected.floor_id,
                             marker_since=collected.floor_since,
                         ):
-                            store_source(conn, job, mentions, key, "x", floor, marker_since)
+                            return store_source(conn, job, mentions, key, "x", floor, marker_since)
 
-                        _call(connect, store_x)
+                        x_saved = _call(connect, store_x)
+                        _record_source_ready(connect, log, job, "x")
+                        _log_collection(log, job, "x", "success", x_counts, x_saved)
                     if "threads" in sources and fetch_threads is not None:
                         current_source = "threads"
-                        threads_mentions, threads_cursor = _unpack_fetched(fetch_threads(variant), variant)
+                        threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
+                        threads_mentions, threads_cursor, threads_counts, threads_credits = _unpack_fetched(
+                            threads_result, variant
+                        )
 
                         def store_threads(
                             conn,
@@ -519,12 +646,23 @@ def serve(
                             threads_mentions=threads_mentions,
                             threads_cursor=threads_cursor,
                         ):
-                            store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
+                            return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
 
-                        _call(connect, store_threads)
+                        threads_saved = _call(connect, store_threads)
+                        _record_source_ready(connect, log, job, "threads")
+                        _log_collection(
+                            log,
+                            job,
+                            "threads",
+                            "success",
+                            threads_counts,
+                            threads_saved,
+                            credits=threads_credits,
+                        )
                     if "instagram" in sources and fetch_instagram is not None:
                         current_source = "instagram"
-                        ig_mentions, ig_cursor = _unpack_fetched(fetch_instagram(variant), variant)
+                        ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
+                        ig_mentions, ig_cursor, ig_counts, ig_credits = _unpack_fetched(ig_result, variant)
 
                         def store_instagram(
                             conn,
@@ -533,12 +671,23 @@ def serve(
                             ig_mentions=ig_mentions,
                             ig_cursor=ig_cursor,
                         ):
-                            store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
+                            return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
 
-                        _call(connect, store_instagram)
+                        ig_saved = _call(connect, store_instagram)
+                        _record_source_ready(connect, log, job, "instagram")
+                        _log_collection(
+                            log,
+                            job,
+                            "instagram",
+                            "success",
+                            ig_counts,
+                            ig_saved,
+                            credits=ig_credits,
+                        )
                     if "tiktok" in sources and fetch_tiktok is not None:
                         current_source = "tiktok"
-                        tt_mentions, tt_cursor = _unpack_fetched(fetch_tiktok(variant), variant)
+                        tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
+                        tt_mentions, tt_cursor, tt_counts, tt_credits = _unpack_fetched(tt_result, variant)
 
                         def store_tiktok(
                             conn,
@@ -547,9 +696,19 @@ def serve(
                             tt_mentions=tt_mentions,
                             tt_cursor=tt_cursor,
                         ):
-                            store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
+                            return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
 
-                        _call(connect, store_tiktok)
+                        tt_saved = _call(connect, store_tiktok)
+                        _record_source_ready(connect, log, job, "tiktok")
+                        _log_collection(
+                            log,
+                            job,
+                            "tiktok",
+                            "success",
+                            tt_counts,
+                            tt_saved,
+                            credits=tt_credits,
+                        )
                     if collected is not None and collected.blocked_detail:
                         blocked_detail = collected.blocked_detail
                         break
@@ -569,15 +728,53 @@ def serve(
 
                     _call(connect, finish_job)
             except Exception as error:
-                _log_exception(error)
-                try:
-                    detail = _failure_detail(error, source=current_source)
-                    _call(
-                        connect,
-                        lambda conn, job=job, detail=detail: _fail(conn, job["id"], detail),
+                zero_counts = {"returned": 0, "parsed": 0, "deduplicated": 0}
+                if isinstance(error, SourceFetchError):
+                    detail = error.detail
+                    state = error.state
+                    try:
+                        _call(
+                            connect,
+                            lambda conn: record_source_failure(
+                                conn,
+                                job["customer_id"],
+                                job["project_id"],
+                                current_source,
+                                detail,
+                                state,
+                            ),
+                        )
+                    except Exception as status_error:
+                        _log_status_write_failed(log, job, current_source, status_error)
+                    _log_collection(
+                        log,
+                        job,
+                        current_source,
+                        "failed",
+                        zero_counts,
+                        0,
+                        http_status=error.http_status,
+                        credits=error.credits_charged,
+                        detail=detail,
                     )
-                except Exception as update_error:
-                    _log_exception(update_error)
+                    try:
+                        _call(connect, lambda conn: _fail(conn, job["id"], detail))
+                    except Exception as update_error:
+                        _log_exception(update_error)
+                else:
+                    _log_collection(
+                        log,
+                        job,
+                        current_source,
+                        "storage_failed",
+                        zero_counts,
+                        0,
+                        detail="storage_failed",
+                    )
+                    try:
+                        _call(connect, lambda conn: _fail(conn, job["id"], "storage_failed"))
+                    except Exception as update_error:
+                        _log_exception(update_error)
         now = monotonic()
         if last_logged is None or now - last_logged >= interval:
             log(format_log(f"worker heartbeat id={worker_id}"))
