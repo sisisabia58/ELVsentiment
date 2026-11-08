@@ -1,6 +1,14 @@
 from contextlib import nullcontext
 
 
+class CommitOutcomeUnknown(Exception):
+    """The authoritative commit phase raised; durability is unknown."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__("commit_outcome_unknown")
+        self.error = error
+
+
 def _returned_rows(result) -> int:
     if result is None:
         return 0
@@ -84,6 +92,7 @@ class PostgresStore:
         manages_transactions = bool(getattr(self._conn, "manages_transactions", False))
         start_transaction = getattr(self._conn, "transaction", None)
         scope = start_transaction() if callable(start_transaction) else nullcontext()
+        commit_phase = False
         try:
             with scope:
                 if not manages_transactions:
@@ -123,14 +132,19 @@ class PostgresStore:
                     next_cursor=next_cursor,
                     incremental_since=incremental_since,
                 )
+                commit_phase = True
                 if not manages_transactions:
                     self._conn.execute("COMMIT")
                 self._conn.commit()
-                return saved
-        except Exception:
+                if not manages_transactions:
+                    commit_phase = False
+        except Exception as error:
             if not manages_transactions:
                 self._conn.execute("ROLLBACK")
                 self._conn.rollback()
+            if commit_phase:
+                raise CommitOutcomeUnknown(error) from None
             raise
         finally:
             self._open = False
+        return saved

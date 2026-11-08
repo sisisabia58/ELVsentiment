@@ -299,7 +299,10 @@ def test_tiktok_missing_or_non_list_is_unknown_returned():
                 ),
             )
         error = caught.value
-        assert error.counts is None or error.counts.get("returned") is None
+        assert isinstance(error.counts, dict)
+        assert "returned" not in error.counts
+        assert error.counts.get("parsed") == 0
+        assert error.counts.get("deduplicated") == 0
 
 
 def test_tiktok_known_first_endpoint_then_missing_second_is_partial_not_zero():

@@ -8,7 +8,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
-from sentiment_monitor.pg_store import PostgresStore
+from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
 from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 from sentiment_monitor.x_cost import admit_collection, admit_threads_query, admit_x_read
 
@@ -270,9 +270,11 @@ def _safe_error_label(error: Exception) -> str:
     return f"{class_name} {safe_code}"[:_MAX_SAFE_LABEL_LENGTH]
 
 
-def _safe_log(log, message: str) -> None:
+def _safe_log(log, message) -> None:
     """Logging must never change data or job outcome, and never recurse."""
     try:
+        if callable(message):
+            message = message()
         log(message)
     except Exception:
         return
@@ -281,10 +283,7 @@ def _safe_log(log, message: str) -> None:
 def _log_exception(error: Exception) -> None:
     if getattr(error, "_monitor_logged", False):
         return
-    try:
-        print(format_log(_safe_error_label(error)))
-    except Exception:
-        pass
+    _safe_log(print, lambda: format_log(_safe_error_label(error)))
     try:
         error._monitor_logged = True
     except Exception:
@@ -477,6 +476,15 @@ def _call(connect, fn, *, log_error: bool = True, receipt: dict | None = None):
         return result
     except _CommitFailed:
         raise
+    except CommitOutcomeUnknown as error:
+        # The authoritative transaction/commit phase raised. Do not claim a
+        # rollback: durability is unknown.
+        failing = True
+        if log_error:
+            _log_exception(error.error)
+        if receipt is not None:
+            raise _CommitFailed(error.error) from None
+        raise
     except Exception as error:
         failing = True
         try:
@@ -624,31 +632,38 @@ def _log_collection(
     credits: int | None = None,
     detail: str = "ok",
 ) -> None:
-    line = (
-        f"source_collection job_id={job['id']} project_id={job['project_id']} source={source} "
-        f"outcome={outcome} returned={_count_field(counts, 'returned')} "
-        f"parsed={_count_field(counts, 'parsed')} "
-        f"deduplicated={_count_field(counts, 'deduplicated')} saved={saved} "
-        f"http_status={http_status if http_status is not None else '-'} "
-        f"credits_charged={credits if credits is not None else '-'} detail={detail}"
-    )
-    _safe_log(log, format_log(line))
+    def render() -> str:
+        line = (
+            f"source_collection job_id={job['id']} project_id={job['project_id']} source={source} "
+            f"outcome={outcome} returned={_count_field(counts, 'returned')} "
+            f"parsed={_count_field(counts, 'parsed')} "
+            f"deduplicated={_count_field(counts, 'deduplicated')} saved={saved} "
+            f"http_status={http_status if http_status is not None else '-'} "
+            f"credits_charged={credits if credits is not None else '-'} detail={detail}"
+        )
+        return format_log(line)
+
+    _safe_log(log, render)
 
 
 def _log_status_write_failed(log, job, source: str, error: Exception) -> None:
-    line = (
-        f"source_status_write_failed job_id={job['id']} project_id={job['project_id']} "
-        f"source={source} error={_safe_error_label(error)}"
+    _safe_log(
+        log,
+        lambda: format_log(
+            f"source_status_write_failed job_id={job['id']} project_id={job['project_id']} "
+            f"source={source} error={_safe_error_label(error)}"
+        ),
     )
-    _safe_log(log, format_log(line))
 
 
 def _log_cleanup_failed(log, job, source: str, error: Exception) -> None:
-    line = (
-        f"source_cleanup_failed job_id={job['id']} project_id={job['project_id']} "
-        f"source={source} error={_safe_error_label(error)}"
+    _safe_log(
+        log,
+        lambda: format_log(
+            f"source_cleanup_failed job_id={job['id']} project_id={job['project_id']} "
+            f"source={source} error={_safe_error_label(error)}"
+        ),
     )
-    _safe_log(log, format_log(line))
 
 
 def _record_source_ready(connect, log, job, source: str) -> None:
@@ -732,11 +747,13 @@ def _commit_source(
 
 
 def _log_job_finalize_failed(log, job, error: Exception) -> None:
-    line = (
-        f"job_finalize_failed job_id={job['id']} project_id={job['project_id']} "
-        f"error={_safe_error_label(error)}"
+    _safe_log(
+        log,
+        lambda: format_log(
+            f"job_finalize_failed job_id={job['id']} project_id={job['project_id']} "
+            f"error={_safe_error_label(error)}"
+        ),
     )
-    _safe_log(log, format_log(line))
 
 
 def admit_threads_queries(conn, limits) -> tuple[bool, str | None]:
@@ -1043,23 +1060,23 @@ def serve(
                         )
                         context["reported"] = True
                     _log_cleanup_failed(log, job, context["source"], error)
-                    continue
-                if context["attempt"]:
-                    _log_collection(
-                        log,
-                        job,
-                        context["source"],
-                        "storage_failed",
-                        context["counts"],
-                        0,
-                        http_status=context["http_status"],
-                        credits=context["credits"],
-                        detail="storage_failed",
-                    )
                 else:
-                    _log_exception(error)
-                fail_job("storage_failed")
-                continue
+                    if context["attempt"]:
+                        _log_collection(
+                            log,
+                            job,
+                            context["source"],
+                            "storage_failed",
+                            context["counts"],
+                            0,
+                            http_status=context["http_status"],
+                            credits=context["credits"],
+                            detail="storage_failed",
+                        )
+                    else:
+                        _log_exception(error)
+                    fail_job("storage_failed")
+                    continue
 
             if deferred:
                 continue
@@ -1084,7 +1101,7 @@ def serve(
                     fail_job("storage_failed")
         now = monotonic()
         if last_logged is None or now - last_logged >= interval:
-            _safe_log(log, format_log(f"worker heartbeat id={worker_id}"))
+            _safe_log(log, lambda: format_log(f"worker heartbeat id={worker_id}"))
             last_logged = now
         sleep(limits.worker_poll_seconds)
 

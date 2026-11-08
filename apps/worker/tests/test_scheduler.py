@@ -2226,3 +2226,73 @@ def test_commit_unknown_is_isolated_to_one_job(tmp_path):
     failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
     assert failed == [("storage_commit_unknown", "job-1")]
     assert any("status = 'succeeded'" in sql and params == ("job-2",) for sql, params in world.calls)
+
+
+class _TransactionCommitFail(_WroteConn):
+    manages_transactions = True
+
+    class _Scope:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            raise RuntimeError("synthetic transaction commit failure")
+
+    def transaction(self):
+        return self._Scope()
+
+
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+def test_transaction_exit_commit_failure_is_commit_unknown(tmp_path, source):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source(
+        source,
+        lambda: _TransactionCommitFail(world),
+        tmp_path,
+        lines.append,
+        world=world,
+    )
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 1
+    assert "outcome=storage_commit_unknown" in source_lines[0]
+    assert "saved=-" in source_lines[0]
+    assert "detail=storage_commit_unknown" in source_lines[0]
+    assert not any("outcome=storage_failed" in line for line in source_lines)
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
+    assert failed == [("storage_commit_unknown", "job-1")]
+
+
+def test_format_log_failure_never_fails_the_job(tmp_path, monkeypatch):
+    import sentiment_monitor.scheduler as scheduler
+
+    def broken_format(*_args, **_kwargs):
+        raise RuntimeError("synthetic format failure")
+
+    monkeypatch.setattr(scheduler, "format_log", broken_format)
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source("threads", lambda: _WroteConn(world), tmp_path, lines.append, world=world)
+
+    assert any("status = 'succeeded'" in sql for sql, _params in world.calls)
+    assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
+
+
+def test_post_commit_unexpected_error_still_finalizes_the_job(tmp_path, monkeypatch):
+    import sentiment_monitor.scheduler as scheduler
+
+    def broken_ready(*_args, **_kwargs):
+        raise RuntimeError("synthetic post-commit status failure")
+
+    monkeypatch.setattr(scheduler, "_record_source_ready", broken_ready)
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source("threads", lambda: _WroteConn(world), tmp_path, lines.append, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 1
+    assert "outcome=success" in source_lines[0] and "saved=1" in source_lines[0]
+    assert any(line.startswith("source_cleanup_failed") for line in lines)
+    assert any("status = 'succeeded'" in sql for sql, _params in world.calls)
+    assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)

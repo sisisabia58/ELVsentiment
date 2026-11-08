@@ -291,7 +291,6 @@ def test_instagram_read_timeout_after_first_endpoint_keeps_current_status_and_co
     from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 
     first = _StatusResponse(json.dumps({"reels": [{"pk": "1"}], "credits_charged": 2}), status=200)
-    second = _StatusResponse("", status=200)
 
     def opener(request, timeout=0):
         if "/v2/instagram/reels/search" in request.full_url:
@@ -331,7 +330,10 @@ def test_instagram_missing_or_non_list_is_unknown_returned():
                 opener=_ig_opener(_StatusResponse(json.dumps(payload), status=200), _StatusResponse('{"posts": []}', status=200)),
             )
         error = caught.value
-        assert error.counts is None or error.counts.get("returned") is None
+        assert isinstance(error.counts, dict)
+        assert "returned" not in error.counts
+        assert error.counts.get("parsed") == 0
+        assert error.counts.get("deduplicated") == 0
 
 
 def test_instagram_known_first_endpoint_then_missing_second_is_partial_not_zero():

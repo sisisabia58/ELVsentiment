@@ -579,6 +579,21 @@ def test_postgres16_top_level_mention_write_commits_and_rolls_back(pg16):
         reader.close()
 
 
+class _CommitThenRaiseScope:
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __enter__(self):
+        self.inner.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.inner.__exit__(exc_type, exc, tb)
+        if exc_type is None:
+            raise RuntimeError("synthetic transaction commit failure")
+        return False
+
+
 class _RealCommitMixedConn:
     """Route persistence tables to a real PG16 connection, keep loop fixtures scripted."""
 
@@ -594,7 +609,7 @@ class _RealCommitMixedConn:
         self.wrote = False
         self.committed = False
         self.commits = 0
-        self.manages_transactions = fault == "commit_raises"
+        self.manages_transactions = fault in ("commit_raises", "transaction_commit_raises")
 
     def execute(self, sql, params=None):
         compact = " ".join(sql.lower().split())
@@ -620,10 +635,14 @@ class _RealCommitMixedConn:
     def transaction(self):
         from contextlib import nullcontext
 
+        if self.fault == "transaction_commit_raises":
+            return _CommitThenRaiseScope(self.live.transaction())
         return nullcontext()
 
     def commit(self):
         self.commits += 1
+        if self.fault == "transaction_commit_raises" and self.wrote:
+            return
         if self.fault == "commit_raises" and self.wrote:
             if self.commits == 1:
                 return
@@ -713,7 +732,10 @@ def _run_real_commit_scenario(conn, root, source, fault, index):
     return job_id, external_id, lines, world
 
 
-@pytest.mark.parametrize("fault", ["close_after_commit", "commit_raises", "write_raises", "logger_after_commit"])
+@pytest.mark.parametrize(
+    "fault",
+    ["close_after_commit", "commit_raises", "transaction_commit_raises", "write_raises", "logger_after_commit"],
+)
 def test_postgres16_commit_receipt_statuses_for_all_sources(pg16, tmp_path, fault):
     conn = pg16
     _seed(conn)
@@ -737,7 +759,12 @@ def test_postgres16_commit_receipt_statuses_for_all_sources(pg16, tmp_path, faul
             observer.close()
 
         source_lines = [line for line in lines if line.startswith("source_collection")]
-        if fault == "close_after_commit":
+        if fault == "transaction_commit_raises":
+            assert job == ("failed", "storage_commit_unknown"), (source, job)
+            assert mention_count == 1 and cursor is not None, source
+            assert len(source_lines) == 1 and "outcome=storage_commit_unknown" in source_lines[0]
+            assert "saved=-" in source_lines[0]
+        elif fault == "close_after_commit":
             assert job == ("succeeded", None), (source, job)
             assert mention_count == 1 and cursor is not None, source
             assert len(source_lines) == 1 and "outcome=success" in source_lines[0] and "saved=1" in source_lines[0]
