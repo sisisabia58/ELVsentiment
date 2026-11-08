@@ -133,6 +133,15 @@ def test_threads_accepts_each_recognized_key(key):
     assert _threads({key: []})["counts"]["returned"] == 0
 
 
+def test_threads_unusable_list_failure_carries_known_credits():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _threads({"posts": [{}], "credits_charged": 3})
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.credits_charged == 3
+
+
 def test_threads_missing_or_malformed_list_fails_safely():
     from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 

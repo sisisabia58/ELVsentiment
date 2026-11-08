@@ -11,9 +11,13 @@ from harken.sources.base import FetchPage, Source
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
     ScrapeCreatorsError,
+    carry_attempt_context,
     credits_from,
     dedupe_mentions,
+    failure_counts,
     fetch_scrapecreators_json,
+    has_usable_mentions,
+    known_credits,
     select_post_list,
     unix_to_iso,
 )
@@ -84,15 +88,23 @@ def fetch_threads_mentions(
         region=region,
         opener=opener,
     )
-    raw_items = select_post_list(payload, ("posts", "items", "data"))
+    credits: list[int | None] = [credits_from(payload)]
+    try:
+        raw_items = select_post_list(payload, ("posts", "items", "data"))
+    except ScrapeCreatorsError as error:
+        raise carry_attempt_context(error, credits, 0, []) from None
     items = [
         normalize_threads_item(item, collected_at)
         for item in raw_items
         if isinstance(item, dict)
     ]
     mentions = dedupe_mentions(items)
-    if raw_items and not mentions:
-        raise ScrapeCreatorsError("malformed_posts")
+    if raw_items and not has_usable_mentions(items):
+        raise ScrapeCreatorsError(
+            "malformed_posts",
+            credits_charged=known_credits(credits),
+            counts=failure_counts(len(raw_items), items),
+        )
     return {
         "mentions": mentions,
         "outcome": "empty_or_success",
@@ -101,7 +113,7 @@ def fetch_threads_mentions(
             "parsed": len(items),
             "deduplicated": len(items) - len(mentions),
         },
-        "credits_charged": credits_from(payload),
+        "credits_charged": known_credits(credits),
     }
 
 

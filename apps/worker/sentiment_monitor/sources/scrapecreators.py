@@ -18,11 +18,13 @@ class ScrapeCreatorsError(Exception):
         *,
         http_status: int | None = None,
         credits_charged: int | None = None,
+        counts: dict[str, int] | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
         self.http_status = http_status
         self.credits_charged = credits_charged
+        self.counts = counts
 
 
 def credits_from(payload: dict[str, Any]) -> int | None:
@@ -45,6 +47,37 @@ def select_post_list(payload: dict[str, Any], keys: tuple[str, ...]) -> list[Any
             raise ScrapeCreatorsError("malformed_posts")
         return value
     raise ScrapeCreatorsError("missing_posts")
+
+
+def known_credits(values: list[int | None]) -> int | None:
+    known = [value for value in values if value is not None]
+    return sum(known) if known else None
+
+
+def failure_counts(returned: int, collected: list[dict[str, Any]]) -> dict[str, int]:
+    unique = dedupe_mentions(collected)
+    return {
+        "returned": returned,
+        "parsed": len(collected),
+        "deduplicated": len(collected) - len(unique),
+    }
+
+
+def has_usable_mentions(mentions: list[dict[str, Any]]) -> bool:
+    return any(str(mention.get("external_id") or "").strip() for mention in mentions)
+
+
+def carry_attempt_context(
+    error: ScrapeCreatorsError,
+    credits: list[int | None],
+    returned: int,
+    collected: list[dict[str, Any]],
+) -> ScrapeCreatorsError:
+    if error.credits_charged is not None:
+        credits.append(error.credits_charged)
+    error.credits_charged = known_credits(credits)
+    error.counts = failure_counts(returned, collected)
+    return error
 
 
 def fetch_scrapecreators_json(

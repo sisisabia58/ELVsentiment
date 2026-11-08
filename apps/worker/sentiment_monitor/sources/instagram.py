@@ -7,9 +7,13 @@ import urllib.request
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
     ScrapeCreatorsError,
+    carry_attempt_context,
     credits_from,
     dedupe_mentions,
+    failure_counts,
     fetch_scrapecreators_json,
+    has_usable_mentions,
+    known_credits,
     select_post_list,
     unix_to_iso,
 )
@@ -87,44 +91,72 @@ def fetch_instagram_mentions(
     region: str = DEFAULT_REGION,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
-    reels_payload = fetch_scrapecreators_json(
-        INSTAGRAM_REELS_SEARCH_PATH,
-        {"query": variant},
-        api_key,
-        region=region,
-        opener=opener,
-    )
-    reels_raw = select_post_list(reels_payload, ("reels", "items", "data"))
-    collected: list[dict[str, Any]] = [
-        normalize_instagram_item(item, collected_at)
-        for item in reels_raw
-        if isinstance(item, dict)
-    ]
-    credits = [credits_from(reels_payload)]
-    returned = len(reels_raw)
+    credits: list[int | None] = []
+    returned = 0
+    collected: list[dict[str, Any]] = []
 
-    hashtag = normalize_hashtag(variant)
-    if hashtag:
-        hashtag_payload = fetch_scrapecreators_json(
-            INSTAGRAM_HASHTAG_SEARCH_PATH,
-            {"hashtag": hashtag},
+    try:
+        reels_payload = fetch_scrapecreators_json(
+            INSTAGRAM_REELS_SEARCH_PATH,
+            {"query": variant},
             api_key,
             region=region,
             opener=opener,
         )
-        hashtag_raw = select_post_list(hashtag_payload, ("posts", "items", "medias", "data"))
-        returned += len(hashtag_raw)
+    except ScrapeCreatorsError as error:
+        raise carry_attempt_context(error, credits, returned, collected) from None
+    credits.append(credits_from(reels_payload))
+
+    try:
+        reels_raw = select_post_list(reels_payload, ("reels", "items", "data"))
+    except ScrapeCreatorsError as error:
+        raise carry_attempt_context(error, credits, returned, collected) from None
+    reels_items = [
+        normalize_instagram_item(item, collected_at)
+        for item in reels_raw
+        if isinstance(item, dict)
+    ]
+    returned += len(reels_raw)
+    collected.extend(reels_items)
+    if reels_raw and not has_usable_mentions(reels_items):
+        raise ScrapeCreatorsError(
+            "malformed_posts",
+            credits_charged=known_credits(credits),
+            counts=failure_counts(returned, collected),
+        )
+
+    hashtag = normalize_hashtag(variant)
+    if hashtag:
+        try:
+            hashtag_payload = fetch_scrapecreators_json(
+                INSTAGRAM_HASHTAG_SEARCH_PATH,
+                {"hashtag": hashtag},
+                api_key,
+                region=region,
+                opener=opener,
+            )
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(error, credits, returned, collected) from None
         credits.append(credits_from(hashtag_payload))
-        collected.extend(
+        try:
+            hashtag_raw = select_post_list(hashtag_payload, ("posts", "items", "medias", "data"))
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(error, credits, returned, collected) from None
+        hashtag_items = [
             normalize_instagram_item(item, collected_at)
             for item in hashtag_raw
             if isinstance(item, dict)
-        )
+        ]
+        returned += len(hashtag_raw)
+        collected.extend(hashtag_items)
+        if hashtag_raw and not has_usable_mentions(hashtag_items):
+            raise ScrapeCreatorsError(
+                "malformed_posts",
+                credits_charged=known_credits(credits),
+                counts=failure_counts(returned, collected),
+            )
 
     mentions = dedupe_mentions(collected)
-    if returned and not mentions:
-        raise ScrapeCreatorsError("malformed_posts")
-    known_credits = [value for value in credits if value is not None]
     return {
         "mentions": mentions,
         "outcome": "success",
@@ -133,5 +165,5 @@ def fetch_instagram_mentions(
             "parsed": len(collected),
             "deduplicated": len(collected) - len(mentions),
         },
-        "credits_charged": sum(known_credits) if known_credits else None,
+        "credits_charged": known_credits(credits),
     }

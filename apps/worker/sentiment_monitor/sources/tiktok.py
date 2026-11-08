@@ -6,9 +6,13 @@ import urllib.request
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
     ScrapeCreatorsError,
+    carry_attempt_context,
     credits_from,
     dedupe_mentions,
+    failure_counts,
     fetch_scrapecreators_json,
+    has_usable_mentions,
+    known_credits,
     select_post_list,
     unix_to_iso,
 )
@@ -63,42 +67,48 @@ def fetch_tiktok_mentions(
     region: str = DEFAULT_REGION,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
-    keyword_payload = fetch_scrapecreators_json(
-        TIKTOK_KEYWORD_SEARCH_PATH,
-        {"query": variant},
-        api_key,
-        region=region,
-        opener=opener,
-    )
-    top_payload = fetch_scrapecreators_json(
-        TIKTOK_TOP_SEARCH_PATH,
-        {"query": variant},
-        api_key,
-        region=region,
-        opener=opener,
-    )
-    keyword_raw = _extract_tiktok_list(keyword_payload)
-    top_raw = _extract_tiktok_list(top_payload)
-    collected = [
-        normalize_tiktok_item(item, collected_at)
-        for item in (*keyword_raw, *top_raw)
-        if isinstance(item, dict)
-    ]
+    credits: list[int | None] = []
+    returned = 0
+    collected: list[dict[str, Any]] = []
+
+    for path in (TIKTOK_KEYWORD_SEARCH_PATH, TIKTOK_TOP_SEARCH_PATH):
+        try:
+            payload = fetch_scrapecreators_json(
+                path,
+                {"query": variant},
+                api_key,
+                region=region,
+                opener=opener,
+            )
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(error, credits, returned, collected) from None
+        credits.append(credits_from(payload))
+        try:
+            raw = _extract_tiktok_list(payload)
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(error, credits, returned, collected) from None
+        items = [
+            normalize_tiktok_item(item, collected_at)
+            for item in raw
+            if isinstance(item, dict)
+        ]
+        returned += len(raw)
+        collected.extend(items)
+        if raw and not has_usable_mentions(items):
+            raise ScrapeCreatorsError(
+                "malformed_posts",
+                credits_charged=known_credits(credits),
+                counts=failure_counts(returned, collected),
+            )
+
     mentions = dedupe_mentions(collected)
-    if (len(keyword_raw) + len(top_raw)) and not mentions:
-        raise ScrapeCreatorsError("malformed_posts")
-    known_credits = [
-        value
-        for value in (credits_from(keyword_payload), credits_from(top_payload))
-        if value is not None
-    ]
     return {
         "mentions": mentions,
         "outcome": "success",
         "counts": {
-            "returned": len(keyword_raw) + len(top_raw),
+            "returned": returned,
             "parsed": len(collected),
             "deduplicated": len(collected) - len(mentions),
         },
-        "credits_charged": sum(known_credits) if known_credits else None,
+        "credits_charged": known_credits(credits),
     }

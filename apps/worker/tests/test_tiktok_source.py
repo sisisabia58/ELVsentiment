@@ -126,6 +126,34 @@ def test_tiktok_accepts_each_key_on_both_endpoints(key):
     assert _tiktok(({key: []}, {key: []}))["counts"]["returned"] == 0
 
 
+def test_tiktok_wholly_unusable_keyword_list_fails_even_when_top_has_posts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(
+            (
+                {"search_item_list": [{}], "credits_charged": 2},
+                {"search_item_list": [{"aweme_id": "good"}], "credits_charged": 3},
+            )
+        )
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.credits_charged == 2
+
+
+def test_tiktok_wholly_unusable_top_list_fails_even_when_keyword_has_posts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(
+            (
+                {"search_item_list": [{"aweme_id": "good"}], "credits_charged": 3},
+                {"search_item_list": [{}], "credits_charged": 2},
+            )
+        )
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.credits_charged == 5
+
+
 def test_tiktok_missing_or_malformed_list_fails_safely():
     from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 

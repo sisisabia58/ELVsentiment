@@ -138,6 +138,60 @@ def test_instagram_hashtag_accepts_each_key(key):
     assert _instagram(({"reels": []}, {key: []}))["counts"]["returned"] == 0
 
 
+def test_instagram_wholly_unusable_reels_list_fails_even_when_hashtag_has_posts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _instagram(
+            (
+                {"reels": [{}], "credits_charged": 2},
+                {"posts": [{"pk": "good"}], "credits_charged": 3},
+            )
+        )
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.credits_charged == 2
+
+
+def test_instagram_wholly_unusable_hashtag_list_fails_even_when_reels_has_posts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _instagram(
+            (
+                {"reels": [{"pk": "good"}], "credits_charged": 3},
+                {"posts": [{}], "credits_charged": 2},
+            )
+        )
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.credits_charged == 5
+
+
+def test_instagram_partial_failure_keeps_first_endpoint_counts_and_credits():
+    import urllib.error
+
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return _Response(
+                json.dumps(
+                    {
+                        "reels": [{"pk": "1"}, {"pk": "2"}],
+                        "credits_charged": 3,
+                    }
+                )
+            )
+        raise urllib.error.HTTPError(request.full_url, 500, "server error", {}, None)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+    error = caught.value
+    assert error.code == "http_500"
+    assert error.http_status == 500
+    assert error.credits_charged == 3
+    assert error.counts == {"returned": 2, "parsed": 2, "deduplicated": 0}
+
+
 def test_instagram_missing_or_malformed_list_fails_safely():
     from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 
