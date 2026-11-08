@@ -76,7 +76,7 @@ class PostgresStore:
         try:
             with scope:
                 self._conn.execute("begin")
-                self._conn.execute("select set_config('app.customer_id', %s, true)", (customer_id,))
+                self._conn.execute("select set_config('app.customer_id', %s::text, true)", (str(customer_id),))
                 for mention in mentions:
                     self._conn.execute(
                         """

@@ -142,7 +142,7 @@ def test_postgres16_rls_tenant_a_cannot_read_tenant_b(pg16):
 
     def visible_projects(customer_id):
         conn.execute("begin")
-        conn.execute("select set_config('app.customer_id', %s, true)", (customer_id,))
+        conn.execute("select set_config('app.customer_id', %s::text, true)", (str(customer_id),))
         conn.execute("set local role app_user")
         rows = conn.execute("select id from projects").fetchall()
         conn.rollback()

@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from sentiment_monitor.pg_store import PostgresStore
@@ -7,12 +9,14 @@ class Tx:
     def __init__(self, fail_on=None):
         self.fail_on = fail_on
         self.statements = []
+        self.calls = []
         self.committed = False
         self.rolled_back = False
 
     def execute(self, sql, params=None):
         if self.fail_on and self.fail_on in sql:
             raise RuntimeError("insert failed")
+        self.calls.append((sql, params))
         self.statements.append(sql)
 
     def commit(self):
@@ -50,6 +54,24 @@ def test_cursor_advances_only_with_the_mention_commit():
     assert "set_config" in joined
     assert tx.committed is True
     assert tx.rolled_back is False
+
+
+def test_set_config_customer_id_is_passed_as_text():
+    tx = Tx()
+    customer_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    PostgresStore(tx).write_mentions_and_cursor(
+        customer_id=customer_id,
+        project_id="project-1",
+        query_key="customer-a:project-1:geprek gembus",
+        source="x",
+        mentions=[MENTION],
+        next_cursor="cursor-2",
+    )
+    set_config = [(sql, params) for sql, params in tx.calls if "set_config" in sql]
+    assert len(set_config) == 1
+    sql, params = set_config[0]
+    assert "%s::text" in sql
+    assert params[0] == str(customer_id)
 
 
 def test_failed_mention_insert_rolls_the_cursor_back():
