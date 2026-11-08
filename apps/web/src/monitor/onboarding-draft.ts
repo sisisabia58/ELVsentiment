@@ -1,4 +1,4 @@
-import { ALL_SOURCES, SOURCE_NAME, type SourceId } from "./policy";
+import { ALL_SOURCES, SOURCE_NAME, type SourceId } from "./sources";
 import type { ScheduleChoice } from "./schedule-choice";
 
 export { ALL_SOURCES, SOURCE_NAME, type SourceId };

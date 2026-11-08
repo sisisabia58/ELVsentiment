@@ -1,6 +1,6 @@
 "use client";
 
-import { SOURCE_NAME, type SourceId } from "@/monitor/policy";
+import { SOURCE_NAME, type SourceId } from "@/monitor/sources";
 
 const STATE_LABEL = {
   ready: "Siap",

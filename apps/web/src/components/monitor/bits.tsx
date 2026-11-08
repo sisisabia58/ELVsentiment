@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Activity } from "lucide-react";
 import { cn } from "cn";
 import { describeChange, formatNumber, formatSigned } from "@/monitor/format";
-import { SOURCE_NAME, type SourceId } from "@/monitor/policy";
+import { SOURCE_NAME, type SourceId } from "@/monitor/sources";
 
 export function Wordmark() {
   return (

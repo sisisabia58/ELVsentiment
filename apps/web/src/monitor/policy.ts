@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ScoringPolicy } from "../domain/routing";
+import type { SourceId } from "./sources";
+
+export { ALL_SOURCES, SOURCE_NAME, type SourceId } from "./sources";
 
 export const PROPOSED_RELEVANCE_EXCLUDE_MAX = 0.35;
 export const PROPOSED_RELEVANCE_INCLUDE_MIN = 0.75;
@@ -90,15 +93,6 @@ export function reviewTopicChoices(
   if (!fallback || policy.topicLabels.some((topic) => topic.id === fallback)) return policy.topicLabels;
   return [...policy.topicLabels, { id: fallback, label: "Lainnya" }];
 }
-
-export type SourceId = "x" | "threads" | "instagram" | "tiktok";
-export const ALL_SOURCES: readonly SourceId[] = ["x", "threads", "instagram", "tiktok"];
-export const SOURCE_NAME: Record<SourceId, string> = {
-  x: "X",
-  threads: "Threads",
-  instagram: "Instagram",
-  tiktok: "TikTok",
-};
 
 export function sourceCredentials(
   env: Record<string, string | undefined> = process.env,
