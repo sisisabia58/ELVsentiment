@@ -8,7 +8,9 @@ from urllib.parse import quote, unquote, urlsplit
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
+from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
+from sentiment_monitor.sources.routes import scrapecreators_request_count
 from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 from sentiment_monitor.x_cost import admit_collection, admit_threads_query, admit_x_read
 
@@ -401,16 +403,19 @@ def _failure_detail(error: Exception, source: str = "threads") -> str:
 
 def active_variants_sql() -> str:
     return """
-    select text
+    select text, intent
     from keyword_variants
     where project_id = %s and active
     order by text
     """
 
 
-def load_active_variants(conn, project_id: str) -> list[str]:
+def load_active_variants(conn, project_id: str) -> list[Keyword]:
     rows = conn.execute(active_variants_sql(), (project_id,)) or []
-    return [row["text"] for row in rows]
+    return [
+        Keyword(str(row["text"]), row.get("intent") or "phrase")
+        for row in rows
+    ]
 
 
 def store_source(
@@ -550,6 +555,7 @@ def _unpack_fetched(
             row["excerpt"] = row.get("text") or ""
         if "variant" not in row:
             row["variant"] = variant
+        row["intent"] = row.get("intent") or getattr(variant, "intent", "phrase")
         normalized.append(row)
 
     counts = {
@@ -823,6 +829,18 @@ def serve(
                         )
                         deferred = True
                     else:
+                        plan_keywords = [
+                            Keyword(str(item), getattr(item, "intent", "phrase"))
+                            for item in job["variants"]
+                        ]
+                        routes = scrapecreators_request_count(plan_keywords, sources)
+                        _safe_log(
+                            log,
+                            lambda: format_log(
+                                f"collection_plan job_id={job['id']} project_id={job['project_id']} "
+                                f"keywords={len(plan_keywords)} routes={routes}"
+                            ),
+                        )
                         for variant in job["variants"]:
                             key = f"{job['customer_id']}:{job['project_id']}:{variant}"
                             collected = None
@@ -1206,6 +1224,8 @@ if __name__ == "__main__":
                 "author": row.author,
                 "posted_at": row.created_at,
                 "variant": row.variant,
+                "intent": getattr(variant, "intent", "phrase"),
+                "route_id": "x.keyword",
             }
             for row in rows
         ]
@@ -1215,19 +1235,34 @@ if __name__ == "__main__":
         from sentiment_monitor.sources.threads import fetch_threads_mentions
 
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return fetch_threads_mentions(variant, os.environ["SCRAPECREATORS_API_KEY"], now_iso)
+        return fetch_threads_mentions(
+            variant,
+            os.environ["SCRAPECREATORS_API_KEY"],
+            now_iso,
+            intent=getattr(variant, "intent", "phrase"),
+        )
 
     def fetch_instagram(variant: str):
         from sentiment_monitor.sources.instagram import fetch_instagram_mentions
 
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return fetch_instagram_mentions(variant, os.environ["SCRAPECREATORS_API_KEY"], now_iso)
+        return fetch_instagram_mentions(
+            variant,
+            os.environ["SCRAPECREATORS_API_KEY"],
+            now_iso,
+            intent=getattr(variant, "intent", "phrase"),
+        )
 
     def fetch_tiktok(variant: str):
         from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions
 
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return fetch_tiktok_mentions(variant, os.environ["SCRAPECREATORS_API_KEY"], now_iso)
+        return fetch_tiktok_mentions(
+            variant,
+            os.environ["SCRAPECREATORS_API_KEY"],
+            now_iso,
+            intent=getattr(variant, "intent", "phrase"),
+        )
 
     serve(
         connect,

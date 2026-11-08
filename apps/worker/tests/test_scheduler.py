@@ -16,6 +16,7 @@ from sentiment_monitor.scheduler import (
     format_log,
     heartbeat_is_stale,
     heartbeat_sql,
+    load_active_variants,
     next_daily_run_at,
     serve,
 )
@@ -2296,3 +2297,61 @@ def test_post_commit_unexpected_error_still_finalizes_the_job(tmp_path, monkeypa
     assert any(line.startswith("source_cleanup_failed") for line in lines)
     assert any("status = 'succeeded'" in sql for sql, _params in world.calls)
     assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
+
+
+def test_load_active_variants_returns_keywords_with_stored_intent():
+    class Conn:
+        def execute(self, sql, params=None):
+            return [
+                {"text": "#kopi", "intent": "hashtag"},
+                {"text": "kopi", "intent": "phrase"},
+            ]
+
+    variants = load_active_variants(Conn(), "project-1")
+    assert [(str(item), item.intent) for item in variants] == [
+        ("#kopi", "hashtag"),
+        ("kopi", "phrase"),
+    ]
+
+
+def test_collection_plan_logs_keywords_and_fixed_route_count(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["kopi"], cursor=None)
+    world.sources = ["threads", "instagram", "tiktok"]
+    lines = []
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            lambda _variant: {"mentions": []},
+            log=lines.append,
+            fetch_instagram=lambda _variant: {"mentions": []},
+            fetch_tiktok=lambda _variant: {"mentions": []},
+        )
+
+    assert any(
+        "collection_plan" in line and "keywords=1" in line and "routes=4" in line
+        for line in lines
+    )
+
+
+def test_unpack_fetched_carries_keyword_intent_and_route_provenance():
+    from sentiment_monitor.intent import Keyword
+    from sentiment_monitor.scheduler import _unpack_fetched
+
+    rows, _cursor, _counts, _credits, _status = _unpack_fetched(
+        {"mentions": [{"external_id": "1", "text": "kopi"}]},
+        Keyword("kopi", "hashtag"),
+    )
+    assert rows[0]["intent"] == "hashtag"
+    assert _unpack_fetched(
+        {"mentions": [{"external_id": "2", "text": "kopi", "intent": "phrase"}]},
+        Keyword("kopi", "hashtag"),
+    )[0][0]["intent"] == "phrase"
