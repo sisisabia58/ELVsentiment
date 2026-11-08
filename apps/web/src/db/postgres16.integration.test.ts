@@ -281,7 +281,8 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
   it("logs in with a quoted password and keeps a failed alter out of the server log", async () => {
     const marker = "canary-token-9f3a";
     const canary = `pw-${marker}'; drop role app_user;--`;
-    const logPath = "/var/log/postgresql/postgresql-16-main.log";
+    const logPath =
+      process.env.POSTGRES_TEST_LOG_PATH ?? "/var/log/postgresql/postgresql-16-main.log";
     const before = readFileSync(logPath, "utf8").length;
     const error = await enableRoleLogin(db, { appPassword: canary, workerPassword: `${canary}-w` }).then(
       () => null,
