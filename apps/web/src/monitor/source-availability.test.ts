@@ -69,3 +69,16 @@ describe("source availability without an X token", () => {
   });
 });
 
+
+describe("configured source copy", () => {
+  it("does not call a configured source unavailable in settings or onboarding copy", () => {
+    render(
+      createElement(SourceChoices, {
+        credentials: { x: true, threads: true, instagram: true, tiktok: true },
+        selected: ["x", "threads"],
+        onChange: () => undefined,
+      }),
+    );
+    expect(screen.queryByText(/sedang tidak tersedia/)).toBeNull();
+  });
+});

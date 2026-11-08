@@ -62,6 +62,7 @@ export function collectionSentence(outcome: CollectionOutcome, lastSuccess: stri
 
 const STATE_LABEL: Record<string, string> = {
   ready: "Siap",
+  untested: "Belum diuji",
   unavailable: "Tidak tersedia",
   authorization_failed: "Otorisasi gagal",
   rate_limited: "Batas permintaan tercapai",

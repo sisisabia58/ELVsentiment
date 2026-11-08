@@ -4,6 +4,7 @@ import { SOURCE_NAME, type SourceId } from "@/monitor/sources";
 
 const STATE_LABEL = {
   ready: "Siap",
+  untested: "Belum diuji",
   unavailable: "Tidak tersedia",
   authorization_failed: "Otorisasi gagal",
   rate_limited: "Batas permintaan tercapai",

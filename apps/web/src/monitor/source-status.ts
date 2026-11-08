@@ -5,7 +5,9 @@ export function sourceStatusLines(
 ): string[] {
   return sources.map((health) => {
     const name = SOURCE_NAME[health.source];
-    if (!health.configured || health.state === "unavailable") return `Status ${name}: Tidak tersedia`;
+    if (!health.configured) return `Status ${name}: Tidak tersedia`;
+    if (health.state === "untested") return `Status ${name}: Belum diuji`;
+    if (health.state === "unavailable") return `Status ${name}: Tidak tersedia`;
     if (health.state === "ready") return `Status ${name}: Siap`;
     if (health.state === "rate_limited") return `Status ${name}: Dibatasi sementara`;
     if (health.state === "authorization_failed") return `Status ${name}: Otorisasi gagal`;

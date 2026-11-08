@@ -91,3 +91,11 @@ describe("onboarding", () => {
     expect(screen.queryByText("0")).toBeNull();
   });
 });
+
+describe("truthful source status labels", () => {
+  it("labels an untested source as Belum diuji", () => {
+    render(<SourceStatusList reports={[{ source: "threads", state: "untested", outcome: "success", fetchedCount: 0 }]} />);
+    expect(screen.getByText("Belum diuji")).toBeTruthy();
+    expect(screen.queryByText("Tidak tersedia")).toBeNull();
+  });
+});

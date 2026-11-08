@@ -20,13 +20,23 @@ export type ProjectSummary = {
   keywordCount: number;
 };
 
+export type RecordedSourceState = "ready" | "unavailable" | "authorization_failed" | "rate_limited";
+
 export type SourceHealth = {
   source: SourceId;
-  state: "ready" | "unavailable" | "authorization_failed" | "rate_limited";
+  state: RecordedSourceState | "untested";
   detail: string;
   lastSuccessAt: string | null;
   configured: boolean;
 };
+
+export function resolveSourceState(
+  configured: boolean,
+  rowState?: RecordedSourceState | null,
+): SourceHealth["state"] {
+  if (!configured) return "unavailable";
+  return rowState ?? "untested";
+}
 
 export type JobRow = {
   id: string;
@@ -110,6 +120,7 @@ export function jobPresentation(status: string, detail: string | null): { label:
 
 const SOURCE_COPY: Record<SourceHealth["state"], string> = {
   ready: "Siap",
+  untested: "Belum diuji",
   unavailable: "Tidak tersedia",
   authorization_failed: "Otorisasi gagal",
   rate_limited: "Dibatasi sementara",
@@ -126,7 +137,13 @@ export function selectedSourcesReady(
 
 export function sourceHealthCopy(health: SourceHealth): string {
   const name = SOURCE_NAME[health.source];
-  if (!health.configured || health.state === "unavailable") {
+  if (!health.configured) {
+    return `Sumber ${name} sedang tidak tersedia, kami sedang memperbaikinya.`;
+  }
+  if (health.state === "untested") {
+    return `Sumber ${name} sudah dikonfigurasi dan belum diuji. Pengumpulan berikutnya akan menguji aksesnya.`;
+  }
+  if (health.state === "unavailable") {
     return `Sumber ${name} sedang tidak tersedia, kami sedang memperbaikinya.`;
   }
   if (health.state === "rate_limited") {
@@ -303,7 +320,7 @@ export async function loadWorkspace(
     const sources: SourceHealth[] = ALL_SOURCES.map((source) => {
       const row = recorded.get(source);
       const configured = Boolean(credentials[source]);
-      const state = !configured ? "unavailable" : (row?.state ?? "unavailable");
+      const state = resolveSourceState(configured, row?.state ?? null);
       return {
         source,
         state,
@@ -401,6 +418,12 @@ export function dashboardFor(workspace: Workspace, rangeValue: string | undefine
     now,
     attentionUnread: mentions.filter((mention) => mention.attentionUnread).length,
     uncertainOpen: mentions.filter((mention) => mention.bucket === "not_sure" && !mention.confirmed && !mention.corrected).length,
-    partial: workspace.sources.some((item) => item.state !== "ready"),
+    partial: workspace.sources.some(
+      (item) =>
+        !item.configured ||
+        item.state === "unavailable" ||
+        item.state === "authorization_failed" ||
+        item.state === "rate_limited",
+    ),
   });
 }

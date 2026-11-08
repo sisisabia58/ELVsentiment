@@ -9,7 +9,7 @@ import { createProject } from "../projects/handlers";
 import { readLimits, saveSchedule } from "../projects/schedules";
 import { buildDashboard } from "./dashboard";
 import { cooldownClock, describeChange } from "./format";
-import { dashboardFor, jobPresentation, loadWorkspace } from "./load";
+import { dashboardFor, jobPresentation, loadWorkspace, type Workspace } from "./load";
 import { presentMention, type StoredMention } from "./present";
 import { jakartaDate, rangeWindow } from "./range";
 import { choiceLabel, nextDailyInstant, toPersist } from "./schedule-choice";
@@ -357,5 +357,46 @@ describe("workspace loader", () => {
     const workspace = await loadWorkspace(db, owner.customerId, undefined, new Date("2026-11-01T03:00:00.000Z"), readLimits());
     expect(workspace.displayName).toBe("Rina Baru");
     expect(await saveDisplayName(db, owner.customerId, "   ")).toEqual({ ok: false, error: "Masukkan nama Anda." });
+  });
+});
+
+describe("truthful workspace source state", () => {
+  it("marks a configured but never-tested source untested, not unavailable or ready", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "untested@example.com", password: "sandi-panjang" });
+    const project = await createProject(db, owner.customerId, "Kopi Uji");
+    const previous = {
+      X_BEARER_TOKEN: process.env.X_BEARER_TOKEN,
+      SCRAPECREATORS_API_KEY: process.env.SCRAPECREATORS_API_KEY,
+    };
+    process.env.X_BEARER_TOKEN = "test-x";
+    process.env.SCRAPECREATORS_API_KEY = "test-sc";
+    try {
+      const workspace = await loadWorkspace(db, owner.customerId, project.projectId, new Date(), readLimits());
+      const x = workspace.sources.find((item) => item.source === "x");
+      expect(x).toMatchObject({ configured: true, state: "untested", detail: "", lastSuccessAt: null });
+      expect(workspace.sources.every((item) => item.state === "untested")).toBe(true);
+      expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(false);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it("treats a recorded failure as partial and preserves its last success", () => {
+    const workspace = {
+      ...({} as Workspace),
+      mentions: [],
+      sources: [
+        { source: "x", state: "ready", detail: "ok", lastSuccessAt: "2026-11-01T00:00:00.000Z", configured: true },
+        { source: "threads", state: "authorization_failed", detail: "threads_http_401", lastSuccessAt: "2026-10-01T00:00:00.000Z", configured: true },
+        { source: "instagram", state: "untested", detail: "", lastSuccessAt: null, configured: true },
+        { source: "tiktok", state: "unavailable", detail: "", lastSuccessAt: null, configured: false },
+      ],
+    } as Workspace;
+    expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(true);
   });
 });
