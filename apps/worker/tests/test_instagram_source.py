@@ -343,3 +343,18 @@ def test_instagram_known_first_endpoint_then_missing_second_is_partial_not_zero(
         fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=_ig_opener(first, second))
     assert caught.value.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
     assert caught.value.credits_charged == 5
+
+
+
+def test_instagram_unknown_status_on_second_endpoint_does_not_inherit_first_status():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    first = _StatusResponse(json.dumps({"reels": [{"pk": "1"}], "credits_charged": 2}), status=201)
+    second = _UnknownStatusResponse("{")
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=_ig_opener(first, second))
+    error = caught.value
+    assert error.code == "malformed_json"
+    assert error.http_status is None
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
