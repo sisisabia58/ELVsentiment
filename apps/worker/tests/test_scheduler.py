@@ -1963,3 +1963,45 @@ def test_unknown_http_status_stays_dash(tmp_path):
               "worker-1", _policy_root(tmp_path, True),
               lambda *_args, **_kwargs: ([], None), fetch_threads, log=lines.append)
     assert "http_status=-" in next(line for line in lines if line.startswith("source_collection"))
+
+
+def test_job_finalization_failure_keeps_committed_source_outcome(tmp_path):
+    class FinishFail(_LoopConn):
+        def execute(self, sql, params=None):
+            if "status = 'succeeded'" in sql:
+                raise RuntimeError("synthetic finish bookkeeping failure")
+            result = super().execute(sql, params)
+            if "insert into mentions" in sql.lower():
+                return [{"id": "local-insert"}]
+            return result
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(lambda: FinishFail(world), stop, load_limits(Path("config/limits.json"), {}),
+              "worker-1", _policy_root(tmp_path, True),
+              lambda *_args, **_kwargs: ([], None), fetch_threads, log=lines.append)
+
+    collection = [line for line in lines if line.startswith("source_collection")]
+    assert len(collection) == 1
+    assert "outcome=success" in collection[0] and "saved=1" in collection[0]
+    assert not any("outcome=storage_failed" in line for line in collection)
+    finalize = [line for line in lines if line.startswith("job_finalize_failed")]
+    assert len(finalize) == 1 and "job_id=job-1" in finalize[0] and "private" not in finalize[0]
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
+    assert failed == [("storage_failed", "job-1")]
+    assert [sql for sql, _params in world.calls].count("COMMIT") >= 2
