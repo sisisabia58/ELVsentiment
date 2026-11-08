@@ -3,11 +3,48 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from typing import Any, Callable
+import urllib.error
 import urllib.parse
 import urllib.request
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com"
 DEFAULT_REGION = "ID"
+
+
+class ScrapeCreatorsError(Exception):
+    def __init__(
+        self,
+        code: str,
+        *,
+        http_status: int | None = None,
+        credits_charged: int | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.http_status = http_status
+        self.credits_charged = credits_charged
+
+
+def credits_from(payload: dict[str, Any]) -> int | None:
+    value = payload.get("credits_charged")
+    if type(value) is int:
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def select_post_list(payload: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if not isinstance(value, list):
+            raise ScrapeCreatorsError("malformed_posts")
+        if value and not any(isinstance(item, dict) for item in value):
+            raise ScrapeCreatorsError("malformed_posts")
+        return value
+    raise ScrapeCreatorsError("missing_posts")
 
 
 def fetch_scrapecreators_json(
@@ -29,9 +66,20 @@ def fetch_scrapecreators_json(
             "User-Agent": "ELVsentiment-worker/1.0",
         },
     )
-    with opener(request, timeout=30) as response:
-        data = json.loads(response.read())
-    return data if isinstance(data, dict) else {}
+    try:
+        with opener(request, timeout=30) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        raise ScrapeCreatorsError(f"http_{error.code}", http_status=error.code) from None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ScrapeCreatorsError("malformed_json") from None
+    if not isinstance(data, dict):
+        raise ScrapeCreatorsError("malformed_envelope")
+    if data.get("success") is False:
+        raise ScrapeCreatorsError("success_false", credits_charged=credits_from(data))
+    return data
 
 
 def unix_to_iso(value: Any) -> str | None:
