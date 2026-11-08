@@ -4,8 +4,9 @@ import re
 from typing import Any, Callable
 import urllib.request
 
+from sentiment_monitor.intent import Keyword
+from sentiment_monitor.sources.routes import request_params, routes_for, within_overlap
 from sentiment_monitor.sources.scrapecreators import (
-    DEFAULT_REGION,
     ScrapeCreatorsError,
     carry_attempt_context,
     credits_from,
@@ -88,78 +89,48 @@ def fetch_instagram_mentions(
     api_key: str,
     collected_at: str,
     *,
-    region: str = DEFAULT_REGION,
+    intent: str | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
+    keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
+    route = routes_for("instagram", keyword)[0]
     credits: list[int | None] = []
     returned: int | None = None
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
 
-    try:
-        reels_payload = fetch_scrapecreators_json(
-            INSTAGRAM_REELS_SEARCH_PATH,
-            {"query": variant},
-            api_key,
-            region=region,
-            opener=opener,
-        )
-    except ScrapeCreatorsError as error:
-        raise carry_attempt_context(error, credits, returned, collected) from None
-    http_status = getattr(reels_payload, "http_status", None)
-    credits.append(credits_from(reels_payload))
+    payload = fetch_scrapecreators_json(
+        route.path,
+        request_params(route, keyword),
+        api_key,
+        opener=opener,
+    )
+    http_status = getattr(payload, "http_status", None)
+    credits.append(credits_from(payload))
 
+    keys = ("reels", "items", "data") if route.intent == "phrase" else ("posts", "items", "medias", "data")
     try:
-        reels_raw = select_post_list(reels_payload, ("reels", "items", "data"))
+        raw_items = select_post_list(payload, keys)
     except ScrapeCreatorsError as error:
         raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
-    reels_items = [
+    returned = len(raw_items)
+    normalized_items = [
         normalize_instagram_item(item, collected_at)
-        for item in reels_raw
+        for item in raw_items
         if isinstance(item, dict)
     ]
-    returned = len(reels_raw)
-    collected.extend(reels_items)
-    if reels_raw and not has_usable_mentions(reels_items):
+    collected.extend(
+        {**item, "route_id": route.id}
+        for item in normalized_items
+        if within_overlap(item["posted_at"], collected_at, route)
+    )
+    if raw_items and not has_usable_mentions(normalized_items):
         raise ScrapeCreatorsError(
             "malformed_posts",
             http_status=http_status,
             credits_charged=known_credits(credits),
             counts=failure_counts(returned, collected),
         )
-
-    hashtag = normalize_hashtag(variant)
-    if hashtag:
-        try:
-            hashtag_payload = fetch_scrapecreators_json(
-                INSTAGRAM_HASHTAG_SEARCH_PATH,
-                {"hashtag": hashtag},
-                api_key,
-                region=region,
-                opener=opener,
-            )
-        except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected) from None
-        http_status = getattr(hashtag_payload, "http_status", None)
-        credits.append(credits_from(hashtag_payload))
-        try:
-            hashtag_raw = select_post_list(hashtag_payload, ("posts", "items", "medias", "data"))
-        except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
-        hashtag_items = [
-            normalize_instagram_item(item, collected_at)
-            for item in hashtag_raw
-            if isinstance(item, dict)
-        ]
-        returned += len(hashtag_raw)
-        collected.extend(hashtag_items)
-        if hashtag_raw and not has_usable_mentions(hashtag_items):
-            raise ScrapeCreatorsError(
-                "malformed_posts",
-                http_status=http_status,
-                credits_charged=known_credits(credits),
-                counts=failure_counts(returned, collected),
-            )
 
     mentions = dedupe_mentions(collected)
     return {
