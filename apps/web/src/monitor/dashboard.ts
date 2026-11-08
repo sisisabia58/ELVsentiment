@@ -3,6 +3,7 @@ import { describeChange, type ChangeTone } from "./format";
 import type { SourceId } from "./policy";
 import type { PresentedMention, Sentiment } from "./present";
 import { inWindow, rangeWindow, type RangeKey, type RangeWindow } from "./range";
+import { textMatchCounts, type TextMatchCounts } from "./relevance";
 
 export type SourceKey = "all" | SourceId;
 
@@ -37,6 +38,7 @@ export type DashboardModel = {
   gapLabels: string[];
   topics: { label: string; count: number }[];
   attentionItems: PresentedMention[];
+  textMatch: TextMatchCounts;
   partial: boolean;
 };
 
@@ -84,6 +86,7 @@ export function buildDashboard(input: {
 }): DashboardModel {
   const window = rangeWindow(input.range, input.now);
   const current = includedIn(input.mentions, window.start, window.end, input.source);
+  const textMatch = textMatchCounts(current);
   const previous = includedIn(input.mentions, window.previousStart, window.start, input.source);
   const currentIncluded = current.filter((mention) => mention.bucket === "included" && mention.sentiment);
   const previousIncluded = previous.filter((mention) => mention.bucket === "included" && mention.sentiment);
@@ -184,6 +187,7 @@ export function buildDashboard(input: {
     gapLabels: points.filter((point) => point.total === null).map((point) => point.label),
     topics,
     attentionItems,
+    textMatch,
     partial: input.partial,
   };
 }

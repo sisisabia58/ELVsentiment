@@ -6,10 +6,12 @@ import { selectedSourcesReady, type Workspace } from "@/monitor/load";
 import type { PresentedMention, Sentiment } from "@/monitor/present";
 import { SENTIMENT_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
 import { inWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
+import { TEXT_MATCH_LABEL, textMatchCounts } from "@/monitor/relevance";
 import { emptyCollectionBody } from "@/monitor/copy";
 import { EmptyState, PageHeader, Panel, SentimentTag, SourceMark } from "./bits";
 import { ReviewForm } from "./review-form";
 import { Frame } from "./shell";
+import { TextMatchSummary } from "./text-match-summary";
 
 const PAGE_SIZE = 10;
 
@@ -36,6 +38,7 @@ export function MentionsScreen(props: {
   const page = Math.min(props.page, totalPages);
   const slice = searched.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const review = props.reviewId ? props.workspace.mentions.find((mention) => mention.id === props.reviewId) ?? null : null;
+  const textMatch = textMatchCounts(searched);
   const missingReview = Boolean(props.reviewId) && !review;
   const filtersActive = Boolean(props.query) || Boolean(props.source) || Boolean(sentiment) || rangeKey !== "7";
   const listHref = projectHref(pathFor(props.mode), projectId, {
@@ -97,6 +100,7 @@ export function MentionsScreen(props: {
               <EmptyState title={emptyCopy.title} body={emptyCopy.body} />
             ) : (
               <Panel>
+                <TextMatchSummary counts={textMatch} />
                 <ul className="divide-y divide-border">
                   {slice.map((mention) => (
                     <li key={mention.id} className="py-3">
@@ -287,6 +291,9 @@ function MentionLine(props: { mention: PresentedMention; now: string; href: stri
         <p className="mt-1 line-clamp-2 text-sm leading-6">{mention.excerpt}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           <SentimentTag sentiment={mention.sentiment} />
+          <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium">
+            {TEXT_MATCH_LABEL[mention.textMatch]}
+          </span>
           {mention.needsAttention ? <span className="rounded-full bg-negatif-bg px-2 py-0.5 text-xs font-medium text-negatif">Sentimen negatif</span> : null}
           {mention.uncertainFields.map((field) => (
             <span key={field} className="rounded-full bg-warning-bg px-2 py-0.5 text-xs font-medium text-warning">

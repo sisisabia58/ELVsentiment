@@ -175,6 +175,7 @@ type MentionSql = {
   correction_at: string | Date | null;
   attention_id: string | null;
   attention_unread: boolean | null;
+  association_statuses: unknown;
 };
 
 function toStored(row: MentionSql): StoredMention {
@@ -206,6 +207,7 @@ function toStored(row: MentionSql): StoredMention {
     correctionAt: iso(row.correction_at),
     attentionId: row.attention_id,
     attentionUnread: row.attention_unread === true,
+    associationStatuses: asTextArray(row.association_statuses),
   };
 }
 
@@ -296,11 +298,17 @@ export async function loadWorkspace(
               j.relevance_noul, j.sentiment, j.sentiment_confidence, j.topic_nouls,
               c.action, c.relevance as correction_relevance, c.sentiment as correction_sentiment,
               c.topics as correction_topics, c.created_at as correction_at,
-              a.id as attention_id, a.unread as attention_unread
+              a.id as attention_id, a.unread as attention_unread,
+              assoc.statuses as association_statuses
        from mentions m
        left join jev_results j on j.mention_id = m.id
        left join owner_corrections c on c.mention_id = m.id
        left join attention_items a on a.mention_id = m.id
+       left join lateral (
+         select array_agg(distinct a.status) as statuses
+         from mention_keyword_associations a
+         where a.mention_id = m.id and a.customer_id = m.customer_id
+       ) assoc on true
        where m.project_id = $1
        order by coalesce(m.posted_at, m.collected_at) desc, m.id`,
       [project.id],

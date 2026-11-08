@@ -44,6 +44,7 @@ function stored(overrides: Partial<StoredMention> = {}): StoredMention {
     correctionAt: null,
     attentionId: null,
     attentionUnread: false,
+    associationStatuses: [],
     ...overrides,
   };
 }
@@ -398,5 +399,70 @@ describe("truthful workspace source state", () => {
       ],
     } as Workspace;
     expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(true);
+  });
+});
+
+
+describe("text match model", () => {
+  it("keeps a legacy mention unassessed instead of calling it unmatched", () => {
+    expect(presentMention(stored({ associationStatuses: [] }), approved).textMatch).toBe("legacy_unassessed");
+    expect(presentMention(stored({ associationStatuses: ["literal_match"] }), approved).textMatch).toBe("literal_match");
+  });
+
+  it("counts candidates, literal matches, and undecided rows in the same range", () => {
+    const now = new Date("2026-11-01T03:00:00.000Z");
+    const rows = [
+      presentMention(stored({ id: "a", associationStatuses: ["literal_match"] }), approved),
+      presentMention(stored({ id: "b", associationStatuses: ["no_literal_match"] }), approved),
+      presentMention(stored({ id: "c", associationStatuses: ["unknown_text"] }), approved),
+      presentMention(stored({ id: "d", associationStatuses: [] }), approved),
+    ];
+    const model = buildDashboard({
+      mentions: rows,
+      range: "7",
+      source: "all",
+      now,
+      attentionUnread: 0,
+      uncertainOpen: 0,
+      partial: false,
+    });
+    expect(model.textMatch).toEqual({ candidates: 4, literal: 1, unknown: 2 });
+  });
+
+  it("loads association statuses and keeps a mention with none as legacy", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "relevance@example.com", password: "sandi-panjang" });
+    const project = await createProject(db, owner.customerId, "Kopi Uji");
+    const matched = randomUUID();
+    const legacy = randomUUID();
+    await withCustomer(db, owner.customerId, async () => {
+      for (const [id, external] of [
+        [matched, "matched"],
+        [legacy, "legacy"],
+      ] as const) {
+        await db.query(
+          `insert into mentions (id, customer_id, project_id, source, external_id, excerpt, url, author, posted_at, collected_at, matched_variants, scoring_status)
+           values ($1, $2, $3, 'threads', $4, 'Kopi', null, 'ani', '2026-11-01T00:00:00.000Z', '2026-11-01T00:05:00.000Z', array['kopi'], 'pending')`,
+          [id, owner.customerId, project.projectId, external],
+        );
+      }
+    });
+    await db.query(
+      `insert into mention_keyword_associations
+         (id, customer_id, project_id, mention_id, keyword_text, intent, route_id, source, status, collected_at)
+       values (gen_random_uuid(), $1, $2, $3, 'kopi', 'phrase', 'threads.keyword', 'threads', 'literal_match', now())`,
+      [owner.customerId, project.projectId, matched],
+    );
+    const workspace = await loadWorkspace(
+      db,
+      owner.customerId,
+      project.projectId,
+      new Date("2026-11-01T03:00:00.000Z"),
+      readLimits(),
+    );
+    const byId = new Map(workspace.mentions.map((item) => [item.id, item.textMatch]));
+    expect(byId.get(matched)).toBe("literal_match");
+    expect(byId.get(legacy)).toBe("legacy_unassessed");
   });
 });

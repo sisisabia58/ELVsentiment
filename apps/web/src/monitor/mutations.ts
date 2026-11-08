@@ -105,6 +105,7 @@ export async function saveMentionReview(
         correctionAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
         attentionId: row.attention_id,
         attentionUnread: row.unread === true,
+        associationStatuses: [],
       },
       policy.scoring,
     );
@@ -212,6 +213,7 @@ export async function attentionStillEligible(db: Queryable, customerId: string, 
       correctionAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
       attentionId: row.attention_id,
       attentionUnread: row.unread === true,
+      associationStatuses: [],
     },
     policy.scoring,
   );

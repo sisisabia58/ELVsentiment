@@ -12,6 +12,7 @@ import { ChangeLine, EmptyState, PageHeader, Panel, ScoreValue, SentimentTag, So
 import { CompositionChart, TrendChart, VolumeChart } from "./monitor/charts";
 import { RunButton } from "./monitor/run-button";
 import { WorkspaceShell } from "./monitor/shell";
+import { TextMatchSummary } from "./monitor/text-match-summary";
 
 function sourceStateText(state: string): string {
   return state.trim() === "Tidak tersedia" ? "Status sumber: Tidak tersedia" : state;
@@ -200,6 +201,11 @@ export function DashboardScreen(props: {
                 </Link>
               </Panel>
             </div>
+            <Panel title="Relevansi teks">
+              <TextMatchSummary
+                counts={props.model?.textMatch ?? { candidates: 0, literal: 0, unknown: 0 }}
+              />
+            </Panel>
             {props.model ? (
               <div className="grid min-w-0 gap-4 xl:grid-cols-3 lg:gap-5">
                 <Panel title="Tren sentimen" subtitle={props.model.periodLabel} className="xl:col-span-2">

@@ -207,6 +207,7 @@ function touchModel(): DashboardModel {
     gapLabels: [],
     topics: [{ label: "harga", count: 2 }],
     attentionItems: [],
+    textMatch: { candidates: 7, literal: 4, unknown: 2 },
     partial: false,
   };
 }
@@ -274,5 +275,21 @@ describe("dashboard collection", () => {
     );
     screen.getByRole("button", { name: "Jalankan sekarang" }).click();
     expect(onRunNow).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("text match summary", () => {
+  it("shows the proposed text-match counts without claiming semantic verification", () => {
+    render(
+      <DashboardScreen
+        {...base}
+        brandName="QA Test Brand"
+        model={touchModel()}
+        collection={null}
+      />,
+    );
+    expect(screen.getByText("Kandidat 7 · Cocok teks 4 · Belum pasti 2")).toBeTruthy();
+    expect(screen.getByText("Pencocokan teks, bukan verifikasi makna.")).toBeTruthy();
   });
 });

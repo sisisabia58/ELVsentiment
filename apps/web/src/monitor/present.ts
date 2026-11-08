@@ -3,6 +3,7 @@ import { displayOf, type OwnerCorrection } from "../domain/display";
 import { failedScoring, routeJudgment, type ParsedJudgment, type ScoringPolicy } from "../domain/routing";
 import { initialsFrom } from "./format";
 import type { SourceId } from "./policy";
+import { textMatchOf, type TextMatch } from "./relevance";
 
 export type Sentiment = "positive" | "neutral" | "negative";
 export type MentionBucket = "included" | "excluded" | "not_sure" | "failed" | "pending" | "policy_unapproved";
@@ -27,6 +28,7 @@ export type StoredMention = {
   correctionAt: string | null;
   attentionId: string | null;
   attentionUnread: boolean;
+  associationStatuses: string[];
 };
 
 export type PresentedMention = {
@@ -58,6 +60,7 @@ export type PresentedMention = {
   attentionId: string | null;
   sourcePostUnavailable: boolean;
   scoringStatus: StoredMention["scoringStatus"];
+  textMatch: TextMatch;
 };
 
 function asJudgment(row: StoredMention): ParsedJudgment | null {
@@ -100,6 +103,7 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
     attentionId: row.attentionId,
     sourcePostUnavailable: row.sourcePostUnavailable,
     scoringStatus: row.scoringStatus,
+    textMatch: textMatchOf(row.associationStatuses),
   };
 
   if (row.scoringStatus === "pending" || row.scoringStatus === "scoring") {
