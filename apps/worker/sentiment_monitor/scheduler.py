@@ -502,12 +502,14 @@ class SourceFetchError(Exception):
         *,
         http_status: int | None = None,
         credits_charged: int | None = None,
+        counts: dict[str, int] | None = None,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
         self.state = state
         self.http_status = http_status
         self.credits_charged = credits_charged
+        self.counts = counts
 
 
 def _guarded_fetch(source: str, fetch):
@@ -521,6 +523,7 @@ def _guarded_fetch(source: str, fetch):
             source_failure_state(error.code, error.http_status),
             http_status=error.http_status,
             credits_charged=error.credits_charged,
+            counts=error.counts,
         ) from None
     except Exception as error:
         detail = _failure_detail(error, source)
@@ -531,7 +534,13 @@ def _guarded_fetch(source: str, fetch):
             detail,
             source_failure_state(detail, status),
             http_status=status,
+            counts=getattr(error, "counts", None),
         ) from None
+
+
+def _count_field(counts: Mapping[str, Any] | None, key: str) -> Any:
+    value = counts.get(key) if isinstance(counts, Mapping) else None
+    return value if type(value) is int and value >= 0 else "-"
 
 
 def _log_collection(
@@ -539,7 +548,7 @@ def _log_collection(
     job,
     source: str,
     outcome: str,
-    counts: dict[str, int],
+    counts: Mapping[str, Any] | None,
     saved: int,
     *,
     http_status: int | None = None,
@@ -548,8 +557,9 @@ def _log_collection(
 ) -> None:
     line = (
         f"source_collection job_id={job['id']} project_id={job['project_id']} source={source} "
-        f"outcome={outcome} returned={counts['returned']} parsed={counts['parsed']} "
-        f"deduplicated={counts['deduplicated']} saved={saved} "
+        f"outcome={outcome} returned={_count_field(counts, 'returned')} "
+        f"parsed={_count_field(counts, 'parsed')} "
+        f"deduplicated={_count_field(counts, 'deduplicated')} saved={saved} "
         f"http_status={http_status if http_status is not None else '-'} "
         f"credits_charged={credits if credits is not None else '-'} detail={detail}"
     )
@@ -630,8 +640,12 @@ def serve(
                 for variant in job["variants"]:
                     key = f"{job['customer_id']}:{job['project_id']}:{variant}"
                     collected = None
+                    attempt_counts = None
+                    attempt_credits = None
+                    attempt_http_status = None
                     if "x" in sources:
                         current_source = "x"
+                        attempt_counts = attempt_credits = attempt_http_status = None
                         def read_state(conn, key=key):
                             return PostgresStore(conn).source_state(key, "x") or {}
 
@@ -672,6 +686,9 @@ def serve(
                             "parsed": len(x_mentions),
                             "deduplicated": 0,
                         }
+                        attempt_counts = x_counts
+                        attempt_credits = None
+                        attempt_http_status = None
 
                         def store_x(
                             conn,
@@ -688,10 +705,14 @@ def serve(
                         _log_collection(log, job, "x", "success", x_counts, x_saved)
                     if "threads" in sources and fetch_threads is not None:
                         current_source = "threads"
+                        attempt_counts = attempt_credits = attempt_http_status = None
                         threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
                         threads_mentions, threads_cursor, threads_counts, threads_credits = _unpack_fetched(
                             threads_result, variant
                         )
+                        attempt_counts = threads_counts
+                        attempt_credits = threads_credits
+                        attempt_http_status = None
 
                         def store_threads(
                             conn,
@@ -715,8 +736,12 @@ def serve(
                         )
                     if "instagram" in sources and fetch_instagram is not None:
                         current_source = "instagram"
+                        attempt_counts = attempt_credits = attempt_http_status = None
                         ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
                         ig_mentions, ig_cursor, ig_counts, ig_credits = _unpack_fetched(ig_result, variant)
+                        attempt_counts = ig_counts
+                        attempt_credits = ig_credits
+                        attempt_http_status = None
 
                         def store_instagram(
                             conn,
@@ -740,8 +765,12 @@ def serve(
                         )
                     if "tiktok" in sources and fetch_tiktok is not None:
                         current_source = "tiktok"
+                        attempt_counts = attempt_credits = attempt_http_status = None
                         tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
                         tt_mentions, tt_cursor, tt_counts, tt_credits = _unpack_fetched(tt_result, variant)
+                        attempt_counts = tt_counts
+                        attempt_credits = tt_credits
+                        attempt_http_status = None
 
                         def store_tiktok(
                             conn,
@@ -782,7 +811,6 @@ def serve(
 
                     _call(connect, finish_job)
             except Exception as error:
-                zero_counts = {"returned": 0, "parsed": 0, "deduplicated": 0}
                 if isinstance(error, SourceFetchError):
                     detail = error.detail
                     state = error.state
@@ -805,7 +833,7 @@ def serve(
                         job,
                         current_source,
                         "failed",
-                        zero_counts,
+                        error.counts,
                         0,
                         http_status=error.http_status,
                         credits=error.credits_charged,
@@ -821,8 +849,10 @@ def serve(
                         job,
                         current_source,
                         "storage_failed",
-                        zero_counts,
+                        attempt_counts,
                         0,
+                        http_status=attempt_http_status,
+                        credits=attempt_credits,
                         detail="storage_failed",
                     )
                     try:
