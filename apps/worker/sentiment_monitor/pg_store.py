@@ -1,5 +1,7 @@
 from contextlib import nullcontext
 
+from sentiment_monitor.relevance import literal_match_status
+
 
 class CommitOutcomeUnknown(Exception):
     """The authoritative commit phase raised; durability is unknown."""
@@ -16,6 +18,21 @@ def _returned_rows(result) -> int:
         return len(result)
     except TypeError:
         return 0
+
+
+def _first_id(result):
+    if not result:
+        return None
+    try:
+        row = result[0]
+    except (TypeError, KeyError, IndexError):
+        return None
+    if isinstance(row, dict):
+        return row.get("id")
+    try:
+        return row["id"]
+    except (TypeError, KeyError, IndexError):
+        return getattr(row, "id", None)
 
 
 class PostgresStore:
@@ -99,30 +116,79 @@ class PostgresStore:
                     self._conn.execute("begin")
                 self._conn.execute("select set_config('app.customer_id', %s::text, true)", (str(customer_id),))
                 for mention in mentions:
-                    saved += _returned_rows(
-                        self._conn.execute(
-                            """
-                            insert into mentions (
-                              id, customer_id, project_id, source, external_id, excerpt, url, author,
-                              posted_at, collected_at, matched_variants, scoring_status
-                            ) values (
-                              gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, 'pending'
-                            )
-                            on conflict (customer_id, source, external_id) do nothing
-                            returning id
-                            """,
-                            (
-                                customer_id,
-                                project_id,
-                                source,
-                                mention["external_id"],
-                                mention["excerpt"],
-                                mention["url"],
-                                mention["author"],
-                                mention["posted_at"],
-                                [mention["variant"]],
-                            ),
+                    inserted = self._conn.execute(
+                        """
+                        insert into mentions (
+                          id, customer_id, project_id, source, external_id, excerpt, url, author,
+                          posted_at, collected_at, matched_variants, scoring_status
+                        ) values (
+                          gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, 'pending'
                         )
+                        on conflict (customer_id, project_id, source, external_id) do nothing
+                        returning id
+                        """,
+                        (
+                            customer_id,
+                            project_id,
+                            source,
+                            mention["external_id"],
+                            mention["excerpt"],
+                            mention["url"],
+                            mention["author"],
+                            mention["posted_at"],
+                            [mention["variant"]],
+                        ),
+                    )
+                    saved += _returned_rows(inserted)
+                    mention_id = _first_id(inserted)
+                    if mention_id is None:
+                        mention_id = _first_id(
+                            self._conn.execute(
+                                "select id from mentions "
+                                "where customer_id = %s and project_id = %s "
+                                "and source = %s and external_id = %s",
+                                (customer_id, project_id, source, mention["external_id"]),
+                            )
+                        )
+                    if mention_id is None:
+                        continue
+                    variant = mention["variant"]
+                    intent = mention.get("intent") or getattr(variant, "intent", "phrase")
+                    self._conn.execute(
+                        """
+                        update mentions
+                        set matched_variants = (
+                          select array_agg(distinct value)
+                          from unnest(matched_variants || %s::text[]) as value
+                        )
+                        where id = %s and customer_id = %s
+                        """,
+                        ([variant], mention_id, customer_id),
+                    )
+                    self._conn.execute(
+                        """
+                        insert into mention_keyword_associations (
+                          id, customer_id, project_id, mention_id, keyword_text, intent,
+                          route_id, source, status, collected_at
+                        ) values (
+                          gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, coalesce(%s, now())
+                        )
+                        on conflict (mention_id, keyword_text, route_id) do update
+                          set intent = excluded.intent,
+                              status = excluded.status,
+                              collected_at = excluded.collected_at
+                        """,
+                        (
+                            customer_id,
+                            project_id,
+                            mention_id,
+                            str(variant),
+                            intent,
+                            mention.get("route_id") or f"{source}.keyword",
+                            source,
+                            literal_match_status(mention.get("excerpt") or "", str(variant), intent),
+                            mention.get("collected_at"),
+                        ),
                     )
                 self.record_source_success(
                     query_key,

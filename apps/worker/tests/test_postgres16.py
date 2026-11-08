@@ -784,3 +784,63 @@ def test_postgres16_commit_receipt_statuses_for_all_sources(pg16, tmp_path, faul
             assert mention_count == 1 and cursor is not None, source
             assert len(source_lines) == 1 and "outcome=success" in source_lines[0] and "saved=1" in source_lines[0]
             assert not any("outcome=storage_failed" in line for line in source_lines)
+
+
+def test_postgres16_same_post_is_project_scoped_and_tenant_isolated(pg16):
+    conn = pg16
+    _seed(conn)
+    project_b = "99999999-9999-4999-8999-999999999999"
+    conn.execute(
+        "insert into projects (id, customer_id, brand_name, created_at) values (%s, %s, 'kedai b', now())",
+        (project_b, CUSTOMER_A),
+    )
+    for project_id in (PROJECT_A, project_b):
+        conn.execute(
+            """
+            insert into mentions
+              (id, customer_id, project_id, source, external_id, excerpt, url, author, posted_at, collected_at, matched_variants, scoring_status)
+            values
+              (gen_random_uuid(), %s, %s, 'threads', 'same-post', 'kopi', null, null, now(), now(), array['kopi'], 'pending')
+            """,
+            (CUSTOMER_A, project_id),
+        )
+    count = conn.execute(
+        "select count(*) from mentions where customer_id = %s and external_id = 'same-post'",
+        (CUSTOMER_A,),
+    ).fetchone()[0]
+    assert count == 2
+    conn.execute("begin")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_B,))
+    conn.execute("set local role app_user")
+    assert conn.execute("select count(*) from mentions where external_id = 'same-post'").fetchone()[0] == 0
+    conn.rollback()
+
+
+def test_postgres16_worker_association_rejects_other_customer(pg16):
+    conn = pg16
+    _seed(conn)
+    mention_id = conn.execute(
+        """
+        insert into mentions
+          (id, customer_id, project_id, source, external_id, excerpt, url, author, posted_at, collected_at, matched_variants, scoring_status)
+        values
+          (gen_random_uuid(), %s, %s, 'threads', 'worker-policy', 'kopi', null, null, now(), now(), array['kopi'], 'pending')
+        returning id
+        """,
+        (CUSTOMER_A, PROJECT_A),
+    ).fetchone()[0]
+    conn.commit()
+    conn.execute("begin")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    conn.execute("set local role worker_role")
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        conn.execute(
+            """
+            insert into mention_keyword_associations
+              (id, customer_id, project_id, mention_id, keyword_text, intent, route_id, source, status, collected_at)
+            values
+              (gen_random_uuid(), %s, %s, %s, 'kopi', 'phrase', 'threads.keyword', 'threads', 'literal_match', now())
+            """,
+            (CUSTOMER_B, PROJECT_A, mention_id),
+        )
+    conn.rollback()

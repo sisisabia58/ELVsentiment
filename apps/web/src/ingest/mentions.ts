@@ -19,17 +19,18 @@ export async function ingestMention(
 ): Promise<{ id: string; result: "inserted" | "deduped" }> {
   return withCustomer(db, input.customerId, async () => {
     const existing = await db.query<{ id: string; matched_variants: string[] }>(
-      "select id, matched_variants from mentions where customer_id = $1 and source = $2 and external_id = $3",
-      [input.customerId, input.source, input.externalId],
+      "select id, matched_variants from mentions where customer_id = $1 and project_id = $2 and source = $3 and external_id = $4",
+      [input.customerId, input.projectId, input.source, input.externalId],
     );
     if (existing.rows[0]) {
       const variants = existing.rows[0].matched_variants.includes(input.variant)
         ? existing.rows[0].matched_variants
         : [...existing.rows[0].matched_variants, input.variant];
-      await db.query("update mentions set matched_variants = $1 where id = $2 and customer_id = $3", [
+      await db.query("update mentions set matched_variants = $1 where id = $2 and customer_id = $3 and project_id = $4", [
         variants,
         existing.rows[0].id,
         input.customerId,
+        input.projectId,
       ]);
       return { id: existing.rows[0].id, result: "deduped" as const };
     }

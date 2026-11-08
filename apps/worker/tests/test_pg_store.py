@@ -175,3 +175,76 @@ def test_saved_is_zero_when_the_driver_returns_no_rows():
         next_cursor=None,
     )
     assert saved == 0
+
+
+class AssociationTx(Tx):
+    def __init__(self, insert_result, lookup_result):
+        super().__init__()
+        self.insert_result = insert_result
+        self.lookup_result = lookup_result
+
+    def execute(self, sql, params=None):
+        result = super().execute(sql, params)
+        lowered = sql.lower()
+        if "insert into mentions" in lowered:
+            return self.insert_result
+        if lowered.startswith("select id from mentions"):
+            return self.lookup_result
+        return result
+
+
+def test_association_mention_and_cursor_share_one_commit():
+    tx = AssociationTx([{"id": "m1"}], None)
+    PostgresStore(tx).write_mentions_and_cursor(
+        customer_id="customer-a",
+        project_id="project-1",
+        query_key="customer-a:project-1:kopi",
+        source="threads",
+        mentions=[{**MENTION, "variant": "kopi", "intent": "phrase", "route_id": "threads.keyword"}],
+        next_cursor=None,
+    )
+    joined = "\n".join(tx.statements).lower()
+    assert joined.index("insert into mentions") < joined.index("insert into mention_keyword_associations")
+    assert joined.index("insert into mention_keyword_associations") < joined.index("source_cursors")
+    assert joined.index("source_cursors") < joined.index("commit")
+
+
+def test_conflicting_mention_unions_matched_variants_instead_of_keeping_only_the_first():
+    tx = AssociationTx([], [{"id": "m1"}])
+    PostgresStore(tx).write_mentions_and_cursor(
+        customer_id="customer-a",
+        project_id="project-1",
+        query_key="q",
+        source="threads",
+        mentions=[{**MENTION, "variant": "kopi", "intent": "phrase", "route_id": "threads.keyword"}],
+        next_cursor=None,
+    )
+    union_sql = next(sql for sql in tx.statements if "matched_variants ||" in sql)
+    assert "array_agg(distinct value)" in union_sql
+
+
+def test_association_status_is_literal_no_literal_or_unknown():
+    for excerpt, expected in [
+        ("Suka Indonesia", "literal_match"),
+        ("Suka Indonesian", "no_literal_match"),
+        ("", "unknown_text"),
+    ]:
+        tx = AssociationTx([{"id": "m"}], None)
+        PostgresStore(tx).write_mentions_and_cursor(
+            customer_id="customer-a",
+            project_id="project-1",
+            query_key="q",
+            source="threads",
+            mentions=[
+                {
+                    **MENTION,
+                    "excerpt": excerpt,
+                    "variant": "indonesia",
+                    "intent": "phrase",
+                    "route_id": "threads.keyword",
+                }
+            ],
+            next_cursor=None,
+        )
+        _sql, params = next((sql, params) for sql, params in tx.calls if "mention_keyword_associations" in sql)
+        assert params[7] == expected
