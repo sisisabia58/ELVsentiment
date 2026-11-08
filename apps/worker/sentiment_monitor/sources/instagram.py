@@ -92,7 +92,7 @@ def fetch_instagram_mentions(
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
     credits: list[int | None] = []
-    returned = 0
+    returned: int | None = None
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
 
@@ -118,7 +118,7 @@ def fetch_instagram_mentions(
         for item in reels_raw
         if isinstance(item, dict)
     ]
-    returned += len(reels_raw)
+    returned = len(reels_raw)
     collected.extend(reels_items)
     if reels_raw and not has_usable_mentions(reels_items):
         raise ScrapeCreatorsError(

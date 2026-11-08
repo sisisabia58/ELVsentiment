@@ -235,3 +235,19 @@ def test_threads_read_timeout_keeps_known_response_status():
         )
     assert caught.value.code == "read_timeout"
     assert caught.value.http_status == 200
+
+def test_threads_missing_or_non_list_marks_returned_unknown():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    for payload in ({"credits_charged": 2}, {"posts": "not-a-list", "credits_charged": 2}):
+        with pytest.raises(ScrapeCreatorsError) as caught:
+            fetch_threads_mentions(
+                "kopi",
+                "key",
+                "2026-11-01T00:00:00Z",
+                opener=lambda *args, _payload=payload, **kwargs: _StatusResponse(json.dumps(_payload), status=200),
+            )
+        error = caught.value
+        assert error.code in ("missing_posts", "malformed_posts")
+        assert error.counts is None or error.counts.get("returned") is None
+        assert error.http_status == 200

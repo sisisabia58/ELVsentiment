@@ -284,3 +284,30 @@ def test_tiktok_read_timeout_after_first_endpoint_keeps_current_status_and_count
     assert error.credits_charged == 2
     assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
 
+def test_tiktok_missing_or_non_list_is_unknown_returned():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    for payload in ({"credits_charged": 2}, {"search_item_list": "not-a-list", "credits_charged": 2}):
+        with pytest.raises(ScrapeCreatorsError) as caught:
+            fetch_tiktok_mentions(
+                "Kopi",
+                "key",
+                "2026-11-01T00:00:00Z",
+                opener=_tt_opener(
+                    _StatusResponse(json.dumps(payload), status=200),
+                    _StatusResponse('{"search_item_list": []}', status=200),
+                ),
+            )
+        error = caught.value
+        assert error.counts is None or error.counts.get("returned") is None
+
+
+def test_tiktok_known_first_endpoint_then_missing_second_is_partial_not_zero():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    first = _StatusResponse(json.dumps({"search_item_list": [{"aweme_id": "1"}], "credits_charged": 2}), status=200)
+    second = _StatusResponse(json.dumps({"credits_charged": 3}), status=200)
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=_tt_opener(first, second))
+    assert caught.value.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+    assert caught.value.credits_charged == 5

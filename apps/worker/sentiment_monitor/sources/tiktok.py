@@ -68,7 +68,7 @@ def fetch_tiktok_mentions(
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
     credits: list[int | None] = []
-    returned = 0
+    returned: int | None = None
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
 
@@ -94,7 +94,7 @@ def fetch_tiktok_mentions(
             for item in raw
             if isinstance(item, dict)
         ]
-        returned += len(raw)
+        returned = len(raw) if returned is None else returned + len(raw)
         collected.extend(items)
         if raw and not has_usable_mentions(items):
             raise ScrapeCreatorsError(

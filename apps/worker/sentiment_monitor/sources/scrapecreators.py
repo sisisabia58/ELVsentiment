@@ -57,13 +57,17 @@ def known_credits(values: list[int | None]) -> int | None:
     return sum(known) if known else None
 
 
-def failure_counts(returned: int, collected: list[dict[str, Any]]) -> dict[str, int]:
+def failure_counts(
+    returned: int | None, collected: list[dict[str, Any]]
+) -> dict[str, int]:
     unique = dedupe_mentions(collected)
-    return {
-        "returned": returned,
+    counts = {
         "parsed": len(collected),
         "deduplicated": len(collected) - len(unique),
     }
+    if returned is not None:
+        counts["returned"] = returned
+    return counts
 
 
 def has_usable_mentions(mentions: list[dict[str, Any]]) -> bool:
@@ -73,7 +77,7 @@ def has_usable_mentions(mentions: list[dict[str, Any]]) -> bool:
 def carry_attempt_context(
     error: ScrapeCreatorsError,
     credits: list[int | None],
-    returned: int,
+    returned: int | None,
     collected: list[dict[str, Any]],
     *,
     http_status: int | None = None,
@@ -81,12 +85,16 @@ def carry_attempt_context(
     if error.credits_charged is not None:
         credits.append(error.credits_charged)
     error.credits_charged = known_credits(credits)
-    extra_returned = 0
+    extra_returned = None
     if isinstance(error.counts, dict):
         known_returned = error.counts.get("returned")
         if type(known_returned) is int and known_returned >= 0:
             extra_returned = known_returned
-    error.counts = failure_counts(returned + extra_returned, collected)
+    if returned is None and extra_returned is None:
+        total_returned = None
+    else:
+        total_returned = (returned or 0) + (extra_returned or 0)
+    error.counts = failure_counts(total_returned, collected)
     if error.http_status is None and http_status is not None:
         error.http_status = http_status
     return error
