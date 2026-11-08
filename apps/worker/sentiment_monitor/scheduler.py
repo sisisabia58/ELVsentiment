@@ -215,6 +215,7 @@ _SAFE_DETAIL_CODES = frozenset(
         "malformed_posts",
         "collection_failed",
         "storage_failed",
+        "storage_commit_unknown",
         "sources_unavailable",
         "credential_unapproved",
         "claim_expired",
@@ -267,10 +268,21 @@ def _safe_error_label(error: Exception) -> str:
     return f"{class_name} {safe_code}"[:_MAX_SAFE_LABEL_LENGTH]
 
 
+def _safe_log(log, message: str) -> None:
+    """Logging must never change data or job outcome, and never recurse."""
+    try:
+        log(message)
+    except Exception:
+        return
+
+
 def _log_exception(error: Exception) -> None:
     if getattr(error, "_monitor_logged", False):
         return
-    print(format_log(_safe_error_label(error)))
+    try:
+        print(format_log(_safe_error_label(error)))
+    except Exception:
+        pass
     try:
         error._monitor_logged = True
     except Exception:
@@ -420,19 +432,68 @@ def store_source(
     )
 
 
-def _call(connect, fn, *, log_error: bool = True):
+class _CommitFailed(Exception):
+    """commit() itself raised, so durability is unknown."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__("commit_failed")
+        self.error = error
+
+
+class _CloseFailed(Exception):
+    """Cleanup/close raised after commit() had already returned successfully."""
+
+    def __init__(self, error: Exception, result: Any) -> None:
+        super().__init__("close_failed_after_commit")
+        self.error = error
+        self.result = result
+
+
+def _call(connect, fn, *, log_error: bool = True, receipt: dict | None = None):
     conn = connect()
+    result = None
+    committed = False
+    failing = False
     try:
         result = fn(conn)
-        conn.commit()
+        try:
+            conn.commit()
+        except Exception as error:
+            failing = True
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if log_error:
+                _log_exception(error)
+            if receipt is not None:
+                raise _CommitFailed(error) from None
+            raise
+        committed = True
+        if receipt is not None:
+            receipt["committed"] = True
         return result
+    except _CommitFailed:
+        raise
     except Exception as error:
-        conn.rollback()
+        failing = True
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         if log_error:
             _log_exception(error)
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception as close_error:
+            if committed and not failing:
+                if receipt is not None:
+                    raise _CloseFailed(close_error, result) from None
+                raise
+            if not failing:
+                raise
 
 
 def _heartbeat_log_seconds(explicit: int | None) -> int:
@@ -554,7 +615,7 @@ def _log_collection(
     source: str,
     outcome: str,
     counts: Mapping[str, Any] | None,
-    saved: int,
+    saved: int | str,
     *,
     http_status: int | None = None,
     credits: int | None = None,
@@ -568,7 +629,7 @@ def _log_collection(
         f"http_status={http_status if http_status is not None else '-'} "
         f"credits_charged={credits if credits is not None else '-'} detail={detail}"
     )
-    log(format_log(line))
+    _safe_log(log, format_log(line))
 
 
 def _log_status_write_failed(log, job, source: str, error: Exception) -> None:
@@ -576,7 +637,15 @@ def _log_status_write_failed(log, job, source: str, error: Exception) -> None:
         f"source_status_write_failed job_id={job['id']} project_id={job['project_id']} "
         f"source={source} error={_safe_error_label(error)}"
     )
-    log(format_log(line))
+    _safe_log(log, format_log(line))
+
+
+def _log_cleanup_failed(log, job, source: str, error: Exception) -> None:
+    line = (
+        f"source_cleanup_failed job_id={job['id']} project_id={job['project_id']} "
+        f"source={source} error={_safe_error_label(error)}"
+    )
+    _safe_log(log, format_log(line))
 
 
 def _record_source_ready(connect, log, job, source: str) -> None:
@@ -601,6 +670,8 @@ def _job_context(job) -> dict[str, Any]:
         "credits": None,
         "http_status": None,
         "committed": False,
+        "saved": None,
+        "reported": False,
     }
 
 
@@ -611,6 +682,50 @@ def _reset_source_attempt(context: dict[str, Any], source: str) -> None:
     context["credits"] = None
     context["http_status"] = None
     context["committed"] = False
+    context["saved"] = None
+    context["reported"] = False
+
+
+def _commit_source(
+    connect,
+    log,
+    job,
+    context: dict[str, Any],
+    store_fn,
+    *,
+    counts: Mapping[str, Any] | None,
+    credits: int | None = None,
+    http_status: int | None = None,
+) -> int:
+    """Store, then emit exactly one success line once the commit was reached.
+
+    A close failure after commit keeps the returned saved count and logs a
+    distinct cleanup line. A commit failure propagates as _CommitFailed so the
+    caller can report an unknown outcome instead of a false rollback.
+    """
+    cleanup_error = None
+    try:
+        saved = _call(connect, store_fn, receipt=context)
+    except _CloseFailed as error:
+        saved = error.result
+        cleanup_error = error.error
+    context["committed"] = True
+    context["saved"] = saved
+    _record_source_ready(connect, log, job, context["source"])
+    _log_collection(
+        log,
+        job,
+        context["source"],
+        "success",
+        counts,
+        saved,
+        http_status=http_status,
+        credits=credits,
+    )
+    context["reported"] = True
+    if cleanup_error is not None:
+        _log_cleanup_failed(log, job, context["source"], cleanup_error)
+    return saved
 
 
 def _log_job_finalize_failed(log, job, error: Exception) -> None:
@@ -618,7 +733,7 @@ def _log_job_finalize_failed(log, job, error: Exception) -> None:
         f"job_finalize_failed job_id={job['id']} project_id={job['project_id']} "
         f"error={_safe_error_label(error)}"
     )
-    log(format_log(line))
+    _safe_log(log, format_log(line))
 
 
 def admit_threads_queries(conn, limits) -> tuple[bool, str | None]:
@@ -748,10 +863,16 @@ def serve(
                                 ):
                                     return store_source(conn, job, mentions, key, "x", floor, marker_since)
 
-                                x_saved = _call(connect, store_x)
-                                context["committed"] = True
-                                _record_source_ready(connect, log, job, "x")
-                                _log_collection(log, job, "x", "success", x_counts, x_saved)
+                                _commit_source(
+                                    connect,
+                                    log,
+                                    job,
+                                    context,
+                                    store_x,
+                                    counts=x_counts,
+                                    credits=None,
+                                    http_status=None,
+                                )
                             if "threads" in sources and fetch_threads is not None:
                                 _reset_source_attempt(context, "threads")
                                 context["attempt"] = True
@@ -776,18 +897,15 @@ def serve(
                                 ):
                                     return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
 
-                                threads_saved = _call(connect, store_threads)
-                                context["committed"] = True
-                                _record_source_ready(connect, log, job, "threads")
-                                _log_collection(
+                                _commit_source(
+                                    connect,
                                     log,
                                     job,
-                                    "threads",
-                                    "success",
-                                    threads_counts,
-                                    threads_saved,
-                                    http_status=threads_http_status,
+                                    context,
+                                    store_threads,
+                                    counts=threads_counts,
                                     credits=threads_credits,
+                                    http_status=threads_http_status,
                                 )
                             if "instagram" in sources and fetch_instagram is not None:
                                 _reset_source_attempt(context, "instagram")
@@ -813,18 +931,15 @@ def serve(
                                 ):
                                     return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
 
-                                ig_saved = _call(connect, store_instagram)
-                                context["committed"] = True
-                                _record_source_ready(connect, log, job, "instagram")
-                                _log_collection(
+                                _commit_source(
+                                    connect,
                                     log,
                                     job,
-                                    "instagram",
-                                    "success",
-                                    ig_counts,
-                                    ig_saved,
-                                    http_status=ig_http_status,
+                                    context,
+                                    store_instagram,
+                                    counts=ig_counts,
                                     credits=ig_credits,
+                                    http_status=ig_http_status,
                                 )
                             if "tiktok" in sources and fetch_tiktok is not None:
                                 _reset_source_attempt(context, "tiktok")
@@ -850,22 +965,34 @@ def serve(
                                 ):
                                     return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
 
-                                tt_saved = _call(connect, store_tiktok)
-                                context["committed"] = True
-                                _record_source_ready(connect, log, job, "tiktok")
-                                _log_collection(
+                                _commit_source(
+                                    connect,
                                     log,
                                     job,
-                                    "tiktok",
-                                    "success",
-                                    tt_counts,
-                                    tt_saved,
-                                    http_status=tt_http_status,
+                                    context,
+                                    store_tiktok,
+                                    counts=tt_counts,
                                     credits=tt_credits,
+                                    http_status=tt_http_status,
                                 )
                             if collected is not None and collected.blocked_detail:
                                 blocked_detail = collected.blocked_detail
                                 break
+            except _CommitFailed:
+                source = context["source"] or "threads"
+                _log_collection(
+                    log,
+                    job,
+                    source,
+                    "storage_commit_unknown",
+                    context["counts"],
+                    "-",
+                    http_status=context["http_status"],
+                    credits=context["credits"],
+                    detail="storage_commit_unknown",
+                )
+                fail_job("storage_commit_unknown")
+                continue
             except SourceFetchError as error:
                 detail = error.detail
                 state = error.state
@@ -899,6 +1026,21 @@ def serve(
                 fail_job(detail)
                 continue
             except Exception as error:
+                if context["committed"]:
+                    if not context["reported"]:
+                        _log_collection(
+                            log,
+                            job,
+                            context["source"],
+                            "success",
+                            context["counts"],
+                            context["saved"] if context["saved"] is not None else "-",
+                            http_status=context["http_status"],
+                            credits=context["credits"],
+                        )
+                        context["reported"] = True
+                    _log_cleanup_failed(log, job, context["source"], error)
+                    continue
                 if context["attempt"]:
                     _log_collection(
                         log,
@@ -939,7 +1081,7 @@ def serve(
                     fail_job("storage_failed")
         now = monotonic()
         if last_logged is None or now - last_logged >= interval:
-            log(format_log(f"worker heartbeat id={worker_id}"))
+            _safe_log(log, format_log(f"worker heartbeat id={worker_id}"))
             last_logged = now
         sleep(limits.worker_poll_seconds)
 

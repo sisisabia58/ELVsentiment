@@ -577,3 +577,183 @@ def test_postgres16_top_level_mention_write_commits_and_rolls_back(pg16):
         )
     finally:
         reader.close()
+
+
+class _RealCommitMixedConn:
+    """Route persistence tables to a real PG16 connection, keep loop fixtures scripted."""
+
+    def __init__(self, world, live_url, fault):
+        from test_scheduler import _LoopConn
+
+        self._loop = _LoopConn(world)
+        self.live = psycopg.connect(live_url)
+        from sentiment_monitor.scheduler import CursorRowAdapter
+
+        self.adapter = CursorRowAdapter(self.live)
+        self.fault = fault
+        self.wrote = False
+        self.committed = False
+        self.commits = 0
+        self.manages_transactions = fault == "commit_raises"
+
+    def execute(self, sql, params=None):
+        compact = " ".join(sql.lower().split())
+        if self.fault == "write_raises" and "insert into mentions" in compact:
+            raise RuntimeError("synthetic mention write failure")
+        if "insert into mentions" in compact:
+            self.wrote = True
+        persisted = (
+            "insert into mentions",
+            "insert into source_cursors",
+            "insert into source_status",
+            "select set_config",
+            "update jobs",
+            "update project_schedules",
+            "from source_cursors",
+            "x_read_counters",
+            "threads_query_log",
+        )
+        if any(token in compact for token in persisted) or compact in ("begin", "commit", "rollback"):
+            return self.adapter.execute(sql, params)
+        return self._loop.execute(sql, params)
+
+    def transaction(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    def commit(self):
+        self.commits += 1
+        if self.fault == "commit_raises" and self.wrote:
+            if self.commits == 1:
+                return
+            raise RuntimeError("synthetic commit failure")
+        self.live.commit()
+        self.committed = True
+
+    def rollback(self):
+        self.live.rollback()
+
+    def close(self):
+        self.live.close()
+        if self.fault == "close_after_commit" and self.wrote and self.committed:
+            raise RuntimeError("synthetic close failure after commit")
+
+
+def _run_real_commit_scenario(conn, root, source, fault, index):
+    from unittest.mock import patch
+
+    from sentiment_monitor.limits import load_limits
+    from sentiment_monitor.scheduler import serve
+    from test_scheduler import LoopWorld, _due_job, _policy_root
+
+    live_url = _db_url("sm_pg16")
+    job_id = f"e0000000-0000-4000-8000-{index:012d}"
+    external_id = f"{source}-{index}" if source != "x" else str(1000 + index)
+    conn.execute(
+        "insert into project_schedules(project_id, customer_id, enabled, interval_hours, time_zone, next_run_at) "
+        "values (%s, %s, false, 6, 'Asia/Jakarta', now()) on conflict (project_id) do nothing",
+        (PROJECT_A, CUSTOMER_A),
+    )
+    conn.execute(
+        "insert into jobs(id, customer_id, project_id, kind, status, run_after, created_at) "
+        "values (%s, %s, %s, 'manual', 'queued', now(), now())",
+        (job_id, CUSTOMER_A, PROJECT_A),
+    )
+    conn.commit()
+
+    job = {**_due_job(), "id": job_id, "customer_id": CUSTOMER_A, "project_id": PROJECT_A}
+    world = LoopWorld(jobs=[job], variants=["qa_local"], cursor=None)
+    world.sources = [source]
+    lines = []
+
+    def logger(line):
+        if fault == "logger_after_commit" and line.startswith("source_collection"):
+            lines.append(line)
+            raise RuntimeError("synthetic logger failure after commit")
+        lines.append(line)
+
+    mention = {
+        "external_id": external_id,
+        "excerpt": "synthetic",
+        "url": None,
+        "author": None,
+        "posted_at": "2026-11-01T00:00:00Z",
+        "variant": "qa_local",
+    }
+
+    def fetch_x(variant, limit, cursor, since=None, since_id=None):
+        return ([dict(mention, variant=variant)], None)
+
+    def fetch_dict(variant):
+        return {
+            "mentions": [dict(mention, variant=variant)],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with patch("sentiment_monitor.scheduler.sources_allowed", return_value=[source]):
+        with pytest.raises(SystemExit):
+            serve(
+                lambda: _RealCommitMixedConn(world, live_url, fault),
+                stop,
+                load_limits(Path("config/limits.json"), {}),
+                "qa-worker",
+                root,
+                fetch_x,
+                fetch_dict,
+                log=logger,
+                fetch_instagram=fetch_dict,
+                fetch_tiktok=fetch_dict,
+            )
+    return job_id, external_id, lines, world
+
+
+@pytest.mark.parametrize("fault", ["close_after_commit", "commit_raises", "write_raises", "logger_after_commit"])
+def test_postgres16_commit_receipt_statuses_for_all_sources(pg16, tmp_path, fault):
+    conn = pg16
+    _seed(conn)
+    from test_scheduler import _policy_root
+
+    root = _policy_root(tmp_path, True)
+    for index, source in enumerate(("threads", "instagram", "tiktok", "x"), start=1):
+        job_id, external_id, lines, world = _run_real_commit_scenario(conn, root, source, fault, index)
+        observer = psycopg.connect(_db_url("sm_pg16"))
+        try:
+            job = observer.execute("select status, status_detail from jobs where id = %s", (job_id,)).fetchone()
+            mention_count = observer.execute(
+                "select count(*) from mentions where customer_id = %s and source = %s and external_id = %s",
+                (CUSTOMER_A, source, external_id),
+            ).fetchone()[0]
+            cursor = observer.execute(
+                "select incremental_cursor from source_cursors where query_key = %s and source = %s",
+                (f"{CUSTOMER_A}:{PROJECT_A}:qa_local", source),
+            ).fetchone()
+        finally:
+            observer.close()
+
+        source_lines = [line for line in lines if line.startswith("source_collection")]
+        if fault == "close_after_commit":
+            assert job == ("succeeded", None), (source, job)
+            assert mention_count == 1 and cursor is not None, source
+            assert len(source_lines) == 1 and "outcome=success" in source_lines[0] and "saved=1" in source_lines[0]
+            assert any(line.startswith("source_cleanup_failed") for line in lines)
+        elif fault == "commit_raises":
+            assert job == ("failed", "storage_commit_unknown"), (source, job)
+            assert mention_count == 0 and cursor is None, source
+            assert len(source_lines) == 1 and "outcome=storage_commit_unknown" in source_lines[0]
+            assert "saved=-" in source_lines[0]
+        elif fault == "write_raises":
+            assert job == ("failed", "storage_failed"), (source, job)
+            assert mention_count == 0 and cursor is None, source
+            assert len(source_lines) == 1 and "outcome=storage_failed" in source_lines[0]
+            assert "saved=0" in source_lines[0]
+        else:
+            assert job == ("succeeded", None), (source, job)
+            assert mention_count == 1 and cursor is not None, source
+            assert len(source_lines) == 1 and "outcome=success" in source_lines[0] and "saved=1" in source_lines[0]
+            assert not any("outcome=storage_failed" in line for line in source_lines)

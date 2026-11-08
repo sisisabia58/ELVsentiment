@@ -2005,3 +2005,224 @@ def test_job_finalization_failure_keeps_committed_source_outcome(tmp_path):
     failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
     assert failed == [("storage_failed", "job-1")]
     assert [sql for sql, _params in world.calls].count("COMMIT") >= 2
+
+
+class _WroteConn(_LoopConn):
+    def __init__(self, world):
+        super().__init__(world)
+        self.wrote = False
+        self.committed = False
+
+    def execute(self, sql, params=None):
+        if "insert into mentions" in sql.lower():
+            self.wrote = True
+            super().execute(sql, params)
+            return [{"id": "local-insert"}]
+        return super().execute(sql, params)
+
+
+class _CloseFailAfterCommit(_WroteConn):
+    def commit(self):
+        super().commit()
+        self.committed = True
+
+    def close(self):
+        if self.wrote and self.committed:
+            raise RuntimeError("synthetic close failure after commit")
+
+
+class _CommitFailAfterWrite(_WroteConn):
+    manages_transactions = True
+
+    def __init__(self, world):
+        super().__init__(world)
+        self.commits = 0
+
+    def transaction(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    def commit(self):
+        self.commits += 1
+        if self.wrote and self.commits >= 2:
+            raise RuntimeError("synthetic commit failure")
+        super().commit()
+
+
+class _WriteFail(_LoopConn):
+    def execute(self, sql, params=None):
+        if "insert into mentions" in sql.lower():
+            raise RuntimeError("synthetic mention write failure")
+        return super().execute(sql, params)
+
+
+def _source_fetchers():
+    def fetch_x(variant, limit, cursor, since=None, since_id=None):
+        return (
+            [{"external_id": "100", "excerpt": "synthetic", "url": None, "author": None,
+              "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            None,
+        )
+
+    def fetch_dict(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+        }
+
+    return fetch_x, fetch_dict
+
+
+def _collect_source(source, connect, tmp_path, log, world=None):
+    from unittest.mock import patch
+
+    if world is None:
+        world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = [source]
+
+    def stop(_seconds):
+        raise SystemExit
+
+    fetch_x, fetch_dict = _source_fetchers()
+    with patch("sentiment_monitor.scheduler.sources_allowed", return_value=[source]):
+        with pytest.raises(SystemExit):
+            serve(
+                connect,
+                stop,
+                load_limits(Path("config/limits.json"), {}),
+                "worker-1",
+                _policy_root(tmp_path, True),
+                fetch_x,
+                fetch_dict,
+                log=log,
+                fetch_instagram=fetch_dict,
+                fetch_tiktok=fetch_dict,
+            )
+    return world
+
+
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+def test_committed_close_failure_keeps_success_and_succeeds_job(tmp_path, source):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source(source, lambda: _CloseFailAfterCommit(world), tmp_path, lines.append, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 1
+    assert "outcome=success" in source_lines[0]
+    assert "saved=1" in source_lines[0]
+    assert not any("outcome=storage_failed" in line for line in source_lines)
+    assert any(line.startswith("source_cleanup_failed") for line in lines)
+    assert any("status = 'succeeded'" in sql for sql, _params in world.calls)
+    assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
+
+
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+def test_logger_failure_after_commit_keeps_one_success_line_and_job(tmp_path, source):
+    lines = []
+
+    def log(line):
+        if line.startswith("source_collection"):
+            lines.append(line)
+            raise RuntimeError("synthetic logger failure after write")
+        lines.append(line)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world = _collect_source(source, lambda: _WroteConn(world), tmp_path, log, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 1
+    assert "outcome=success" in source_lines[0] and "saved=1" in source_lines[0]
+    assert not any("outcome=storage_failed" in line for line in source_lines)
+    assert any("status = 'succeeded'" in sql for sql, _params in world.calls)
+    assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
+
+
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+def test_logger_failure_before_recording_success_never_invents_rollback(tmp_path, source):
+    lines = []
+
+    def log(line):
+        if line.startswith("source_collection"):
+            raise RuntimeError("synthetic logger failure before write")
+        lines.append(line)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world = _collect_source(source, lambda: _WroteConn(world), tmp_path, log, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert not any("outcome=storage_failed" in line for line in source_lines)
+    assert not any("saved=0" in line for line in source_lines)
+    assert any("status = 'succeeded'" in sql for sql, _params in world.calls)
+    assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
+
+
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+def test_commit_failure_logs_commit_unknown_not_false_rollback(tmp_path, source):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source(source, lambda: _CommitFailAfterWrite(world), tmp_path, lines.append, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 1
+    assert "outcome=storage_commit_unknown" in source_lines[0]
+    assert "saved=-" in source_lines[0]
+    assert "detail=storage_commit_unknown" in source_lines[0]
+    assert not any("outcome=storage_failed" in line for line in source_lines)
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
+    assert failed == [("storage_commit_unknown", "job-1")]
+
+
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+def test_write_failure_before_commit_still_logs_true_rollback(tmp_path, source):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source(source, lambda: _WriteFail(world), tmp_path, lines.append, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 1
+    assert "outcome=storage_failed" in source_lines[0]
+    assert "saved=0" in source_lines[0]
+    assert "detail=storage_failed" in source_lines[0]
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
+    assert failed == [("storage_failed", "job-1")]
+
+
+def test_commit_unknown_is_isolated_to_one_job(tmp_path):
+    job2 = {**_due_job(), "id": "job-2"}
+    state = {"fired": False}
+
+    class FirstCommitFails(_WroteConn):
+        manages_transactions = True
+
+        def __init__(self, world):
+            super().__init__(world)
+            self.commits = 0
+
+        def transaction(self):
+            from contextlib import nullcontext
+
+            return nullcontext()
+
+        def commit(self):
+            self.commits += 1
+            if self.wrote and self.commits >= 2 and not state["fired"]:
+                state["fired"] = True
+                raise RuntimeError("synthetic first commit failure")
+            super().commit()
+
+    world = LoopWorld(jobs=[_due_job(), job2], variants=["geprek gembus"], cursor=None)
+    lines = []
+    world = _collect_source("threads", lambda: FirstCommitFails(world), tmp_path, lines.append, world=world)
+
+    source_lines = [line for line in lines if line.startswith("source_collection")]
+    assert len(source_lines) == 2
+    assert sum("outcome=storage_commit_unknown" in line for line in source_lines) == 1
+    assert sum("outcome=success" in line and "saved=1" in line for line in source_lines) == 1
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
+    assert failed == [("storage_commit_unknown", "job-1")]
+    assert any("status = 'succeeded'" in sql and params == ("job-2",) for sql, params in world.calls)
