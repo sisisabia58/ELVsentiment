@@ -92,6 +92,26 @@ def carry_attempt_context(
     return error
 
 
+class FetchedJSON(dict):
+    """Decoded JSON object plus the transport status that produced it."""
+
+    def __init__(self, data: dict[str, Any], http_status: int | None) -> None:
+        super().__init__(data)
+        self.http_status = http_status
+
+
+def _response_status(response: Any) -> int | None:
+    status = getattr(response, "status", None)
+    if type(status) is int:
+        return status
+    getcode = getattr(response, "getcode", None)
+    if callable(getcode):
+        value = getcode()
+        if type(value) is int:
+            return value
+    return None
+
+
 def fetch_scrapecreators_json(
     path: str,
     params: dict[str, str],
@@ -114,17 +134,22 @@ def fetch_scrapecreators_json(
     try:
         with opener(request, timeout=30) as response:
             raw = response.read()
+            http_status = _response_status(response)
     except urllib.error.HTTPError as error:
         raise ScrapeCreatorsError(f"http_{error.code}", http_status=error.code) from None
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ScrapeCreatorsError("malformed_json") from None
+        raise ScrapeCreatorsError("malformed_json", http_status=http_status) from None
     if not isinstance(data, dict):
-        raise ScrapeCreatorsError("malformed_envelope")
+        raise ScrapeCreatorsError("malformed_envelope", http_status=http_status)
     if data.get("success") is False:
-        raise ScrapeCreatorsError("success_false", credits_charged=credits_from(data))
-    return data
+        raise ScrapeCreatorsError(
+            "success_false",
+            http_status=http_status,
+            credits_charged=credits_from(data),
+        )
+    return FetchedJSON(data, http_status)
 
 
 def unix_to_iso(value: Any) -> str | None:

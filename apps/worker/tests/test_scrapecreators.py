@@ -89,3 +89,49 @@ def test_select_post_list_keeps_known_scalar_cardinality():
     with pytest.raises(ScrapeCreatorsError) as caught:
         select_post_list({"posts": {"bad": True}}, ("posts",))
     assert caught.value.counts is None
+
+
+class StatusResponse(io.StringIO):
+    def __init__(self, body, status=200):
+        super().__init__(body)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_fetch_scrapecreators_keeps_known_status_on_success_and_typed_errors():
+    def ok(request, timeout=0):
+        return StatusResponse('{"posts": []}', status=200)
+
+    payload = fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=ok)
+    assert payload.http_status == 200
+
+    def bad_json(request, timeout=0):
+        return StatusResponse("{not-json", status=200)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=bad_json)
+    assert caught.value.http_status == 200
+
+    def envelope(request, timeout=0):
+        return StatusResponse("[1, 2]", status=200)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=envelope)
+    assert caught.value.http_status == 200
+
+    def success_false(request, timeout=0):
+        return StatusResponse('{"success": false}', status=200)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=success_false)
+    assert caught.value.http_status == 200
+
+    def unknown(request, timeout=0):
+        return Response('{"posts": []}')
+
+    assert fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=unknown).http_status is None

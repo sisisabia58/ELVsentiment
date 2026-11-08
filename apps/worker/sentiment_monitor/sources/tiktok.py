@@ -70,6 +70,7 @@ def fetch_tiktok_mentions(
     credits: list[int | None] = []
     returned = 0
     collected: list[dict[str, Any]] = []
+    http_status: int | None = None
 
     for path in (TIKTOK_KEYWORD_SEARCH_PATH, TIKTOK_TOP_SEARCH_PATH):
         try:
@@ -81,12 +82,13 @@ def fetch_tiktok_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected) from None
+            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
+        http_status = getattr(payload, "http_status", None)
         credits.append(credits_from(payload))
         try:
             raw = _extract_tiktok_list(payload)
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected) from None
+            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
         items = [
             normalize_tiktok_item(item, collected_at)
             for item in raw
@@ -97,6 +99,7 @@ def fetch_tiktok_mentions(
         if raw and not has_usable_mentions(items):
             raise ScrapeCreatorsError(
                 "malformed_posts",
+                http_status=http_status,
                 credits_charged=known_credits(credits),
                 counts=failure_counts(returned, collected),
             )
@@ -111,4 +114,5 @@ def fetch_tiktok_mentions(
             "deduplicated": len(collected) - len(mentions),
         },
         "credits_charged": known_credits(credits),
+        "http_status": http_status,
     }

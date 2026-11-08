@@ -222,3 +222,25 @@ def test_instagram_scalar_only_second_list_keeps_accumulated_returned():
     assert caught.value.code == "malformed_posts"
     assert caught.value.counts == {"returned": 3, "parsed": 1, "deduplicated": 0}
     assert caught.value.credits_charged == 5
+
+
+class _StatusResponse(io.StringIO):
+    def __init__(self, body, status=200):
+        super().__init__(body)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_instagram_uses_last_attempted_endpoint_status():
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return _StatusResponse('{"reels": []}', status=201)
+        return _StatusResponse('{"posts": []}', status=200)
+
+    result = fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+    assert result["http_status"] == 200

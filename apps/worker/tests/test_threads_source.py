@@ -167,3 +167,25 @@ def test_threads_scalar_only_list_keeps_raw_returned_count():
     assert caught.value.code == "malformed_posts"
     assert caught.value.counts == {"returned": 2, "parsed": 0, "deduplicated": 0}
     assert caught.value.credits_charged == 2
+
+
+class _StatusResponse(io.StringIO):
+    def __init__(self, body, status=200):
+        super().__init__(body)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_threads_success_result_keeps_known_response_status():
+    result = fetch_threads_mentions(
+        "kopi",
+        "key",
+        "2026-11-01T00:00:00Z",
+        opener=lambda *args, **kwargs: _StatusResponse('{"posts": []}', status=200),
+    )
+    assert result["http_status"] == 200

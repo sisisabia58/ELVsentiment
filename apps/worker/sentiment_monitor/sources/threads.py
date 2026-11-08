@@ -88,11 +88,12 @@ def fetch_threads_mentions(
         region=region,
         opener=opener,
     )
+    http_status = getattr(payload, "http_status", None)
     credits: list[int | None] = [credits_from(payload)]
     try:
         raw_items = select_post_list(payload, ("posts", "items", "data"))
     except ScrapeCreatorsError as error:
-        raise carry_attempt_context(error, credits, 0, []) from None
+        raise carry_attempt_context(error, credits, 0, [], http_status=http_status) from None
     items = [
         normalize_threads_item(item, collected_at)
         for item in raw_items
@@ -102,6 +103,7 @@ def fetch_threads_mentions(
     if raw_items and not has_usable_mentions(items):
         raise ScrapeCreatorsError(
             "malformed_posts",
+            http_status=http_status,
             credits_charged=known_credits(credits),
             counts=failure_counts(len(raw_items), items),
         )
@@ -114,6 +116,7 @@ def fetch_threads_mentions(
             "deduplicated": len(items) - len(mentions),
         },
         "credits_charged": known_credits(credits),
+        "http_status": http_status,
     }
 
 

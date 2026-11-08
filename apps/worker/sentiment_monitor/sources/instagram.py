@@ -94,6 +94,7 @@ def fetch_instagram_mentions(
     credits: list[int | None] = []
     returned = 0
     collected: list[dict[str, Any]] = []
+    http_status: int | None = None
 
     try:
         reels_payload = fetch_scrapecreators_json(
@@ -104,13 +105,14 @@ def fetch_instagram_mentions(
             opener=opener,
         )
     except ScrapeCreatorsError as error:
-        raise carry_attempt_context(error, credits, returned, collected) from None
+        raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
+    http_status = getattr(reels_payload, "http_status", None)
     credits.append(credits_from(reels_payload))
 
     try:
         reels_raw = select_post_list(reels_payload, ("reels", "items", "data"))
     except ScrapeCreatorsError as error:
-        raise carry_attempt_context(error, credits, returned, collected) from None
+        raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
     reels_items = [
         normalize_instagram_item(item, collected_at)
         for item in reels_raw
@@ -121,6 +123,7 @@ def fetch_instagram_mentions(
     if reels_raw and not has_usable_mentions(reels_items):
         raise ScrapeCreatorsError(
             "malformed_posts",
+            http_status=http_status,
             credits_charged=known_credits(credits),
             counts=failure_counts(returned, collected),
         )
@@ -136,12 +139,13 @@ def fetch_instagram_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected) from None
+            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
+        http_status = getattr(hashtag_payload, "http_status", None)
         credits.append(credits_from(hashtag_payload))
         try:
             hashtag_raw = select_post_list(hashtag_payload, ("posts", "items", "medias", "data"))
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected) from None
+            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
         hashtag_items = [
             normalize_instagram_item(item, collected_at)
             for item in hashtag_raw
@@ -152,6 +156,7 @@ def fetch_instagram_mentions(
         if hashtag_raw and not has_usable_mentions(hashtag_items):
             raise ScrapeCreatorsError(
                 "malformed_posts",
+                http_status=http_status,
                 credits_charged=known_credits(credits),
                 counts=failure_counts(returned, collected),
             )
@@ -166,4 +171,5 @@ def fetch_instagram_mentions(
             "deduplicated": len(collected) - len(mentions),
         },
         "credits_charged": known_credits(credits),
+        "http_status": http_status,
     }

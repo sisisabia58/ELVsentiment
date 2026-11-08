@@ -1901,3 +1901,65 @@ def test_multi_source_multi_variant_resets_attempt_context(tmp_path):
         "returned=2" in line and "credits_charged=3" in line and "http_status=201" in line
         for line in instagram
     )
+
+
+def test_success_and_storage_failure_logs_carry_known_http_status(tmp_path):
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    root = _policy_root(tmp_path, True)
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+    with pytest.raises(SystemExit):
+        serve(world.connect, stop, load_limits(Path("config/limits.json"), {}),
+              "worker-1", root,
+              lambda *_args, **_kwargs: ([], None), fetch_threads, log=lines.append)
+    assert "http_status=200" in next(line for line in lines if line.startswith("source_collection"))
+
+    class StoreFailConn(_LoopConn):
+        def execute(self, sql, params=None):
+            if "insert into mentions" in sql.lower():
+                raise RuntimeError("synthetic storage failure")
+            return super().execute(sql, params)
+
+    world2 = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world2.sources = ["threads"]
+    lines2 = []
+    with pytest.raises(SystemExit):
+        serve(lambda: StoreFailConn(world2), stop, load_limits(Path("config/limits.json"), {}),
+              "worker-1", root,
+              lambda *_args, **_kwargs: ([], None), fetch_threads, log=lines2.append)
+    storage = next(line for line in lines2 if line.startswith("source_collection"))
+    assert "outcome=storage_failed" in storage and "http_status=200" in storage
+
+
+def test_unknown_http_status_stays_dash(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(world.connect, stop, load_limits(Path("config/limits.json"), {}),
+              "worker-1", _policy_root(tmp_path, True),
+              lambda *_args, **_kwargs: ([], None), fetch_threads, log=lines.append)
+    assert "http_status=-" in next(line for line in lines if line.startswith("source_collection"))

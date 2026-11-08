@@ -184,3 +184,29 @@ def test_tiktok_scalar_only_second_list_keeps_accumulated_returned():
     assert caught.value.code == "malformed_posts"
     assert caught.value.counts == {"returned": 3, "parsed": 1, "deduplicated": 0}
     assert caught.value.credits_charged == 5
+
+
+class _StatusResponse(io.StringIO):
+    def __init__(self, body, status=200):
+        super().__init__(body)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_tiktok_malformed_second_endpoint_keeps_its_response_status():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    def opener(request, timeout=0):
+        if "/v1/tiktok/search/keyword" in request.full_url:
+            return _StatusResponse('{"search_item_list": []}', status=201)
+        return _StatusResponse("{not-json", status=202)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+    assert caught.value.code == "malformed_json"
+    assert caught.value.http_status == 202
