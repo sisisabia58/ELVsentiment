@@ -420,7 +420,7 @@ def store_source(
     )
 
 
-def _call(connect, fn):
+def _call(connect, fn, *, log_error: bool = True):
     conn = connect()
     try:
         result = fn(conn)
@@ -428,7 +428,8 @@ def _call(connect, fn):
         return result
     except Exception as error:
         conn.rollback()
-        _log_exception(error)
+        if log_error:
+            _log_exception(error)
         raise
     finally:
         conn.close()
@@ -581,6 +582,7 @@ def _record_source_ready(connect, log, job, source: str) -> None:
             lambda conn: record_source_success(
                 conn, job["customer_id"], job["project_id"], source
             ),
+            log_error=False,
         )
     except Exception as status_error:
         _log_status_write_failed(log, job, source, status_error)
@@ -825,6 +827,7 @@ def serve(
                                 detail,
                                 state,
                             ),
+                            log_error=False,
                         )
                     except Exception as status_error:
                         _log_status_write_failed(log, job, current_source, status_error)

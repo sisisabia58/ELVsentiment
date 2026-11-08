@@ -1544,7 +1544,7 @@ def test_status_write_failure_logs_one_safe_structured_line(capsys):
     assert captured.err == ""
     assert len(lines) == 1
     assert lines[0].startswith("source_status_write_failed")
-    assert "Exception other" in lines[0]
+    assert "RuntimeError other" in lines[0]
     assert "private_keyword" not in lines[0]
 
 
