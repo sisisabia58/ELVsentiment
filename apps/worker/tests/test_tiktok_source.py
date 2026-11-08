@@ -169,3 +169,18 @@ def test_tiktok_missing_or_malformed_list_fails_safely():
     with pytest.raises(ScrapeCreatorsError) as caught:
         _tiktok(({"search_item_list": [{}]}, {"search_item_list": []}))
     assert caught.value.code == "malformed_posts"
+
+
+def test_tiktok_scalar_only_second_list_keeps_accumulated_returned():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(
+            (
+                {"search_item_list": [{"aweme_id": "1"}], "credits_charged": 2},
+                {"search_item_list": [1, 2], "credits_charged": 3},
+            )
+        )
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.counts == {"returned": 3, "parsed": 1, "deduplicated": 0}
+    assert caught.value.credits_charged == 5

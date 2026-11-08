@@ -44,7 +44,10 @@ def select_post_list(payload: dict[str, Any], keys: tuple[str, ...]) -> list[Any
         if not isinstance(value, list):
             raise ScrapeCreatorsError("malformed_posts")
         if value and not any(isinstance(item, dict) for item in value):
-            raise ScrapeCreatorsError("malformed_posts")
+            raise ScrapeCreatorsError(
+                "malformed_posts",
+                counts={"returned": len(value), "parsed": 0, "deduplicated": 0},
+            )
         return value
     raise ScrapeCreatorsError("missing_posts")
 
@@ -72,11 +75,20 @@ def carry_attempt_context(
     credits: list[int | None],
     returned: int,
     collected: list[dict[str, Any]],
+    *,
+    http_status: int | None = None,
 ) -> ScrapeCreatorsError:
     if error.credits_charged is not None:
         credits.append(error.credits_charged)
     error.credits_charged = known_credits(credits)
-    error.counts = failure_counts(returned, collected)
+    extra_returned = 0
+    if isinstance(error.counts, dict):
+        known_returned = error.counts.get("returned")
+        if type(known_returned) is int and known_returned >= 0:
+            extra_returned = known_returned
+    error.counts = failure_counts(returned + extra_returned, collected)
+    if error.http_status is None and http_status is not None:
+        error.http_status = http_status
     return error
 
 

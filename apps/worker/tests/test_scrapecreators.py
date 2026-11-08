@@ -78,3 +78,14 @@ def test_select_post_list_distinguishes_missing_empty_and_malformed():
     with pytest.raises(ScrapeCreatorsError) as caught:
         select_post_list({"posts": [1, 2]}, ("posts",))
     assert caught.value.code == "malformed_posts"
+
+
+def test_select_post_list_keeps_known_scalar_cardinality():
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        select_post_list({"posts": [1, 2]}, ("posts",))
+    error = caught.value
+    assert error.code == "malformed_posts"
+    assert error.counts == {"returned": 2, "parsed": 0, "deduplicated": 0}
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        select_post_list({"posts": {"bad": True}}, ("posts",))
+    assert caught.value.counts is None

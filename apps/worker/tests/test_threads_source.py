@@ -157,3 +157,13 @@ def test_threads_missing_or_malformed_list_fails_safely():
     with pytest.raises(ScrapeCreatorsError) as caught:
         _threads({"posts": [{}]})
     assert caught.value.code == "malformed_posts"
+
+
+def test_threads_scalar_only_list_keeps_raw_returned_count():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _threads({"posts": [1, 2], "credits_charged": 2})
+    assert caught.value.code == "malformed_posts"
+    assert caught.value.counts == {"returned": 2, "parsed": 0, "deduplicated": 0}
+    assert caught.value.credits_charged == 2
