@@ -316,8 +316,8 @@ def store_source(
     source: str,
     next_cursor: str | None,
     incremental_since=None,
-) -> None:
-    PostgresStore(conn).write_mentions_and_cursor(
+) -> int:
+    return PostgresStore(conn).write_mentions_and_cursor(
         customer_id=job["customer_id"],
         project_id=job["project_id"],
         query_key=query_key,
@@ -560,6 +560,8 @@ class CursorRowAdapter:
     Only ``__main__`` connect() wraps a live connection. Scripted tests pass
     connections whose execute already returns rows and must not use this.
     """
+
+    manages_transactions = True
 
     def __init__(self, conn):
         self._conn = conn

@@ -1,6 +1,15 @@
 from contextlib import nullcontext
 
 
+def _returned_rows(result) -> int:
+    if result is None:
+        return 0
+    try:
+        return len(result)
+    except TypeError:
+        return 0
+
+
 class PostgresStore:
     def __init__(self, conn):
         self._conn = conn
@@ -68,37 +77,43 @@ class PostgresStore:
         mentions,
         next_cursor,
         incremental_since=None,
-    ) -> None:
+    ) -> int:
         self._open = True
+        saved = 0
         self._customer_id = customer_id
+        manages_transactions = bool(getattr(self._conn, "manages_transactions", False))
         start_transaction = getattr(self._conn, "transaction", None)
         scope = start_transaction() if callable(start_transaction) else nullcontext()
         try:
             with scope:
-                self._conn.execute("begin")
+                if not manages_transactions:
+                    self._conn.execute("begin")
                 self._conn.execute("select set_config('app.customer_id', %s::text, true)", (str(customer_id),))
                 for mention in mentions:
-                    self._conn.execute(
-                        """
-                        insert into mentions (
-                          id, customer_id, project_id, source, external_id, excerpt, url, author,
-                          posted_at, collected_at, matched_variants, scoring_status
-                        ) values (
-                          gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, 'pending'
+                    saved += _returned_rows(
+                        self._conn.execute(
+                            """
+                            insert into mentions (
+                              id, customer_id, project_id, source, external_id, excerpt, url, author,
+                              posted_at, collected_at, matched_variants, scoring_status
+                            ) values (
+                              gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, 'pending'
+                            )
+                            on conflict (customer_id, source, external_id) do nothing
+                            returning id
+                            """,
+                            (
+                                customer_id,
+                                project_id,
+                                source,
+                                mention["external_id"],
+                                mention["excerpt"],
+                                mention["url"],
+                                mention["author"],
+                                mention["posted_at"],
+                                [mention["variant"]],
+                            ),
                         )
-                        on conflict (customer_id, source, external_id) do nothing
-                        """,
-                        (
-                            customer_id,
-                            project_id,
-                            source,
-                            mention["external_id"],
-                            mention["excerpt"],
-                            mention["url"],
-                            mention["author"],
-                            mention["posted_at"],
-                            [mention["variant"]],
-                        ),
                     )
                 self.record_source_success(
                     query_key,
@@ -108,11 +123,14 @@ class PostgresStore:
                     next_cursor=next_cursor,
                     incremental_since=incremental_since,
                 )
-                self._conn.execute("COMMIT")
+                if not manages_transactions:
+                    self._conn.execute("COMMIT")
                 self._conn.commit()
+                return saved
         except Exception:
-            self._conn.execute("ROLLBACK")
-            self._conn.rollback()
+            if not manages_transactions:
+                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
             raise
         finally:
             self._open = False

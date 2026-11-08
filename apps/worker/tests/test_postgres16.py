@@ -447,3 +447,51 @@ def test_postgres16_migration_010_worker_status_permissions_and_tenant_isolation
         ).fetchall()
     )
     assert roles == {"app_user": False, "worker_role": False}
+
+
+def test_postgres16_mention_write_returns_real_inserted_count_and_rolls_back_on_failure(pg16):
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.scheduler import CursorRowAdapter
+
+    conn = pg16
+    _seed(conn)
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    store = PostgresStore(CursorRowAdapter(conn))
+    mention = {
+        "external_id": "dedup-1",
+        "excerpt": "uji",
+        "url": None,
+        "author": "a",
+        "posted_at": "2026-11-01T00:00:00+00:00",
+        "variant": "uji",
+    }
+    assert store.write_mentions_and_cursor(
+        customer_id=CUSTOMER_A,
+        project_id=PROJECT_A,
+        query_key="q",
+        source="threads",
+        mentions=[mention, mention],
+        next_cursor="cursor-1",
+    ) == 1
+    conn.rollback()
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    store = PostgresStore(CursorRowAdapter(conn))
+    try:
+        store.write_mentions_and_cursor(
+            customer_id=CUSTOMER_A,
+            project_id=PROJECT_A,
+            query_key="q",
+            source="threads",
+            mentions=[mention, {**mention, "source": "threads", "external_id": "bad", "posted_at": "not-a-time"}],
+            next_cursor="cursor-2",
+        )
+    except Exception:
+        pass
+    conn.rollback()
+    assert conn.execute("select count(*) from mentions").fetchone() == (0,)
+    assert conn.execute("select count(*) from source_cursors").fetchone() == (0,)

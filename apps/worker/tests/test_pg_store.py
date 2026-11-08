@@ -136,3 +136,42 @@ def test_write_mentions_enters_transaction_and_still_sends_begin_and_commit():
     assert tx.statements.index("begin") < mention_at < commit_at
     assert tx.committed is True
     assert tx.rolled_back is False
+
+
+class InsertRowsTx(Tx):
+    def __init__(self, results):
+        super().__init__()
+        self.results = list(results)
+
+    def execute(self, sql, params=None):
+        result = super().execute(sql, params)
+        if "insert into mentions" in sql:
+            return self.results.pop(0)
+        return result
+
+
+def test_saved_count_comes_from_inserted_rows_not_parsed():
+    tx = InsertRowsTx([[{"id": "one"}], [{"id": "two"}], []])
+    saved = PostgresStore(tx).write_mentions_and_cursor(
+        customer_id="customer-a",
+        project_id="project-1",
+        query_key="q",
+        source="threads",
+        mentions=[MENTION, {**MENTION, "external_id": "101"}, {**MENTION, "external_id": "102"}],
+        next_cursor="cursor-2",
+    )
+    assert saved == 2
+    assert "returning id" in "\n".join(tx.statements).lower()
+
+
+def test_saved_is_zero_when_the_driver_returns_no_rows():
+    tx = Tx()
+    saved = PostgresStore(tx).write_mentions_and_cursor(
+        customer_id="customer-a",
+        project_id="project-1",
+        query_key="q",
+        source="threads",
+        mentions=[MENTION],
+        next_cursor=None,
+    )
+    assert saved == 0
