@@ -1116,7 +1116,7 @@ def test_failed_status_update_is_redacted_and_the_loop_continues(tmp_path, monke
     assert token not in captured.out
     assert quoted not in captured.out
     assert "URL-STRING-FORM" not in captured.out
-    assert "RuntimeError unknown_error" in captured.out
+    assert "RuntimeError other" in captured.out
 
 
 def test_fetch_x_with_cursor_keeps_the_harken_cursor(monkeypatch):
@@ -1488,6 +1488,227 @@ def test_safe_error_label_never_prints_raw_provider_text():
     from sentiment_monitor.scheduler import _safe_error_label
 
     label = _safe_error_label(RuntimeError("keyword rahasia https://api.x.com/?q=rahasia secret-key"))
-    assert label == "RuntimeError unknown_error"
+    assert label == "RuntimeError other"
     assert "rahasia" not in label
     assert "secret-key" not in label
+
+
+def test_safe_error_label_uses_fixed_allowlists_and_bounds_length():
+    from sentiment_monitor.scheduler import _safe_error_label
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    for token in ["private_keyword", "this_is_private_post_text", "abc123", "a" * 500]:
+        error = Exception("not emitted")
+        error.detail = token
+        label = _safe_error_label(error)
+        assert token not in label
+        assert label == "Exception other"
+        assert len(label) <= 64
+
+    assert _safe_error_label(ScrapeCreatorsError("success_false")) == "ScrapeCreatorsError success_false"
+    assert _safe_error_label(ScrapeCreatorsError("http_401", http_status=401)) == "ScrapeCreatorsError http_401"
+    assert _safe_error_label(RuntimeError("boom")) == "RuntimeError other"
+
+    class MysteryError(Exception):
+        pass
+
+    mystery = MysteryError("boom")
+    mystery.detail = "success_false"
+    assert _safe_error_label(mystery) == "Exception success_false"
+
+
+def test_status_write_failure_logs_one_safe_structured_line(capsys):
+    from sentiment_monitor.scheduler import _record_source_ready
+
+    class Broken:
+        def execute(self, *_args, **_kwargs):
+            error = RuntimeError("private body")
+            error.detail = "private_keyword"
+            raise error
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    lines = []
+    _record_source_ready(
+        Broken,
+        lines.append,
+        {"id": "local-job", "project_id": "local-project", "customer_id": "local-tenant"},
+        "threads",
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert len(lines) == 1
+    assert lines[0].startswith("source_status_write_failed")
+    assert "Exception other" in lines[0]
+    assert "private_keyword" not in lines[0]
+
+
+def test_storage_failure_preserves_fetch_counts_and_credits(tmp_path):
+    class StoreFailConn(_LoopConn):
+        def execute(self, sql, params=None):
+            if "insert into mentions" in sql.lower():
+                raise RuntimeError("synthetic storage failure")
+            return super().execute(sql, params)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": "1", "excerpt": "synthetic", "url": None, "author": None, "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 3, "parsed": 2, "deduplicated": 1},
+            "credits_charged": 4,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: StoreFailConn(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    line = next(line for line in lines if line.startswith("source_collection"))
+    assert "outcome=storage_failed" in line
+    assert "returned=3" in line
+    assert "parsed=2" in line
+    assert "deduplicated=1" in line
+    assert "saved=0" in line
+    assert "credits_charged=4" in line
+    assert "detail=storage_failed" in line
+
+
+def test_malformed_failure_logs_known_credits_and_counts(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(_variant):
+        raise ScrapeCreatorsError(
+            "malformed_posts",
+            credits_charged=3,
+            counts={"returned": 1, "parsed": 1, "deduplicated": 1},
+        )
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    line = next(line for line in lines if line.startswith("source_collection"))
+    assert "outcome=failed" in line
+    assert "returned=1" in line
+    assert "parsed=1" in line
+    assert "deduplicated=1" in line
+    assert "saved=0" in line
+    assert "credits_charged=3" in line
+    assert "detail=threads_malformed_posts" in line
+
+
+def test_partial_multi_endpoint_failure_logs_known_counts_credits_and_status(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["instagram"]
+    lines = []
+
+    def fetch_instagram(_variant):
+        raise ScrapeCreatorsError(
+            "http_500",
+            http_status=500,
+            credits_charged=3,
+            counts={"returned": 2, "parsed": 2, "deduplicated": 0},
+        )
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            lambda *_args, **_kwargs: ([], None),
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+        )
+
+    line = next(line for line in lines if line.startswith("source_collection"))
+    assert "outcome=failed" in line
+    assert "returned=2" in line
+    assert "parsed=2" in line
+    assert "deduplicated=0" in line
+    assert "saved=0" in line
+    assert "http_status=500" in line
+    assert "credits_charged=3" in line
+    assert "detail=instagram_http_500" in line
+
+
+def test_status_write_failure_on_provider_failure_logs_one_structured_line(tmp_path, capsys):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    class StatusFailConn(_LoopConn):
+        def execute(self, sql, params=None):
+            if "insert into source_status" in sql.lower():
+                error = RuntimeError("private body")
+                error.detail = "private_keyword"
+                raise error
+            return super().execute(sql, params)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(_variant):
+        raise ScrapeCreatorsError("http_401", http_status=401)
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: StatusFailConn(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    status_lines = [line for line in lines if line.startswith("source_status_write_failed")]
+    assert len(status_lines) == 1
+    assert "private_keyword" not in "\n".join(lines)
+    assert not any(line.startswith("Exception ") or line.startswith("RuntimeError ") for line in lines)

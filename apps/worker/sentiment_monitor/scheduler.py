@@ -206,11 +206,65 @@ def format_log(
     return redacted
 
 
+_SAFE_DETAIL_CODES = frozenset(
+    {
+        "success_false",
+        "malformed_json",
+        "malformed_envelope",
+        "missing_posts",
+        "malformed_posts",
+        "collection_failed",
+        "storage_failed",
+        "sources_unavailable",
+        "credential_unapproved",
+        "claim_expired",
+        "skipped_overlap",
+        "schedule_min_interval_hours",
+        "unknown_error",
+        "other",
+        "ok",
+    }
+)
+
+_SAFE_SOURCES = ("x", "threads", "instagram", "tiktok")
+
+_SAFE_ERROR_CLASSES = frozenset(
+    {
+        "Exception",
+        "RuntimeError",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "OSError",
+        "ScrapeCreatorsError",
+        "SourceFetchError",
+        "HTTPError",
+    }
+)
+
+_MAX_SAFE_LABEL_LENGTH = 64
+
+
+def _safe_detail_code(code: str) -> str:
+    if code in _SAFE_DETAIL_CODES or re.fullmatch(r"http_[0-9]{3}", code):
+        return code
+    for source in _SAFE_SOURCES:
+        prefix = f"{source}_"
+        if not code.startswith(prefix):
+            continue
+        rest = code[len(prefix) :]
+        if rest in _SAFE_DETAIL_CODES or re.fullmatch(r"http_[0-9]{3}", rest):
+            return code
+    return "other"
+
+
 def _safe_error_label(error: Exception) -> str:
     code = getattr(error, "detail", None) or getattr(error, "code", None)
-    if not isinstance(code, str) or not re.fullmatch(r"[a-z0-9_]+", code):
-        code = "unknown_error"
-    return f"{type(error).__name__} {code}"
+    safe_code = _safe_detail_code(code) if isinstance(code, str) else "other"
+    class_name = type(error).__name__
+    if class_name not in _SAFE_ERROR_CLASSES:
+        class_name = "Exception"
+    return f"{class_name} {safe_code}"[:_MAX_SAFE_LABEL_LENGTH]
 
 
 def _log_exception(error: Exception) -> None:
