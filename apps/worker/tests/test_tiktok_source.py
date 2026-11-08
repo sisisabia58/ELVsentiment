@@ -6,7 +6,7 @@ import pytest
 from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions, normalize_tiktok_item
 
 
-def test_fetch_tiktok_runs_both_keyword_and_top_with_id_region_and_dedupes() -> None:
+def test_fetch_tiktok_runs_both_keyword_and_top_with_windows_and_dedupes() -> None:
     seen: list[tuple[str, dict[str, str]]] = []
 
     class Response(io.StringIO):
@@ -79,12 +79,14 @@ def test_fetch_tiktok_runs_both_keyword_and_top_with_id_region_and_dedupes() -> 
     top_url, top_headers = seen[1]
     assert keyword_url.startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
     assert "query=kopi+kenangan" in keyword_url
-    assert "region=ID" in keyword_url
+    assert "date_posted=this-week" in keyword_url
+    assert "region=" not in keyword_url
     assert keyword_headers.get("x-api-key") == "sc-key-tt"
 
     assert top_url.startswith("https://api.scrapecreators.com/v1/tiktok/search/top?")
     assert "query=kopi+kenangan" in top_url
-    assert "region=ID" in top_url
+    assert "publish_time=this-week" in top_url
+    assert "region=" not in top_url
     assert top_headers.get("x-api-key") == "sc-key-tt"
 
     ids = [m["external_id"] for m in result["mentions"]]
@@ -329,3 +331,48 @@ def test_tiktok_unknown_status_on_second_endpoint_does_not_inherit_first_status(
     assert error.http_status is None
     assert error.credits_charged == 2
     assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+
+
+def test_tiktok_phrase_calls_keyword_and_top_with_documented_windows_without_region():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(json.dumps({"search_item_list": []}))
+
+    fetch_tiktok_mentions("Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
+    assert len(seen) == 2
+    assert seen[0].startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
+    assert "date_posted=this-week" in seen[0]
+    assert seen[1].startswith("https://api.scrapecreators.com/v1/tiktok/search/top?")
+    assert "publish_time=this-week" in seen[1]
+    assert all("region=" not in url for url in seen)
+
+
+def test_tiktok_hashtag_calls_only_the_hashtag_route():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(json.dumps({"search_item_list": [{"aweme_id": "tt-1", "desc": "#Kopi"}]}))
+
+    result = fetch_tiktok_mentions("#Kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    assert len(seen) == 1
+    assert seen[0].startswith("https://api.scrapecreators.com/v1/tiktok/search/hashtag?")
+    assert "hashtag=kopi" in seen[0]
+    assert "region=" not in seen[0]
+    assert result["mentions"][0]["route_id"] == "tiktok.hashtag"

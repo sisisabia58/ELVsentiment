@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any, Callable
 import urllib.request
 
+from sentiment_monitor.intent import Keyword
+from sentiment_monitor.sources.routes import request_params, routes_for, within_overlap
 from sentiment_monitor.sources.scrapecreators import (
-    DEFAULT_REGION,
     ScrapeCreatorsError,
     carry_attempt_context,
     credits_from,
@@ -64,21 +65,22 @@ def fetch_tiktok_mentions(
     api_key: str,
     collected_at: str,
     *,
-    region: str = DEFAULT_REGION,
+    intent: str | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
+    keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
+    routes = routes_for("tiktok", keyword)
     credits: list[int | None] = []
     returned: int | None = None
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
 
-    for path in (TIKTOK_KEYWORD_SEARCH_PATH, TIKTOK_TOP_SEARCH_PATH):
+    for route in routes:
         try:
             payload = fetch_scrapecreators_json(
-                path,
-                {"query": variant},
+                route.path,
+                request_params(route, keyword),
                 api_key,
-                region=region,
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
@@ -89,14 +91,18 @@ def fetch_tiktok_mentions(
             raw = _extract_tiktok_list(payload)
         except ScrapeCreatorsError as error:
             raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
-        items = [
+        normalized_items = [
             normalize_tiktok_item(item, collected_at)
             for item in raw
             if isinstance(item, dict)
         ]
         returned = len(raw) if returned is None else returned + len(raw)
-        collected.extend(items)
-        if raw and not has_usable_mentions(items):
+        collected.extend(
+            {**item, "route_id": route.id}
+            for item in normalized_items
+            if within_overlap(item["posted_at"], collected_at, route)
+        )
+        if raw and not has_usable_mentions(normalized_items):
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
