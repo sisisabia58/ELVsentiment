@@ -365,3 +365,85 @@ def test_postgres16_scrapecreators_sources_constraints(pg16):
     ).fetchone()
     assert list(enabled[0]) == ["x", "threads", "instagram", "tiktok"]
 
+
+
+def test_migration_010_grants_only_worker_source_status_dml():
+    path = SQL_DIR / "010_source_status_worker.sql"
+    assert path.is_file(), "010_source_status_worker.sql must exist"
+    sql = path.read_text(encoding="utf-8").lower()
+    grants = [line for line in sql.splitlines() if line.startswith("grant")]
+    assert grants == ["grant select, insert, update on source_status to worker_role;"]
+    for policy in (
+        "source_status_worker_select",
+        "source_status_worker_insert",
+        "source_status_worker_update",
+    ):
+        assert f"create policy {policy} on source_status" in sql
+    assert "for delete" not in sql
+
+
+def test_postgres16_migration_010_worker_status_permissions_and_tenant_isolation(pg16):
+    conn = pg16
+    _seed(conn)
+    privileges = conn.execute(
+        """
+        select has_table_privilege('worker_role', 'public.source_status', 'select'),
+               has_table_privilege('worker_role', 'public.source_status', 'insert'),
+               has_table_privilege('worker_role', 'public.source_status', 'update'),
+               has_table_privilege('worker_role', 'public.source_status', 'delete'),
+               has_table_privilege('app_user', 'public.source_status', 'delete')
+        """
+    ).fetchone()
+    assert privileges == (True, True, True, False, True)
+
+    policies = dict(
+        conn.execute(
+            "select polname, polcmd from pg_policy where polrelid = 'public.source_status'::regclass"
+        ).fetchall()
+    )
+    assert policies["source_status_worker_select"] == "r"
+    assert policies["source_status_worker_insert"] == "a"
+    assert policies["source_status_worker_update"] == "w"
+    assert "source_status_worker_delete" not in policies
+
+    project_b = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    conn.execute(
+        "insert into projects (id, customer_id, brand_name, created_at) values (%s, %s, %s, now())",
+        (project_b, CUSTOMER_B, "tenant b"),
+    )
+    conn.commit()
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    conn.execute(
+        """
+        insert into source_status (customer_id, project_id, source, state, detail, updated_at)
+        values (%s, %s, 'threads', 'ready', 'ok', now()),
+               (%s, %s, 'threads', 'unavailable', 'threads_http_500', now())
+        on conflict (customer_id, project_id, source) do update
+          set state = excluded.state, detail = excluded.detail, updated_at = excluded.updated_at
+        """,
+        (CUSTOMER_A, PROJECT_A, CUSTOMER_B, project_b),
+    )
+    assert conn.execute("select count(*) from source_status").fetchone() == (2,)
+    conn.commit()
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        conn.execute("delete from source_status")
+    conn.rollback()
+
+    conn.execute("begin")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    conn.execute("set local role app_user")
+    visible = conn.execute("select customer_id::text from source_status").fetchall()
+    assert visible == [(CUSTOMER_A,)]
+    conn.rollback()
+
+    roles = dict(
+        conn.execute(
+            "select rolname, rolsuper or rolbypassrls from pg_roles where rolname in ('app_user','worker_role')"
+        ).fetchall()
+    )
+    assert roles == {"app_user": False, "worker_role": False}
