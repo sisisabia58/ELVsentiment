@@ -190,3 +190,23 @@ def test_opener_timeout_is_typed_with_unknown_status():
     assert error.code == "read_timeout"
     assert error.http_status is None
     assert "synthetic" not in str(error)
+
+
+def test_region_is_omitted_by_default_and_added_only_when_requested():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response('{"posts": []}')
+
+    fetch_scrapecreators_json("/v1/threads/search", {"query": "kopi"}, "key", opener=opener)
+    fetch_scrapecreators_json("/v1/threads/search", {"query": "kopi"}, "key", region="ID", opener=opener)
+    assert "region=" not in seen[0]
+    assert "region=ID" in seen[1]

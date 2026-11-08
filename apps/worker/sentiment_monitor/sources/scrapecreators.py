@@ -125,10 +125,12 @@ def fetch_scrapecreators_json(
     params: dict[str, str],
     api_key: str,
     *,
-    region: str = DEFAULT_REGION,
+    region: str | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
-    merged_params = {**params, "region": region}
+    merged_params = dict(params)
+    if region is not None:
+        merged_params["region"] = region
     query = urllib.parse.urlencode(merged_params)
     url = f"{SCRAPECREATORS_BASE_URL}{path}?{query}"
     request = urllib.request.Request(

@@ -69,7 +69,7 @@ def test_fetch_threads_calls_scrapecreators_with_id_region_and_api_key() -> None
     url, headers = seen[0]
     assert url.startswith("https://api.scrapecreators.com/v1/threads/search?")
     assert "query=kopi+kenangan" in url
-    assert "region=ID" in url
+    assert "region=" not in url
     assert headers.get("x-api-key") == "sc-secret-key"
     assert result["outcome"] == "empty_or_success"
     assert len(result["mentions"]) == 1
@@ -251,3 +251,45 @@ def test_threads_missing_or_non_list_marks_returned_unknown():
         assert error.code in ("missing_posts", "malformed_posts")
         assert error.counts is None or error.counts.get("returned") is None
         assert error.http_status == 200
+
+
+def test_threads_phrase_uses_keyword_route_without_region():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(json.dumps({"posts": [{"pk": "th-1"}]}))
+
+    result = fetch_threads_mentions("Kopi Kenangan", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
+    assert len(seen) == 1
+    assert seen[0].startswith("https://api.scrapecreators.com/v1/threads/search?")
+    assert "query=Kopi+Kenangan" in seen[0]
+    assert "region=" not in seen[0]
+    assert result["mentions"][0]["route_id"] == "threads.keyword"
+
+
+def test_threads_hashtag_uses_literal_text_search_with_route_provenance():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(json.dumps({"posts": []}))
+
+    result = fetch_threads_mentions("#Kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    assert "query=%23Kopi" in seen[0]
+    assert "region=" not in seen[0]
+    assert result["mentions"] == []

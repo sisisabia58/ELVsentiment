@@ -8,8 +8,9 @@ from harken.models import Mention
 from harken.sources import REGISTRY
 from harken.sources.base import FetchPage, Source
 
+from sentiment_monitor.intent import Keyword
+from sentiment_monitor.sources.routes import request_params, routes_for, within_overlap
 from sentiment_monitor.sources.scrapecreators import (
-    DEFAULT_REGION,
     ScrapeCreatorsError,
     carry_attempt_context,
     credits_from,
@@ -78,14 +79,15 @@ def fetch_threads_mentions(
     api_key: str,
     collected_at: str,
     *,
-    region: str = DEFAULT_REGION,
+    intent: str | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
+    keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
+    route = routes_for("threads", keyword)[0]
     payload = fetch_scrapecreators_json(
-        THREADS_SEARCH_PATH,
-        {"query": variant},
+        route.path,
+        request_params(route, keyword),
         api_key,
-        region=region,
         opener=opener,
     )
     http_status = getattr(payload, "http_status", None)
@@ -98,13 +100,18 @@ def fetch_threads_mentions(
             error, credits, returned, [], http_status=http_status
         ) from None
     returned = len(raw_items)
-    items = [
+    normalized_items = [
         normalize_threads_item(item, collected_at)
         for item in raw_items
         if isinstance(item, dict)
     ]
+    items = [
+        {**item, "route_id": route.id}
+        for item in normalized_items
+        if within_overlap(item["posted_at"], collected_at, route)
+    ]
     mentions = dedupe_mentions(items)
-    if raw_items and not has_usable_mentions(items):
+    if raw_items and not has_usable_mentions(normalized_items):
         raise ScrapeCreatorsError(
             "malformed_posts",
             http_status=http_status,
@@ -148,7 +155,12 @@ class ThreadsSource(Source):
         if not self.access_token:
             raise RuntimeError("Threads requires an API key")
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        result = fetch_threads_mentions(query, self.access_token, now_iso)
+        result = fetch_threads_mentions(
+            query,
+            self.access_token,
+            now_iso,
+            intent=getattr(query, "intent", "phrase"),
+        )
         mentions: list[Mention] = []
         for item in result.get("mentions", []):
             ext_id = item.get("external_id")
