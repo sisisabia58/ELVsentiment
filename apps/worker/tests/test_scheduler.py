@@ -1712,3 +1712,192 @@ def test_status_write_failure_on_provider_failure_logs_one_structured_line(tmp_p
     assert len(status_lines) == 1
     assert "private_keyword" not in "\n".join(lines)
     assert not any(line.startswith("Exception ") or line.startswith("RuntimeError ") for line in lines)
+
+
+def test_early_deferral_failure_does_not_crash_serve_and_fails_job(tmp_path):
+    class DeferralFail(_LoopConn):
+        def execute(self, sql, params=None):
+            if "status = 'deferred'" in sql:
+                raise RuntimeError("synthetic defer storage failure")
+            return super().execute(sql, params)
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines = []
+    providers = []
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: DeferralFail(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, False),
+            lambda *_args, **_kwargs: providers.append("x"),
+            lambda *_args, **_kwargs: providers.append("threads"),
+            log=lines.append,
+        )
+
+    failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
+    assert failed == [("storage_failed", "job-1")]
+    assert providers == []
+    assert not any(line.startswith("source_collection") for line in lines)
+
+
+def test_budget_and_no_sources_deferrals_emit_no_source_attempt(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["x"]
+    lines, providers = [], []
+
+    class BudgetBlock(_LoopConn):
+        def execute(self, sql, params=None):
+            if "from x_read_counters" in " ".join(sql.lower().split()) and "for update" in sql.lower():
+                return 100000
+            return super().execute(sql, params)
+
+    def stop(_seconds):
+        raise SystemExit
+
+    root = _policy_root(tmp_path, True)
+    with pytest.raises(SystemExit):
+        serve(
+            lambda: BudgetBlock(world),
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            root,
+            lambda *_args, **_kwargs: providers.append("x"),
+            lambda *_args, **_kwargs: providers.append("threads"),
+            log=lines.append,
+        )
+
+    assert providers == []
+    assert not any(line.startswith("source_collection") for line in lines)
+    assert any(params and "x_customer_cap" in params for sql, params in world.calls if "status = 'deferred'" in sql)
+
+    from unittest.mock import patch
+
+    world2 = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    lines2 = []
+    with pytest.raises(SystemExit):
+        with patch("sentiment_monitor.scheduler.sources_allowed", return_value=[]):
+            serve(
+                world2.connect,
+                stop,
+                load_limits(Path("config/limits.json"), {}),
+                "worker-1",
+                root,
+                lambda *_args, **_kwargs: providers.append("x"),
+                lambda *_args, **_kwargs: providers.append("threads"),
+                log=lines2.append,
+            )
+    assert not any(line.startswith("source_collection") for line in lines2)
+    assert any(
+        params and "sources_unavailable" in params
+        for sql, params in world2.calls
+        if "status = 'deferred'" in sql
+    )
+
+
+def test_consecutive_jobs_reset_attempt_context(tmp_path):
+    job2 = {**_due_job(), "id": "job-2"}
+    world = LoopWorld(jobs=[_due_job(), job2], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines, calls = [], {"n": 0}
+
+    def fetch_threads(_variant):
+        from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ScrapeCreatorsError(
+                "http_429",
+                http_status=429,
+                credits_charged=4,
+                counts={"returned": 3, "parsed": 2, "deduplicated": 1},
+            )
+        return {
+            "mentions": [{"external_id": "2", "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": "geprek gembus"}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    collection = [line for line in lines if line.startswith("source_collection")]
+    failed = next(line for line in collection if "outcome=failed" in line)
+    succeeded = next(line for line in collection if "outcome=success" in line)
+    assert "returned=3" in failed and "credits_charged=4" in failed and "http_status=429" in failed
+    assert "returned=1" in succeeded and "credits_charged=2" in succeeded and "http_status=200" in succeeded
+    assert "returned=3" not in succeeded and "credits_charged=4" not in succeeded
+
+
+def test_multi_source_multi_variant_resets_attempt_context(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["v1", "v2"], cursor=None)
+    world.sources = ["threads", "instagram"]
+    lines = []
+
+    def fetch_threads(variant):
+        return {
+            "mentions": [{"external_id": variant, "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 1, "parsed": 1, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+        }
+
+    def fetch_instagram(variant):
+        return {
+            "mentions": [{"external_id": variant, "excerpt": "synthetic", "url": None, "author": None,
+                          "posted_at": "2026-11-01T00:00:00Z", "variant": variant}],
+            "counts": {"returned": 2, "parsed": 2, "deduplicated": 0},
+            "credits_charged": 3,
+            "http_status": 201,
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+        )
+
+    collection = [line for line in lines if line.startswith("source_collection")]
+    assert len(collection) == 4
+    threads = [line for line in collection if "source=threads" in line]
+    instagram = [line for line in collection if "source=instagram" in line]
+    assert len(threads) == 2 and len(instagram) == 2
+    assert all(
+        "returned=1" in line and "credits_charged=2" in line and "http_status=200" in line
+        for line in threads
+    )
+    assert all(
+        "returned=2" in line and "credits_charged=3" in line and "http_status=201" in line
+        for line in instagram
+    )
