@@ -312,7 +312,7 @@ export async function loadWorkspace(
     );
     const statusRows = await db.query<{
       source: SourceId;
-      state: SourceHealth["state"];
+      state: RecordedSourceState;
       detail: string;
       last_success_at: string | Date | null;
     }>("select source, state, detail, last_success_at from source_status where project_id = $1", [project.id]);
