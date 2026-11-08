@@ -495,3 +495,27 @@ def test_postgres16_mention_write_returns_real_inserted_count_and_rolls_back_on_
     conn.rollback()
     assert conn.execute("select count(*) from mentions").fetchone() == (0,)
     assert conn.execute("select count(*) from source_cursors").fetchone() == (0,)
+
+
+def test_postgres16_worker_status_success_and_failure_preserves_last_success(pg16):
+    from sentiment_monitor.scheduler import record_source_failure, record_source_success
+
+    conn = pg16
+    _seed(conn)
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    record_source_success(conn, CUSTOMER_A, PROJECT_A, "threads")
+    conn.commit()
+    first = conn.execute(
+        "select state, detail, last_success_at is not null from source_status where source = 'threads'"
+    ).fetchone()
+    assert first == ("ready", "ok", True)
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    record_source_failure(conn, CUSTOMER_A, PROJECT_A, "threads", "threads_http_401", "authorization_failed")
+    conn.commit()
+    second = conn.execute(
+        "select state, detail, last_success_at is not null from source_status where source = 'threads'"
+    ).fetchone()
+    assert second == ("authorization_failed", "threads_http_401", True)

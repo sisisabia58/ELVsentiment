@@ -929,7 +929,14 @@ def test_failure_detail_reads_the_host_without_stringifying_the_url():
 
 def test_failure_detail_and_record_source_failure_for_scrapecreators_and_x():
     import urllib.error
-    from sentiment_monitor.scheduler import ALL_SOURCES, load_enabled_sources, record_source_failure
+    from sentiment_monitor.scheduler import (
+        ALL_SOURCES,
+        ScrapeCreatorsError,
+        load_enabled_sources,
+        record_source_failure,
+        record_source_success,
+        source_failure_state,
+    )
 
     assert ALL_SOURCES == ("x", "threads", "instagram", "tiktok")
 
@@ -964,18 +971,47 @@ def test_failure_detail_and_record_source_failure_for_scrapecreators_and_x():
     )
     assert _failure_detail(ig_402, source="instagram") == "instagram_http_402"
     assert _failure_detail(x_429, source="instagram") == "x_http_429"
+    assert _failure_detail(ScrapeCreatorsError("success_false"), source="threads") == "threads_success_false"
+    assert (
+        _failure_detail(ScrapeCreatorsError("http_402", http_status=402), source="instagram")
+        == "instagram_http_402"
+    )
+
+    assert source_failure_state("threads_http_401", 401) == "authorization_failed"
+    assert source_failure_state("threads_http_403", 403) == "authorization_failed"
+    assert source_failure_state("instagram_http_402", 402) == "rate_limited"
+    assert source_failure_state("tiktok_http_429", 429) == "rate_limited"
+    assert source_failure_state("threads_success_false", None) == "unavailable"
+    assert source_failure_state("weird_provider_text_402", None) == "unavailable"
 
     conn = _FakeConn()
-    assert record_source_failure(conn, "cust-1", "proj-1", "instagram", "instagram_http_402") == "rate_limited"
-    assert record_source_failure(conn, "cust-1", "proj-1", "tiktok", "tiktok_http_401") == "authorization_failed"
-    assert record_source_failure(conn, "cust-1", "proj-1", "threads", "threads_http_500") == "unavailable"
-    assert len(conn.calls) == 3
-    for sql, params in conn.calls:
-        lowered = " ".join(sql.lower().split())
-        assert "insert into source_status (customer_id, project_id, source, state, detail, updated_at)" in lowered
-        assert "on conflict (customer_id, project_id, source) do update" in lowered
-        assert "outcome" not in lowered
-        assert len(params) == 5
+    assert (
+        record_source_failure(
+            conn, "cust-1", "proj-1", "instagram", "instagram_http_402", "rate_limited"
+        )
+        == "rate_limited"
+    )
+    assert (
+        record_source_failure(
+            conn, "cust-1", "proj-1", "tiktok", "tiktok_http_401", "authorization_failed"
+        )
+        == "authorization_failed"
+    )
+    assert (
+        record_source_failure(conn, "cust-1", "proj-1", "threads", "threads_http_500", "unavailable")
+        == "unavailable"
+    )
+    record_source_success(conn, "cust-1", "proj-1", "threads")
+    assert len(conn.calls) == 4
+    failure_sql = " ".join(conn.calls[0][0].lower().split())
+    assert "insert into source_status (customer_id, project_id, source, state, detail, updated_at)" in failure_sql
+    assert "on conflict (customer_id, project_id, source) do update" in failure_sql
+    assert "last_success_at" not in failure_sql
+    assert len(conn.calls[0][1]) == 5
+    success_sql = " ".join(conn.calls[3][0].lower().split())
+    assert "last_success_at = now()" in success_sql
+    assert "'ready'" in success_sql
+    assert "'ok'" in success_sql
 
 
 def test_fetch_error_is_redacted_and_marks_the_job_failed(tmp_path, monkeypatch, capfd):

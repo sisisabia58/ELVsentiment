@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
@@ -8,6 +9,7 @@ from urllib.parse import quote, unquote, urlsplit
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
 from sentiment_monitor.pg_store import PostgresStore
+from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 from sentiment_monitor.x_cost import admit_collection, admit_threads_query, admit_x_read
 
 # Asia/Jakarta is a fixed UTC+7 offset. The daily schedule uses that civil
@@ -240,14 +242,26 @@ def _fail(conn, job_id: str, detail: str) -> None:
     )
 
 
-def record_source_failure(conn, customer_id: str, project_id: str, source: str, detail: str) -> str:
-    lowered = (detail or "").lower()
-    if "401" in lowered:
-        state = "authorization_failed"
-    elif "429" in lowered or "402" in lowered or "cap" in lowered or "budget" in lowered:
-        state = "rate_limited"
-    else:
-        state = "unavailable"
+def source_failure_state(detail: str, http_status: int | None = None) -> str:
+    status = http_status
+    if status is None:
+        match = re.search(r"_http_(\d{3})$", detail or "")
+        status = int(match.group(1)) if match else None
+    if status in (401, 403):
+        return "authorization_failed"
+    if status in (402, 429):
+        return "rate_limited"
+    return "unavailable"
+
+
+def record_source_failure(
+    conn,
+    customer_id: str,
+    project_id: str,
+    source: str,
+    detail: str,
+    state: str,
+) -> str:
     conn.execute(
         """
         insert into source_status (customer_id, project_id, source, state, detail, updated_at)
@@ -262,7 +276,24 @@ def record_source_failure(conn, customer_id: str, project_id: str, source: str, 
     return state
 
 
+def record_source_success(conn, customer_id: str, project_id: str, source: str) -> None:
+    conn.execute(
+        """
+        insert into source_status (customer_id, project_id, source, state, detail, last_success_at, updated_at)
+        values (%s, %s, %s, 'ready', 'ok', now(), now())
+        on conflict (customer_id, project_id, source) do update
+          set state = 'ready',
+              detail = 'ok',
+              last_success_at = now(),
+              updated_at = now()
+        """,
+        (customer_id, project_id, source),
+    )
+
+
 def _failure_detail(error: Exception, source: str = "threads") -> str:
+    if isinstance(error, ScrapeCreatorsError):
+        return f"{source}_{error.code}"
     if isinstance(error, urllib.error.HTTPError):
         url_str = getattr(error, "url", None) or ""
         try:
