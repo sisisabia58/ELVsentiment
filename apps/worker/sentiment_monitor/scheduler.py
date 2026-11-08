@@ -214,6 +214,8 @@ _SAFE_DETAIL_CODES = frozenset(
         "missing_posts",
         "malformed_posts",
         "collection_failed",
+        "transport_error",
+        "read_timeout",
         "storage_failed",
         "storage_commit_unknown",
         "sources_unavailable",
@@ -600,6 +602,7 @@ def _guarded_fetch(source: str, fetch):
             detail,
             source_failure_state(detail, status),
             http_status=status,
+            credits_charged=getattr(error, "credits_charged", None),
             counts=getattr(error, "counts", None),
         ) from None
 

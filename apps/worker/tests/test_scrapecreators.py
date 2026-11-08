@@ -135,3 +135,58 @@ def test_fetch_scrapecreators_keeps_known_status_on_success_and_typed_errors():
         return Response('{"posts": []}')
 
     assert fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=unknown).http_status is None
+
+
+class _ReadTimeoutResponse(io.StringIO):
+    def __init__(self, body, status=200):
+        super().__init__(body)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        raise TimeoutError("synthetic read timeout https://private.example/?q=secret")
+
+
+def test_read_timeout_keeps_status_known_before_read_and_is_typed():
+    def opener(request, timeout=0):
+        return _ReadTimeoutResponse("", status=200)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=opener)
+    error = caught.value
+    assert error.code == "read_timeout"
+    assert error.http_status == 200
+    assert "synthetic" not in str(error)
+    assert "private" not in str(error)
+    assert "https" not in str(error)
+
+
+def test_transport_failure_is_typed_and_does_not_leak_url_or_message():
+    def opener(request, timeout=0):
+        raise urllib.error.URLError("synthetic network failure https://private.example/?q=secret")
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=opener)
+    error = caught.value
+    assert error.code == "transport_error"
+    assert error.http_status is None
+    assert "synthetic" not in str(error)
+    assert "private" not in str(error)
+    assert "https" not in str(error)
+
+
+def test_opener_timeout_is_typed_with_unknown_status():
+    def opener(request, timeout=0):
+        raise TimeoutError("synthetic connect timeout")
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "key", opener=opener)
+    error = caught.value
+    assert error.code == "read_timeout"
+    assert error.http_status is None
+    assert "synthetic" not in str(error)

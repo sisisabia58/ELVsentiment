@@ -131,12 +131,18 @@ def fetch_scrapecreators_json(
             "User-Agent": "ELVsentiment-worker/1.0",
         },
     )
+    http_status: int | None = None
     try:
         with opener(request, timeout=30) as response:
-            raw = response.read()
+            # Capture the status before reading so a read failure still knows
+            # which response produced it.
             http_status = _response_status(response)
+            raw = response.read()
     except urllib.error.HTTPError as error:
         raise ScrapeCreatorsError(f"http_{error.code}", http_status=error.code) from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        code = "read_timeout" if isinstance(error, TimeoutError) else "transport_error"
+        raise ScrapeCreatorsError(code, http_status=http_status) from None
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):

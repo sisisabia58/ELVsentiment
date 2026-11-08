@@ -105,7 +105,7 @@ def fetch_instagram_mentions(
             opener=opener,
         )
     except ScrapeCreatorsError as error:
-        raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
+        raise carry_attempt_context(error, credits, returned, collected) from None
     http_status = getattr(reels_payload, "http_status", None)
     credits.append(credits_from(reels_payload))
 
@@ -139,7 +139,7 @@ def fetch_instagram_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
+            raise carry_attempt_context(error, credits, returned, collected) from None
         http_status = getattr(hashtag_payload, "http_status", None)
         credits.append(credits_from(hashtag_payload))
         try:

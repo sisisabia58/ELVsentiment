@@ -189,3 +189,49 @@ def test_threads_success_result_keeps_known_response_status():
         opener=lambda *args, **kwargs: _StatusResponse('{"posts": []}', status=200),
     )
     assert result["http_status"] == 200
+
+
+def test_threads_transport_failure_is_typed_without_accumulated_counts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_threads_mentions(
+            "kopi",
+            "key",
+            "2026-11-01T00:00:00Z",
+            opener=lambda *args, **kwargs: (_ for _ in ()).throw(
+                urllib.error.URLError("synthetic network failure")
+            ),
+        )
+    error = caught.value
+    assert error.code == "transport_error"
+    assert error.http_status is None
+    assert error.counts is None
+    assert "synthetic" not in str(error)
+
+
+class _ThreadsReadTimeout(io.StringIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        raise TimeoutError("synthetic read timeout")
+
+
+def test_threads_read_timeout_keeps_known_response_status():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_threads_mentions(
+            "kopi",
+            "key",
+            "2026-11-01T00:00:00Z",
+            opener=lambda *args, **kwargs: _ThreadsReadTimeout(""),
+        )
+    assert caught.value.code == "read_timeout"
+    assert caught.value.http_status == 200

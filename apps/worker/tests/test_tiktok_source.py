@@ -210,3 +210,77 @@ def test_tiktok_malformed_second_endpoint_keeps_its_response_status():
         fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
     assert caught.value.code == "malformed_json"
     assert caught.value.http_status == 202
+
+
+import urllib.error
+
+
+class _UnknownStatusResponse(io.StringIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _tt_opener(first, second):
+    def opener(request, timeout=0):
+        if "/v1/tiktok/search/keyword" in request.full_url:
+            return first
+        if isinstance(second, Exception):
+            raise second
+        return second
+
+    return opener
+
+
+def test_tiktok_transport_failure_after_first_endpoint_keeps_counts_and_credits():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    first = _StatusResponse(json.dumps({"search_item_list": [{"aweme_id": "1"}], "credits_charged": 2}), status=200)
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions(
+            "Kopi",
+            "key",
+            "2026-11-01T00:00:00Z",
+            opener=_tt_opener(first, urllib.error.URLError("synthetic network failure")),
+        )
+    error = caught.value
+    assert error.code == "transport_error"
+    assert error.http_status is None
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+    assert "synthetic" not in str(error)
+
+
+class _TTReadTimeout(io.StringIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        raise TimeoutError("synthetic read timeout")
+
+
+def test_tiktok_read_timeout_after_first_endpoint_keeps_current_status_and_counts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    first = _StatusResponse(json.dumps({"search_item_list": [{"aweme_id": "1"}], "credits_charged": 2}), status=200)
+
+    def opener(request, timeout=0):
+        if "/v1/tiktok/search/keyword" in request.full_url:
+            return first
+        return _TTReadTimeout("")
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+    error = caught.value
+    assert error.code == "read_timeout"
+    assert error.http_status == 200
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+

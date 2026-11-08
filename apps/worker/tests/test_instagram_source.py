@@ -244,3 +244,78 @@ def test_instagram_uses_last_attempted_endpoint_status():
 
     result = fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
     assert result["http_status"] == 200
+
+
+import urllib.error
+
+
+class _UnknownStatusResponse(io.StringIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _ig_opener(first, second):
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return first
+        if isinstance(second, Exception):
+            raise second
+        return second
+
+    return opener
+
+
+def test_instagram_transport_failure_after_first_endpoint_keeps_counts_and_credits():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    first = _StatusResponse(json.dumps({"reels": [{"pk": "1"}], "credits_charged": 2}), status=200)
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions(
+            "Kopi",
+            "key",
+            "2026-11-01T00:00:00Z",
+            opener=_ig_opener(first, urllib.error.URLError("synthetic network failure")),
+        )
+    error = caught.value
+    assert error.code == "transport_error"
+    assert error.http_status is None
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+    assert "synthetic" not in str(error)
+
+
+def test_instagram_read_timeout_after_first_endpoint_keeps_current_status_and_counts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    first = _StatusResponse(json.dumps({"reels": [{"pk": "1"}], "credits_charged": 2}), status=200)
+    second = _StatusResponse("", status=200)
+
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return first
+        return _ReadTimeout()
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+    error = caught.value
+    assert error.code == "read_timeout"
+    assert error.http_status == 200
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+
+
+class _ReadTimeout(io.StringIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        raise TimeoutError("synthetic read timeout")
+
