@@ -6,8 +6,10 @@ import urllib.request
 
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
+    credits_from,
     dedupe_mentions,
     fetch_scrapecreators_json,
+    select_post_list,
     unix_to_iso,
 )
 
@@ -91,17 +93,14 @@ def fetch_instagram_mentions(
         region=region,
         opener=opener,
     )
-    reels_raw = (
-        reels_payload.get("reels")
-        or reels_payload.get("items")
-        or reels_payload.get("data")
-        or []
-    )
+    reels_raw = select_post_list(reels_payload, ("reels", "items", "data"))
     collected: list[dict[str, Any]] = [
         normalize_instagram_item(item, collected_at)
         for item in reels_raw
         if isinstance(item, dict)
     ]
+    credits = [credits_from(reels_payload)]
+    returned = len(reels_raw)
 
     hashtag = normalize_hashtag(variant)
     if hashtag:
@@ -112,20 +111,24 @@ def fetch_instagram_mentions(
             region=region,
             opener=opener,
         )
-        hashtag_raw = (
-            hashtag_payload.get("posts")
-            or hashtag_payload.get("items")
-            or hashtag_payload.get("medias")
-            or hashtag_payload.get("data")
-            or []
-        )
+        hashtag_raw = select_post_list(hashtag_payload, ("posts", "items", "medias", "data"))
+        returned += len(hashtag_raw)
+        credits.append(credits_from(hashtag_payload))
         collected.extend(
             normalize_instagram_item(item, collected_at)
             for item in hashtag_raw
             if isinstance(item, dict)
         )
 
+    mentions = dedupe_mentions(collected)
+    known_credits = [value for value in credits if value is not None]
     return {
-        "mentions": dedupe_mentions(collected),
+        "mentions": mentions,
         "outcome": "success",
+        "counts": {
+            "returned": returned,
+            "parsed": len(collected),
+            "deduplicated": len(collected) - len(mentions),
+        },
+        "credits_charged": sum(known_credits) if known_credits else None,
     }

@@ -98,3 +98,50 @@ def test_one_failing_source_does_not_discard_other_sources() -> None:
     assert result["sources"]["threads"]["state"] == "ready"
     assert len(result["mentions"]) == 1
     assert result["mentions"][0]["external_id"] == "th-2"
+
+
+class _Response(io.StringIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _threads(payload):
+    return fetch_threads_mentions(
+        "kopi",
+        "key",
+        "2026-11-01T00:00:00Z",
+        opener=lambda *args, **kwargs: _Response(json.dumps(payload)),
+    )
+
+
+def test_threads_present_empty_list_is_success_with_zero_counts():
+    result = _threads({"posts": []})
+    assert result["mentions"] == []
+    assert result["counts"] == {"returned": 0, "parsed": 0, "deduplicated": 0}
+
+
+def test_threads_reports_returned_parsed_and_deduplicated():
+    result = _threads({"posts": [{"pk": "1"}, {"pk": "1"}, {"pk": "2"}]})
+    assert result["counts"] == {"returned": 3, "parsed": 3, "deduplicated": 1}
+
+
+@pytest.mark.parametrize("key", ["posts", "items", "data"])
+def test_threads_accepts_each_recognized_key(key):
+    assert _threads({key: []})["counts"]["returned"] == 0
+
+
+def test_threads_missing_or_malformed_list_fails_safely():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _threads({"unexpected": []})
+    assert caught.value.code == "missing_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _threads({"posts": {"bad": True}})
+    assert caught.value.code == "malformed_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _threads({"posts": [1, 2]})
+    assert caught.value.code == "malformed_posts"

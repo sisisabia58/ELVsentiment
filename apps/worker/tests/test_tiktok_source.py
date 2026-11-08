@@ -1,6 +1,8 @@
 import io
 import json
 
+import pytest
+
 from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions, normalize_tiktok_item
 
 
@@ -90,3 +92,49 @@ def test_fetch_tiktok_runs_both_keyword_and_top_with_id_region_and_dedupes() -> 
     assert all(m["source"] == "tiktok" for m in result["mentions"])
     assert result["mentions"][0]["url"] == "https://www.tiktok.com/@foodies_id/video/tt-1"
     assert result["mentions"][0]["posted_at"] == "2026-04-19T06:00:00Z"
+
+
+class _Response(io.StringIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _tiktok(payloads):
+    def opener(request, timeout=0):
+        if "/v1/tiktok/search/keyword" in request.full_url:
+            return _Response(json.dumps(payloads[0]))
+        return _Response(json.dumps(payloads[1]))
+
+    return fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+
+
+def test_tiktok_counts_sum_both_calls_and_dedupe():
+    result = _tiktok(
+        (
+            {"search_item_list": [{"aweme_id": "1"}, {"aweme_id": "2"}]},
+            {"search_item_list": [{"aweme_id": "2"}, {"aweme_id": "3"}]},
+        )
+    )
+    assert result["counts"] == {"returned": 4, "parsed": 4, "deduplicated": 1}
+
+
+@pytest.mark.parametrize("key", ["search_item_list", "aweme_list", "items", "data"])
+def test_tiktok_accepts_each_key_on_both_endpoints(key):
+    assert _tiktok(({key: []}, {key: []}))["counts"]["returned"] == 0
+
+
+def test_tiktok_missing_or_malformed_list_fails_safely():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(({"unexpected": []}, {"search_item_list": []}))
+    assert caught.value.code == "missing_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(({"search_item_list": {"bad": True}}, {"search_item_list": []}))
+    assert caught.value.code == "malformed_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(({"search_item_list": [1, 2]}, {"search_item_list": []}))
+    assert caught.value.code == "malformed_posts"

@@ -1,6 +1,8 @@
 import io
 import json
 
+import pytest
+
 from sentiment_monitor.sources.instagram import (
     fetch_instagram_mentions,
     normalize_hashtag,
@@ -97,3 +99,54 @@ def test_fetch_instagram_runs_both_reels_and_hashtag_with_id_region_and_dedupes(
     assert all(m["source"] == "instagram" for m in result["mentions"])
     assert result["mentions"][0]["url"] == "https://www.instagram.com/p/REEL1/"
     assert result["mentions"][2]["author"] == "dewi"
+
+
+class _Response(io.StringIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _instagram(payloads):
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return _Response(json.dumps(payloads[0]))
+        return _Response(json.dumps(payloads[1]))
+
+    return fetch_instagram_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+
+
+def test_instagram_counts_sum_both_calls_and_dedupe():
+    result = _instagram(
+        (
+            {"reels": [{"pk": "1"}, {"pk": "2"}]},
+            {"posts": [{"pk": "2"}, {"pk": "3"}]},
+        )
+    )
+    assert result["counts"] == {"returned": 4, "parsed": 4, "deduplicated": 1}
+
+
+@pytest.mark.parametrize("key", ["reels", "items", "data"])
+def test_instagram_reels_accepts_each_key(key):
+    assert _instagram(({key: []}, {"posts": []}))["counts"]["returned"] == 0
+
+
+@pytest.mark.parametrize("key", ["posts", "items", "medias", "data"])
+def test_instagram_hashtag_accepts_each_key(key):
+    assert _instagram(({"reels": []}, {key: []}))["counts"]["returned"] == 0
+
+
+def test_instagram_missing_or_malformed_list_fails_safely():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _instagram(({"unexpected": []}, {"posts": []}))
+    assert caught.value.code == "missing_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _instagram(({"reels": {"bad": True}}, {"posts": []}))
+    assert caught.value.code == "malformed_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _instagram(({"reels": [1, 2]}, {"posts": []}))
+    assert caught.value.code == "malformed_posts"

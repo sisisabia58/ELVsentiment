@@ -10,8 +10,10 @@ from harken.sources.base import FetchPage, Source
 
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
+    credits_from,
     dedupe_mentions,
     fetch_scrapecreators_json,
+    select_post_list,
     unix_to_iso,
 )
 
@@ -81,7 +83,7 @@ def fetch_threads_mentions(
         region=region,
         opener=opener,
     )
-    raw_items = payload.get("posts") or payload.get("items") or payload.get("data") or []
+    raw_items = select_post_list(payload, ("posts", "items", "data"))
     items = [
         normalize_threads_item(item, collected_at)
         for item in raw_items
@@ -91,6 +93,12 @@ def fetch_threads_mentions(
     return {
         "mentions": mentions,
         "outcome": "empty_or_success",
+        "counts": {
+            "returned": len(raw_items),
+            "parsed": len(items),
+            "deduplicated": len(items) - len(mentions),
+        },
+        "credits_charged": credits_from(payload),
     }
 
 

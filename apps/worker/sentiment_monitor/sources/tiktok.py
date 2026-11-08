@@ -5,8 +5,10 @@ import urllib.request
 
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
+    credits_from,
     dedupe_mentions,
     fetch_scrapecreators_json,
+    select_post_list,
     unix_to_iso,
 )
 
@@ -48,15 +50,8 @@ def normalize_tiktok_item(item: dict[str, Any], collected_at: str) -> dict[str, 
     }
 
 
-def _extract_tiktok_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    raw = (
-        payload.get("search_item_list")
-        or payload.get("aweme_list")
-        or payload.get("items")
-        or payload.get("data")
-        or []
-    )
-    return [item for item in raw if isinstance(item, dict)]
+def _extract_tiktok_list(payload: dict[str, Any]) -> list[Any]:
+    return select_post_list(payload, ("search_item_list", "aweme_list", "items", "data"))
 
 
 def fetch_tiktok_mentions(
@@ -81,11 +76,26 @@ def fetch_tiktok_mentions(
         region=region,
         opener=opener,
     )
+    keyword_raw = _extract_tiktok_list(keyword_payload)
+    top_raw = _extract_tiktok_list(top_payload)
     collected = [
         normalize_tiktok_item(item, collected_at)
-        for item in (*_extract_tiktok_list(keyword_payload), *_extract_tiktok_list(top_payload))
+        for item in (*keyword_raw, *top_raw)
+        if isinstance(item, dict)
+    ]
+    mentions = dedupe_mentions(collected)
+    known_credits = [
+        value
+        for value in (credits_from(keyword_payload), credits_from(top_payload))
+        if value is not None
     ]
     return {
-        "mentions": dedupe_mentions(collected),
+        "mentions": mentions,
         "outcome": "success",
+        "counts": {
+            "returned": len(keyword_raw) + len(top_raw),
+            "parsed": len(collected),
+            "deduplicated": len(collected) - len(mentions),
+        },
+        "credits_charged": sum(known_credits) if known_credits else None,
     }
