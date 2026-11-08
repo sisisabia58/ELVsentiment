@@ -150,3 +150,6 @@ def test_instagram_missing_or_malformed_list_fails_safely():
     with pytest.raises(ScrapeCreatorsError) as caught:
         _instagram(({"reels": [1, 2]}, {"posts": []}))
     assert caught.value.code == "malformed_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _instagram(({"reels": [{}]}, {"posts": []}))
+    assert caught.value.code == "malformed_posts"

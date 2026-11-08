@@ -5,6 +5,7 @@ import urllib.request
 
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
+    ScrapeCreatorsError,
     credits_from,
     dedupe_mentions,
     fetch_scrapecreators_json,
@@ -84,6 +85,8 @@ def fetch_tiktok_mentions(
         if isinstance(item, dict)
     ]
     mentions = dedupe_mentions(collected)
+    if (len(keyword_raw) + len(top_raw)) and not mentions:
+        raise ScrapeCreatorsError("malformed_posts")
     known_credits = [
         value
         for value in (credits_from(keyword_payload), credits_from(top_payload))

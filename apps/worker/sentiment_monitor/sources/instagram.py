@@ -6,6 +6,7 @@ import urllib.request
 
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
+    ScrapeCreatorsError,
     credits_from,
     dedupe_mentions,
     fetch_scrapecreators_json,
@@ -121,6 +122,8 @@ def fetch_instagram_mentions(
         )
 
     mentions = dedupe_mentions(collected)
+    if returned and not mentions:
+        raise ScrapeCreatorsError("malformed_posts")
     known_credits = [value for value in credits if value is not None]
     return {
         "mentions": mentions,

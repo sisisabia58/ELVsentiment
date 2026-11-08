@@ -138,3 +138,6 @@ def test_tiktok_missing_or_malformed_list_fails_safely():
     with pytest.raises(ScrapeCreatorsError) as caught:
         _tiktok(({"search_item_list": [1, 2]}, {"search_item_list": []}))
     assert caught.value.code == "malformed_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _tiktok(({"search_item_list": [{}]}, {"search_item_list": []}))
+    assert caught.value.code == "malformed_posts"

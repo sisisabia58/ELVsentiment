@@ -145,3 +145,6 @@ def test_threads_missing_or_malformed_list_fails_safely():
     with pytest.raises(ScrapeCreatorsError) as caught:
         _threads({"posts": [1, 2]})
     assert caught.value.code == "malformed_posts"
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _threads({"posts": [{}]})
+    assert caught.value.code == "malformed_posts"

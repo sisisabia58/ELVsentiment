@@ -10,6 +10,7 @@ from harken.sources.base import FetchPage, Source
 
 from sentiment_monitor.sources.scrapecreators import (
     DEFAULT_REGION,
+    ScrapeCreatorsError,
     credits_from,
     dedupe_mentions,
     fetch_scrapecreators_json,
@@ -90,6 +91,8 @@ def fetch_threads_mentions(
         if isinstance(item, dict)
     ]
     mentions = dedupe_mentions(items)
+    if raw_items and not mentions:
+        raise ScrapeCreatorsError("malformed_posts")
     return {
         "mentions": mentions,
         "outcome": "empty_or_success",

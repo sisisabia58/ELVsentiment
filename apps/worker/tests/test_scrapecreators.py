@@ -38,6 +38,12 @@ def test_success_false_is_explicit_failure_with_credits():
     assert "rahasia" not in str(error)
 
 
+def test_success_false_with_a_post_list_still_fails():
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        _fetch(json.dumps({"success": False, "posts": [{"pk": "1"}]}))
+    assert caught.value.code == "success_false"
+
+
 def test_malformed_json_and_non_object_fail_safely():
     with pytest.raises(ScrapeCreatorsError) as caught:
         _fetch("{not-json")

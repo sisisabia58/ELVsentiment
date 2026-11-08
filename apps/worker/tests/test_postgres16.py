@@ -519,3 +519,61 @@ def test_postgres16_worker_status_success_and_failure_preserves_last_success(pg1
         "select state, detail, last_success_at is not null from source_status where source = 'threads'"
     ).fetchone()
     assert second == ("authorization_failed", "threads_http_401", True)
+
+
+def test_postgres16_top_level_mention_write_commits_and_rolls_back(pg16):
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.scheduler import CursorRowAdapter
+
+    conn = pg16
+    _seed(conn)
+    conn.execute("set role worker_role")
+    conn.execute("select set_config('app.customer_id', %s::text, false)", (CUSTOMER_A,))
+    conn.commit()
+    store = PostgresStore(CursorRowAdapter(conn))
+    mention = {
+        "external_id": "top-1",
+        "excerpt": "uji",
+        "url": None,
+        "author": "a",
+        "posted_at": "2026-11-01T00:00:00+00:00",
+        "variant": "uji",
+    }
+    assert store.write_mentions_and_cursor(
+        customer_id=CUSTOMER_A,
+        project_id=PROJECT_A,
+        query_key="q",
+        source="threads",
+        mentions=[mention],
+        next_cursor="cursor-1",
+    ) == 1
+
+    reader = psycopg.connect(_db_url("sm_pg16"))
+    try:
+        assert reader.execute("select count(*) from mentions").fetchone() == (1,)
+        assert reader.execute("select incremental_cursor from source_cursors where query_key = 'q'").fetchone() == (
+            "cursor-1",
+        )
+    finally:
+        reader.close()
+
+    try:
+        store.write_mentions_and_cursor(
+            customer_id=CUSTOMER_A,
+            project_id=PROJECT_A,
+            query_key="q",
+            source="threads",
+            mentions=[{**mention, "external_id": "top-2"}, {**mention, "external_id": "top-bad", "posted_at": "bad"}],
+            next_cursor="cursor-2",
+        )
+    except Exception:
+        pass
+
+    reader = psycopg.connect(_db_url("sm_pg16"))
+    try:
+        assert reader.execute("select count(*) from mentions").fetchone() == (1,)
+        assert reader.execute("select incremental_cursor from source_cursors where query_key = 'q'").fetchone() == (
+            "cursor-1",
+        )
+    finally:
+        reader.close()
