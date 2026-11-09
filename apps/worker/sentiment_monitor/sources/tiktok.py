@@ -12,6 +12,7 @@ from sentiment_monitor.sources.scrapecreators import (
     dedupe_mentions,
     failure_counts,
     fetch_scrapecreators_json,
+    hashtag_field_names,
     has_usable_mentions,
     known_credits,
     select_post_list,
@@ -31,6 +32,15 @@ def _extract_tiktok_author(aweme: dict[str, Any]) -> str | None:
     return None
 
 
+def _tiktok_hashtags(aweme: dict[str, Any]) -> list[str]:
+    values: list[Any] = []
+    for key in ("text_extra", "challenges"):
+        value = aweme.get(key)
+        if isinstance(value, list):
+            values.extend(value)
+    return hashtag_field_names(values)
+
+
 def normalize_tiktok_item(item: dict[str, Any], collected_at: str) -> dict[str, Any]:
     aweme = item.get("aweme_info") if isinstance(item.get("aweme_info"), dict) else item
     external_id = str(aweme.get("aweme_id") or aweme.get("id") or "")
@@ -45,6 +55,7 @@ def normalize_tiktok_item(item: dict[str, Any], collected_at: str) -> dict[str, 
         "source": "tiktok",
         "author": author,
         "text": text,
+        "hashtags": _tiktok_hashtags(aweme),
         "url": url,
         "posted_at": unix_to_iso(raw_ts),
         "collected_at": collected_at,

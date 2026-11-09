@@ -14,6 +14,7 @@ from sentiment_monitor.sources.scrapecreators import (
     dedupe_mentions,
     failure_counts,
     fetch_scrapecreators_json,
+    hashtag_field_names,
     has_usable_mentions,
     known_credits,
     select_post_list,
@@ -74,6 +75,10 @@ def normalize_instagram_item(item: dict[str, Any], collected_at: str) -> dict[st
         "source": "instagram",
         "author": author,
         "text": _extract_instagram_text(media),
+        "hashtags": [
+            *hashtag_field_names(media.get("hashtags")),
+            *hashtag_field_names(media.get("edge_media_to_hashtag")),
+        ],
         "url": url,
         "posted_at": unix_to_iso(raw_ts),
         "collected_at": collected_at,
@@ -104,7 +109,9 @@ def _literal_page_count(items: list[dict[str, Any]], keyword: Keyword) -> int:
     return sum(
         1
         for item in items
-        if literal_match_status(item["text"], str(keyword), "hashtag") == "literal_match"
+        if literal_match_status(
+            item["text"], str(keyword), "hashtag", hashtags=item.get("hashtags")
+        ) == "literal_match"
     )
 
 

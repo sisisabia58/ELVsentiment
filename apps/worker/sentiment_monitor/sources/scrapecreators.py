@@ -35,6 +35,51 @@ def credits_from(payload: dict[str, Any]) -> int | None:
     return None
 
 
+def hashtag_field_names(value: Any) -> list[str]:
+    """Collect hashtag names from common provider payload shapes."""
+    names: list[str] = []
+
+    def add(candidate: Any) -> None:
+        if not isinstance(candidate, str):
+            return
+        text = candidate.strip()
+        if not text:
+            return
+        names.append(text[1:] if text.startswith("#") else text)
+
+    if isinstance(value, str):
+        add(value)
+    elif isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, str):
+                add(entry)
+            elif isinstance(entry, dict):
+                for key in ("hashtag_name", "cha_name", "name", "hashtag", "title"):
+                    add(entry.get(key))
+    elif isinstance(value, dict):
+        for key in ("hashtag_name", "cha_name", "name", "hashtag", "title"):
+            add(value.get(key))
+        edges = value.get("edges")
+        if isinstance(edges, list):
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                node = edge.get("node")
+                if isinstance(node, dict):
+                    for key in ("name", "hashtag_name", "title"):
+                        add(node.get(key))
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        folded = name.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        unique.append(name)
+    return unique
+
+
 def select_post_list(payload: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
     for key in keys:
         if key not in payload:

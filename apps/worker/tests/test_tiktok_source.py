@@ -6,6 +6,23 @@ import pytest
 from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions, normalize_tiktok_item
 
 
+def test_normalize_tiktok_item_reads_platform_hashtag_lists() -> None:
+    mention = normalize_tiktok_item(
+        {
+            "aweme_info": {
+                "aweme_id": "tt-hashtags",
+                "desc": "tanpa frasa di sini",
+                "create_time": 1794096000,
+                "author": {"unique_id": "akun"},
+                "text_extra": [{"hashtag_name": "timnasindonesia"}],
+                "challenges": [{"cha_name": "fyp"}],
+            }
+        },
+        collected_at="2026-11-08T00:00:00Z",
+    )
+    assert mention["hashtags"] == ["timnasindonesia", "fyp"]
+
+
 def test_fetch_tiktok_runs_both_keyword_and_top_with_windows_and_dedupes() -> None:
     seen: list[tuple[str, dict[str, str]]] = []
 

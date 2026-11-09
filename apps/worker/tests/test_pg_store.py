@@ -209,6 +209,29 @@ def test_association_mention_and_cursor_share_one_commit():
     assert joined.index("source_cursors") < joined.index("commit")
 
 
+def test_association_status_uses_explicit_hashtags_from_the_mention():
+    tx = AssociationTx([{"id": "m"}], None)
+    PostgresStore(tx).write_mentions_and_cursor(
+        customer_id="customer-a",
+        project_id="project-1",
+        query_key="q",
+        source="tiktok",
+        mentions=[
+            {
+                **MENTION,
+                "excerpt": "",
+                "hashtags": ["timnasindonesia"],
+                "variant": "timnas indonesia",
+                "intent": "phrase",
+                "route_id": "tiktok.keyword",
+            }
+        ],
+        next_cursor=None,
+    )
+    _sql, params = next((sql, params) for sql, params in tx.calls if "mention_keyword_associations" in sql)
+    assert params[7] == "literal_match"
+
+
 def test_conflicting_mention_unions_matched_variants_instead_of_keeping_only_the_first():
     tx = AssociationTx([], [{"id": "m1"}])
     PostgresStore(tx).write_mentions_and_cursor(

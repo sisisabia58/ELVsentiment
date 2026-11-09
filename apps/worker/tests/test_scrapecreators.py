@@ -8,6 +8,7 @@ from sentiment_monitor.sources.scrapecreators import (
     ScrapeCreatorsError,
     credits_from,
     fetch_scrapecreators_json,
+    hashtag_field_names,
     select_post_list,
 )
 
@@ -210,3 +211,12 @@ def test_region_is_omitted_by_default_and_added_only_when_requested():
     fetch_scrapecreators_json("/v1/threads/search", {"query": "kopi"}, "key", region="ID", opener=opener)
     assert "region=" not in seen[0]
     assert "region=ID" in seen[1]
+
+
+def test_hashtag_field_names_reads_common_payload_shapes():
+    assert hashtag_field_names(
+        [{"hashtag_name": "TimnasIndonesia"}, {"cha_name": "fyp"}]
+    ) == ["TimnasIndonesia", "fyp"]
+    assert hashtag_field_names(["#Kopi", {"name": "Teh"}]) == ["Kopi", "Teh"]
+    assert hashtag_field_names({"edges": [{"node": {"name": "Kopi"}}]}) == ["Kopi"]
+    assert hashtag_field_names(None) == []

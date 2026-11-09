@@ -186,7 +186,10 @@ class PostgresStore:
                         mention.get("route_id") or f"{source}.keyword"
                     ]
                     status = literal_match_status(
-                        retained_excerpt, str(variant), intent
+                        retained_excerpt,
+                        str(variant),
+                        intent,
+                        hashtags=mention.get("hashtags"),
                     )
                     for route_id in dict.fromkeys(route_ids):
                         self._conn.execute(
