@@ -22,8 +22,15 @@ def test_route_whitelist_is_fixed_per_platform_and_intent():
         "instagram.hashtag_page2",
     ]
     assert routes_for("instagram", Keyword("#kopi", "hashtag"))[1].conditional is True
-    assert [r.id for r in routes_for("tiktok", Keyword("kopi", "phrase"))] == ["tiktok.keyword", "tiktok.top"]
-    assert [r.id for r in routes_for("tiktok", Keyword("#kopi", "hashtag"))] == ["tiktok.hashtag"]
+    assert [r.id for r in routes_for("tiktok", Keyword("kopi", "phrase"))] == [
+        "tiktok.keyword",
+        "tiktok.top",
+        "tiktok.keyword_page2",
+    ]
+    assert [r.id for r in routes_for("tiktok", Keyword("#kopi", "hashtag"))] == [
+        "tiktok.hashtag",
+        "tiktok.hashtag_keyword",
+    ]
     assert routes_for("threads", Keyword("#kopi", "hashtag"))[0].disclosure == (
         "Threads has no hashtag search; searched as text"
     )
@@ -55,7 +62,7 @@ def test_request_params_use_documented_windows_and_never_region():
         "hashtag": "kopikenangan",
         "date_posted": "last-week",
     }
-    tiktok_keyword, tiktok_top = routes_for("tiktok", phrase)
+    tiktok_keyword, tiktok_top, tiktok_keyword_page2 = routes_for("tiktok", phrase)
     assert request_params(tiktok_keyword, phrase) == {
         "query": "Kopi Kenangan",
         "date_posted": "this-week",
@@ -63,6 +70,11 @@ def test_request_params_use_documented_windows_and_never_region():
     assert request_params(tiktok_top, phrase) == {
         "query": "Kopi Kenangan",
         "publish_time": "this-week",
+    }
+    assert request_params(tiktok_keyword_page2, phrase) == {
+        "query": "Kopi Kenangan",
+        "date_posted": "this-week",
+        "cursor": "30",
     }
 
 
@@ -78,7 +90,12 @@ def test_hashtag_params_are_compact_but_threads_keeps_the_literal_hash():
         "hashtag": "kopikenangan",
         "date_posted": "last-week",
     }
-    assert request_params(routes_for("tiktok", hashtag)[0], hashtag) == {"hashtag": "kopikenangan"}
+    tiktok_hashtag, tiktok_hashtag_keyword = routes_for("tiktok", hashtag)
+    assert request_params(tiktok_hashtag, hashtag) == {"hashtag": "kopikenangan"}
+    assert request_params(tiktok_hashtag_keyword, hashtag) == {
+        "query": "#kopikenangan",
+        "date_posted": "this-week",
+    }
     assert request_params(routes_for("threads", hashtag)[0], hashtag, now=now) == {
         "query": "#Kopi Kenangan",
         "start_date": "2026-11-02",
@@ -98,7 +115,7 @@ def test_threads_phrase_is_never_quoted():
 
 def test_request_count_is_keywords_times_fixed_routes():
     keywords = [Keyword("kopi", "phrase"), Keyword("#kopi", "hashtag")]
-    assert scrapecreators_request_count(keywords, ["threads", "instagram", "tiktok"]) == 9
+    assert scrapecreators_request_count(keywords, ["threads", "instagram", "tiktok"]) == 11
     assert scrapecreators_request_count([Keyword("kopi", "phrase")], ["x"]) == 0
 
 

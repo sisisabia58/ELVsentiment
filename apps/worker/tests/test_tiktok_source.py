@@ -19,6 +19,8 @@ def test_fetch_tiktok_runs_both_keyword_and_top_with_windows_and_dedupes() -> No
     def opener(request, timeout=0):
         headers = {k.lower(): v for k, v in request.header_items()}
         seen.append((request.full_url, headers))
+        if "/v1/tiktok/search/keyword" in request.full_url and "cursor=30" in request.full_url:
+            return Response(json.dumps({"search_item_list": []}))
         if "/v1/tiktok/search/keyword" in request.full_url:
             return Response(
                 json.dumps(
@@ -74,9 +76,10 @@ def test_fetch_tiktok_runs_both_keyword_and_top_with_windows_and_dedupes() -> No
         opener=opener,
     )
 
-    assert len(seen) == 2
+    assert len(seen) == 3
     keyword_url, keyword_headers = seen[0]
     top_url, top_headers = seen[1]
+    page2_url, page2_headers = seen[2]
     assert keyword_url.startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
     assert "query=kopi+kenangan" in keyword_url
     assert "date_posted=this-week" in keyword_url
@@ -88,6 +91,12 @@ def test_fetch_tiktok_runs_both_keyword_and_top_with_windows_and_dedupes() -> No
     assert "publish_time=this-week" in top_url
     assert "region=" not in top_url
     assert top_headers.get("x-api-key") == "sc-key-tt"
+
+    assert page2_url.startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
+    assert "query=kopi+kenangan" in page2_url
+    assert "date_posted=this-week" in page2_url
+    assert "cursor=30" in page2_url
+    assert page2_headers.get("x-api-key") == "sc-key-tt"
 
     ids = [m["external_id"] for m in result["mentions"]]
     assert ids == ["tt-1", "tt-dup", "tt-2"]
@@ -107,6 +116,8 @@ class _Response(io.StringIO):
 def _tiktok(payloads):
     def opener(request, timeout=0):
         if "/v1/tiktok/search/keyword" in request.full_url:
+            if "cursor=30" in request.full_url:
+                return _Response(json.dumps({"search_item_list": []}))
             return _Response(json.dumps(payloads[0]))
         return _Response(json.dumps(payloads[1]))
 
@@ -333,7 +344,7 @@ def test_tiktok_unknown_status_on_second_endpoint_does_not_inherit_first_status(
     assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
 
 
-def test_tiktok_phrase_calls_keyword_and_top_with_documented_windows_without_region():
+def test_tiktok_phrase_calls_keyword_top_and_page2_without_region_or_sort_by():
     seen = []
 
     class Response(io.StringIO):
@@ -348,15 +359,21 @@ def test_tiktok_phrase_calls_keyword_and_top_with_documented_windows_without_reg
         return Response(json.dumps({"search_item_list": []}))
 
     fetch_tiktok_mentions("Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
-    assert len(seen) == 2
+    assert len(seen) == 3
     assert seen[0].startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
     assert "date_posted=this-week" in seen[0]
+    assert "cursor=" not in seen[0]
     assert seen[1].startswith("https://api.scrapecreators.com/v1/tiktok/search/top?")
     assert "publish_time=this-week" in seen[1]
+    assert "cursor=" not in seen[1]
+    assert seen[2].startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
+    assert "date_posted=this-week" in seen[2]
+    assert "cursor=30" in seen[2]
     assert all("region=" not in url for url in seen)
+    assert all("sort_by=" not in url for url in seen)
 
 
-def test_tiktok_hashtag_calls_only_the_hashtag_route():
+def test_tiktok_hashtag_calls_hashtag_and_keyword_tag_routes():
     seen = []
 
     class Response(io.StringIO):
@@ -370,15 +387,18 @@ def test_tiktok_hashtag_calls_only_the_hashtag_route():
         seen.append(request.full_url)
         return Response(json.dumps({"search_item_list": [{"aweme_id": "tt-1", "desc": "#Kopi"}]}))
 
-    result = fetch_tiktok_mentions("#Kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
-    assert len(seen) == 1
+    result = fetch_tiktok_mentions("#Kopi Kenangan", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    assert len(seen) == 2
     assert seen[0].startswith("https://api.scrapecreators.com/v1/tiktok/search/hashtag?")
-    assert "hashtag=kopi" in seen[0]
-    assert "region=" not in seen[0]
+    assert "hashtag=kopikenangan" in seen[0]
+    assert seen[1].startswith("https://api.scrapecreators.com/v1/tiktok/search/keyword?")
+    assert "query=%23kopikenangan" in seen[1]
+    assert "date_posted=this-week" in seen[1]
+    assert all("region=" not in url for url in seen)
     assert result["mentions"][0]["route_id"] == "tiktok.hashtag"
 
 
-def test_tiktok_same_post_on_both_routes_keeps_all_route_ids():
+def test_tiktok_same_post_on_all_routes_keeps_all_route_ids():
     class Response(io.StringIO):
         def __enter__(self):
             return self
@@ -391,7 +411,11 @@ def test_tiktok_same_post_on_both_routes_keeps_all_route_ids():
 
     result = fetch_tiktok_mentions("Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
     assert len(result["mentions"]) == 1
-    assert result["mentions"][0]["route_ids"] == ["tiktok.keyword", "tiktok.top"]
+    assert result["mentions"][0]["route_ids"] == [
+        "tiktok.keyword",
+        "tiktok.top",
+        "tiktok.keyword_page2",
+    ]
 
 
 def test_tiktok_partial_window_failure_preserves_parsed_count():

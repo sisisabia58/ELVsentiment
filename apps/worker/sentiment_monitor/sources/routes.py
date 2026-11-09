@@ -110,9 +110,28 @@ _ROUTES: dict[tuple[str, str], tuple[Route, ...]] = {
             "publish_time",
             "this-week",
         ),
+        Route(
+            "tiktok.keyword_page2",
+            "tiktok",
+            "phrase",
+            "/v1/tiktok/search/keyword",
+            "query",
+            "date_posted",
+            "this-week",
+            extra_params=(("cursor", "30"),),
+        ),
     ),
     ("tiktok", "hashtag"): (
         Route("tiktok.hashtag", "tiktok", "hashtag", "/v1/tiktok/search/hashtag", "hashtag"),
+        Route(
+            "tiktok.hashtag_keyword",
+            "tiktok",
+            "hashtag",
+            "/v1/tiktok/search/keyword",
+            "query",
+            "date_posted",
+            "this-week",
+        ),
     ),
 }
 
@@ -145,6 +164,8 @@ def request_params(
 ) -> dict[str, str]:
     if route.id == "threads.hashtag_text":
         value = str(keyword)
+    elif route.id == "tiktok.hashtag_keyword":
+        value = "#" + hashtag_term(str(keyword))
     elif route.query_param == "hashtag":
         value = hashtag_term(str(keyword))
     else:

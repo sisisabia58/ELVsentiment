@@ -2337,7 +2337,7 @@ def test_collection_plan_logs_keywords_and_fixed_route_count(tmp_path):
         )
 
     assert any(
-        "collection_plan" in line and "keywords=1" in line and "routes=4" in line
+        "collection_plan" in line and "keywords=1" in line and "routes=6" in line
         for line in lines
     )
 

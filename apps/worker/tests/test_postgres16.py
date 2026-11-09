@@ -947,7 +947,7 @@ def test_postgres16_multiple_keyword_routes_keep_one_post_and_distinct_count(pg1
     ]
 
 
-def test_postgres16_fetch_pipeline_keeps_two_keywords_times_two_routes(pg16):
+def test_postgres16_fetch_pipeline_keeps_two_keywords_times_three_routes(pg16):
     from sentiment_monitor.intent import Keyword
     from sentiment_monitor.pg_store import PostgresStore
     from sentiment_monitor.scheduler import CursorRowAdapter, _unpack_fetched
@@ -980,7 +980,7 @@ def test_postgres16_fetch_pipeline_keeps_two_keywords_times_two_routes(pg16):
         mentions, _cursor, counts, _credits, _status = _unpack_fetched(
             result, Keyword(keyword, "phrase")
         )
-        assert counts == {"returned": 2, "parsed": 2, "deduplicated": 1}
+        assert counts == {"returned": 3, "parsed": 3, "deduplicated": 2}
         return mentions
 
     def store(keyword):
@@ -1012,8 +1012,10 @@ def test_postgres16_fetch_pipeline_keeps_two_keywords_times_two_routes(pg16):
     ).fetchall()
     assert associations == [
         ("alpha", "tiktok.keyword"),
+        ("alpha", "tiktok.keyword_page2"),
         ("alpha", "tiktok.top"),
         ("beta", "tiktok.keyword"),
+        ("beta", "tiktok.keyword_page2"),
         ("beta", "tiktok.top"),
     ]
 
