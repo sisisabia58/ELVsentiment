@@ -60,6 +60,15 @@ _ROUTES: dict[tuple[str, str], tuple[Route, ...]] = {
             "date_posted",
             "last-week",
         ),
+        Route(
+            "instagram.hashtag_from_phrase",
+            "instagram",
+            "phrase",
+            "/v1/instagram/search/hashtag",
+            "hashtag",
+            "date_posted",
+            "last-week",
+        ),
     ),
     ("instagram", "hashtag"): (
         Route(
@@ -70,6 +79,16 @@ _ROUTES: dict[tuple[str, str], tuple[Route, ...]] = {
             "hashtag",
             "date_posted",
             "last-week",
+        ),
+        Route(
+            "instagram.hashtag_page2",
+            "instagram",
+            "hashtag",
+            "/v1/instagram/search/hashtag",
+            "hashtag",
+            "date_posted",
+            "last-week",
+            conditional=True,
         ),
     ),
     ("tiktok", "phrase"): (

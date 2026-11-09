@@ -5,6 +5,7 @@ from typing import Any, Callable
 import urllib.request
 
 from sentiment_monitor.intent import Keyword
+from sentiment_monitor.relevance import literal_match_status
 from sentiment_monitor.sources.routes import request_params, routes_for, within_overlap
 from sentiment_monitor.sources.scrapecreators import (
     ScrapeCreatorsError,
@@ -79,6 +80,34 @@ def normalize_instagram_item(item: dict[str, Any], collected_at: str) -> dict[st
     }
 
 
+INSTAGRAM_PAGE2_LITERAL_MIN_PERCENT = 60
+INSTAGRAM_PAGE2_MIN_PAGE_SIZE = 5
+
+
+def should_fetch_instagram_page2(
+    literal_count: int, total: int, cursor: Any
+) -> bool:
+    if cursor is None or (isinstance(cursor, str) and not cursor.strip()):
+        return False
+    if total < INSTAGRAM_PAGE2_MIN_PAGE_SIZE:
+        return False
+    return literal_count * 100 >= total * INSTAGRAM_PAGE2_LITERAL_MIN_PERCENT
+
+
+def _post_keys(route) -> tuple[str, ...]:
+    if route.id == "instagram.reels":
+        return ("reels", "items", "data")
+    return ("posts", "items", "medias", "data")
+
+
+def _literal_page_count(items: list[dict[str, Any]], keyword: Keyword) -> int:
+    return sum(
+        1
+        for item in items
+        if literal_match_status(item["text"], str(keyword), "hashtag") == "literal_match"
+    )
+
+
 def fetch_instagram_mentions(
     variant: str,
     api_key: str,
@@ -88,53 +117,132 @@ def fetch_instagram_mentions(
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
     keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
-    route = routes_for("instagram", keyword)[0]
+    routes = routes_for("instagram", keyword)
     credits: list[int | None] = []
     returned: int | None = None
+    parsed_total = 0
+    retained_total = 0
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
+    page2_route = None
+    page2_cursor: str | None = None
 
-    payload = fetch_scrapecreators_json(
-        route.path,
-        request_params(route, keyword),
-        api_key,
-        opener=opener,
-    )
-    http_status = getattr(payload, "http_status", None)
-    credits.append(credits_from(payload))
+    for route in routes:
+        if route.conditional:
+            page2_route = route
+            continue
 
-    keys = ("reels", "items", "data") if route.intent == "phrase" else ("posts", "items", "medias", "data")
-    try:
-        raw_items = select_post_list(payload, keys)
-    except ScrapeCreatorsError as error:
-        raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
-    returned = len(raw_items)
-    normalized_items = [
-        normalize_instagram_item(item, collected_at)
-        for item in raw_items
-        if isinstance(item, dict)
-    ]
-    retained_items = [
-        {**item, "route_id": route.id}
-        for item in normalized_items
-        if within_overlap(item["posted_at"], collected_at, route)
-    ]
-    collected.extend(retained_items)
-    if raw_items and not has_usable_mentions(normalized_items):
-        raise ScrapeCreatorsError(
-            "malformed_posts",
-            http_status=http_status,
-            credits_charged=known_credits(credits),
-            counts=failure_counts(returned, collected),
+        payload = fetch_scrapecreators_json(
+            route.path,
+            request_params(route, keyword, now=collected_at),
+            api_key,
+            opener=opener,
         )
+        http_status = getattr(payload, "http_status", None)
+        credits.append(credits_from(payload))
+        try:
+            raw_items = select_post_list(payload, _post_keys(route))
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(
+                error, credits, returned, collected, http_status=http_status, parsed=parsed_total
+            ) from None
+        returned = len(raw_items) if returned is None else returned + len(raw_items)
+        normalized_items = [
+            normalize_instagram_item(item, collected_at)
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        parsed_total += len(normalized_items)
+        retained_items = [
+            {**item, "route_id": route.id}
+            for item in normalized_items
+            if within_overlap(item["posted_at"], collected_at, route)
+        ]
+        retained_total += len(retained_items)
+        collected.extend(retained_items)
+        if raw_items and not has_usable_mentions(normalized_items):
+            counts = failure_counts(returned, collected)
+            counts["parsed"] = parsed_total
+            raise ScrapeCreatorsError(
+                "malformed_posts",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                counts=counts,
+            )
+
+        if route.id == "instagram.hashtag":
+            cursor = payload.get("cursor")
+            if isinstance(cursor, int):
+                cursor = str(cursor)
+            if should_fetch_instagram_page2(
+                _literal_page_count(normalized_items, keyword),
+                len(normalized_items),
+                cursor,
+            ):
+                page2_cursor = str(cursor)
+
+    if page2_route is not None and page2_cursor is not None:
+        params = request_params(page2_route, keyword, now=collected_at)
+        params["cursor"] = page2_cursor
+        try:
+            payload = fetch_scrapecreators_json(
+                page2_route.path,
+                params,
+                api_key,
+                opener=opener,
+            )
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                parsed=parsed_total,
+            ) from None
+        http_status = getattr(payload, "http_status", None)
+        credits.append(credits_from(payload))
+        try:
+            raw_items = select_post_list(payload, _post_keys(page2_route))
+        except ScrapeCreatorsError as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
+        returned = len(raw_items) if returned is None else returned + len(raw_items)
+        normalized_items = [
+            normalize_instagram_item(item, collected_at)
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        parsed_total += len(normalized_items)
+        retained_items = [
+            {**item, "route_id": page2_route.id}
+            for item in normalized_items
+            if within_overlap(item["posted_at"], collected_at, page2_route)
+        ]
+        retained_total += len(retained_items)
+        collected.extend(retained_items)
+        if raw_items and not has_usable_mentions(normalized_items):
+            counts = failure_counts(returned, collected)
+            counts["parsed"] = parsed_total
+            raise ScrapeCreatorsError(
+                "malformed_posts",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                counts=counts,
+            )
 
     mentions = dedupe_mentions(collected)
     counts = {
         "returned": returned,
-        "parsed": len(normalized_items),
-        "deduplicated": len(retained_items) - len(mentions),
+        "parsed": parsed_total,
+        "deduplicated": retained_total - len(mentions),
     }
-    dropped = len(normalized_items) - len(retained_items)
+    dropped = parsed_total - retained_total
     if dropped > 0:
         counts["dropped_out_of_window"] = dropped
     return {

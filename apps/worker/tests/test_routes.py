@@ -13,8 +13,15 @@ from sentiment_monitor.sources.routes import (
 def test_route_whitelist_is_fixed_per_platform_and_intent():
     assert [r.id for r in routes_for("threads", Keyword("kopi", "phrase"))] == ["threads.keyword"]
     assert [r.id for r in routes_for("threads", Keyword("#kopi", "hashtag"))] == ["threads.hashtag_text"]
-    assert [r.id for r in routes_for("instagram", Keyword("kopi", "phrase"))] == ["instagram.reels"]
-    assert [r.id for r in routes_for("instagram", Keyword("#kopi", "hashtag"))] == ["instagram.hashtag"]
+    assert [r.id for r in routes_for("instagram", Keyword("kopi", "phrase"))] == [
+        "instagram.reels",
+        "instagram.hashtag_from_phrase",
+    ]
+    assert [r.id for r in routes_for("instagram", Keyword("#kopi", "hashtag"))] == [
+        "instagram.hashtag",
+        "instagram.hashtag_page2",
+    ]
+    assert routes_for("instagram", Keyword("#kopi", "hashtag"))[1].conditional is True
     assert [r.id for r in routes_for("tiktok", Keyword("kopi", "phrase"))] == ["tiktok.keyword", "tiktok.top"]
     assert [r.id for r in routes_for("tiktok", Keyword("#kopi", "hashtag"))] == ["tiktok.hashtag"]
     assert routes_for("threads", Keyword("#kopi", "hashtag"))[0].disclosure == (
@@ -39,8 +46,13 @@ def test_request_params_use_documented_windows_and_never_region():
         "start_date": "2026-11-02",
         "end_date": "2026-11-10",
     }
-    assert request_params(routes_for("instagram", phrase)[0], phrase) == {
+    instagram_reels, instagram_phrase_hashtag = routes_for("instagram", phrase)
+    assert request_params(instagram_reels, phrase) == {
         "query": "Kopi Kenangan",
+        "date_posted": "last-week",
+    }
+    assert request_params(instagram_phrase_hashtag, phrase) == {
+        "hashtag": "kopikenangan",
         "date_posted": "last-week",
     }
     tiktok_keyword, tiktok_top = routes_for("tiktok", phrase)
@@ -57,7 +69,12 @@ def test_request_params_use_documented_windows_and_never_region():
 def test_hashtag_params_are_compact_but_threads_keeps_the_literal_hash():
     hashtag = Keyword("#Kopi Kenangan", "hashtag")
     now = "2026-11-09T16:31:00Z"
-    assert request_params(routes_for("instagram", hashtag)[0], hashtag) == {
+    instagram_hashtag, instagram_page2 = routes_for("instagram", hashtag)
+    assert request_params(instagram_hashtag, hashtag) == {
+        "hashtag": "kopikenangan",
+        "date_posted": "last-week",
+    }
+    assert request_params(instagram_page2, hashtag) == {
         "hashtag": "kopikenangan",
         "date_posted": "last-week",
     }
@@ -81,7 +98,7 @@ def test_threads_phrase_is_never_quoted():
 
 def test_request_count_is_keywords_times_fixed_routes():
     keywords = [Keyword("kopi", "phrase"), Keyword("#kopi", "hashtag")]
-    assert scrapecreators_request_count(keywords, ["threads", "instagram", "tiktok"]) == 7
+    assert scrapecreators_request_count(keywords, ["threads", "instagram", "tiktok"]) == 9
     assert scrapecreators_request_count([Keyword("kopi", "phrase")], ["x"]) == 0
 
 

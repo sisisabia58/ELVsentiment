@@ -4,9 +4,12 @@ import json
 import pytest
 
 from sentiment_monitor.sources.instagram import (
+    INSTAGRAM_PAGE2_LITERAL_MIN_PERCENT,
+    INSTAGRAM_PAGE2_MIN_PAGE_SIZE,
     fetch_instagram_mentions,
     normalize_hashtag,
     normalize_instagram_item,
+    should_fetch_instagram_page2,
 )
 
 
@@ -28,6 +31,8 @@ def test_fetch_instagram_phrase_uses_reels_route_with_api_key_and_dedupes() -> N
     def opener(request, timeout=0):
         headers = {k.lower(): v for k, v in request.header_items()}
         seen.append((request.full_url, headers))
+        if "/v1/instagram/search/hashtag" in request.full_url:
+            return Response(json.dumps({"posts": []}))
         return Response(
             json.dumps(
                 {
@@ -66,13 +71,18 @@ def test_fetch_instagram_phrase_uses_reels_route_with_api_key_and_dedupes() -> N
         opener=opener,
     )
 
-    assert len(seen) == 1
+    assert len(seen) == 2
     url, headers = seen[0]
     assert url.startswith("https://api.scrapecreators.com/v2/instagram/reels/search?")
     assert "query=Kopi+Kenangan" in url
     assert "date_posted=last-week" in url
     assert "region=" not in url
     assert headers.get("x-api-key") == "sc-key-ig"
+    hashtag_url, hashtag_headers = seen[1]
+    assert hashtag_url.startswith("https://api.scrapecreators.com/v1/instagram/search/hashtag?")
+    assert "hashtag=kopikenangan" in hashtag_url
+    assert "date_posted=last-week" in hashtag_url
+    assert hashtag_headers.get("x-api-key") == "sc-key-ig"
 
     ids = [m["external_id"] for m in result["mentions"]]
     assert ids == ["ig-1", "ig-dup"]
@@ -89,12 +99,17 @@ class _Response(io.StringIO):
 
 
 def _instagram(payload, *, intent="phrase"):
+    def opener(request, timeout=0):
+        if intent == "phrase" and "/v1/instagram/search/hashtag" in request.full_url:
+            return _Response(json.dumps({"posts": []}))
+        return _Response(json.dumps(payload))
+
     return fetch_instagram_mentions(
         "Kopi",
         "key",
         "2026-11-01T00:00:00Z",
         intent=intent,
-        opener=lambda *args, **kwargs: _Response(json.dumps(payload)),
+        opener=opener,
     )
 
 
@@ -162,12 +177,17 @@ class _StatusResponse(io.StringIO):
 
 
 def test_instagram_success_result_keeps_known_response_status():
+    def opener(request, timeout=0):
+        if "/v1/instagram/search/hashtag" in request.full_url:
+            return _StatusResponse('{"posts": []}', status=201)
+        return _StatusResponse('{"reels": []}', status=201)
+
     result = fetch_instagram_mentions(
         "Kopi",
         "key",
         "2026-11-01T00:00:00Z",
         intent="phrase",
-        opener=lambda *args, **kwargs: _StatusResponse('{"reels": []}', status=201),
+        opener=opener,
     )
     assert result["http_status"] == 201
 
@@ -268,7 +288,7 @@ def test_instagram_missing_or_non_list_is_unknown_returned():
         assert error.counts.get("deduplicated") == 0
 
 
-def test_instagram_phrase_calls_only_reels_without_region():
+def test_instagram_phrase_calls_reels_then_joined_hashtag_without_region():
     seen = []
 
     class Response(io.StringIO):
@@ -280,15 +300,20 @@ def test_instagram_phrase_calls_only_reels_without_region():
 
     def opener(request, timeout=0):
         seen.append(request.full_url)
+        if "/v1/instagram/search/hashtag" in request.full_url:
+            return Response(json.dumps({"posts": []}))
         return Response(json.dumps({"reels": [{"pk": "ig-1", "caption": "Kopi"}]}))
 
     result = fetch_instagram_mentions("Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
-    assert len(seen) == 1
+    assert len(seen) == 2
     assert seen[0].startswith("https://api.scrapecreators.com/v2/instagram/reels/search?")
     assert "query=Kopi" in seen[0]
     assert "date_posted=last-week" in seen[0]
-    assert "region=" not in seen[0]
-    assert result["mentions"][0]["route_id"] == "instagram.reels"
+    assert seen[1].startswith("https://api.scrapecreators.com/v1/instagram/search/hashtag?")
+    assert "hashtag=kopi" in seen[1]
+    assert "date_posted=last-week" in seen[1]
+    assert all("region=" not in url for url in seen)
+    assert result["mentions"][0]["route_ids"] == ["instagram.reels"]
 
 
 def test_instagram_hashtag_calls_only_hashtag_with_compact_term():
@@ -314,6 +339,128 @@ def test_instagram_hashtag_calls_only_hashtag_with_compact_term():
     assert result["mentions"][0]["route_id"] == "instagram.hashtag"
 
 
+def _ig_hashtag_payload(literal, total, *, cursor="2", prefix="p"):
+    posts = []
+    for index in range(total):
+        posts.append(
+            {
+                "id": f"{prefix}{index}",
+                "caption": "#kopi" if index < literal else "#other",
+                "taken_at": 1794096000,
+            }
+        )
+    payload = {"posts": posts, "credits_charged": 1}
+    if cursor is not None:
+        payload["cursor"] = cursor
+    return payload
+
+
+def test_instagram_page2_threshold_constants_and_boundaries():
+    assert INSTAGRAM_PAGE2_LITERAL_MIN_PERCENT == 60
+    assert INSTAGRAM_PAGE2_MIN_PAGE_SIZE == 5
+    assert should_fetch_instagram_page2(5, 10, "2") is False
+    assert should_fetch_instagram_page2(6, 10, "2") is True
+    assert should_fetch_instagram_page2(7, 10, "2") is True
+    assert should_fetch_instagram_page2(4, 4, "2") is False
+    assert should_fetch_instagram_page2(5, 5, "2") is True
+    assert should_fetch_instagram_page2(0, 0, "2") is False
+    assert should_fetch_instagram_page2(6, 10, None) is False
+
+
+def test_instagram_hashtag_page2_fetches_at_threshold_with_route_provenance():
+    page1 = _ig_hashtag_payload(6, 10, cursor="2")
+    page2 = _ig_hashtag_payload(3, 3, cursor="3", prefix="q")
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "cursor=2" in request.full_url:
+            return Response(json.dumps(page2))
+        return Response(json.dumps(page1))
+
+    result = fetch_instagram_mentions("#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    assert len(seen) == 2
+    assert "cursor=2" in seen[1]
+    assert "date_posted=last-week" in seen[1]
+    assert result["counts"]["returned"] == 13
+    assert any(item["route_ids"] == ["instagram.hashtag_page2"] for item in result["mentions"])
+
+
+def test_instagram_hashtag_does_not_page_below_threshold():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(json.dumps(_ig_hashtag_payload(5, 10, cursor="2")))
+
+    result = fetch_instagram_mentions("#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    assert len(seen) == 1
+    assert result["counts"]["returned"] == 10
+
+
+def test_instagram_hashtag_does_not_page_empty_or_without_a_cursor():
+    for payload in ({"posts": [], "cursor": "2"}, _ig_hashtag_payload(10, 10, cursor=None)):
+        seen = []
+
+        class Response(io.StringIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def opener(request, timeout=0):
+            seen.append(request.full_url)
+            return Response(json.dumps(payload))
+
+        fetch_instagram_mentions("#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+        assert len(seen) == 1
+
+
+def test_instagram_hashtag_page2_failure_preserves_page1_counts_and_credits():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    page1 = _ig_hashtag_payload(6, 10, cursor="2")
+    page1["credits_charged"] = 2
+
+    class Response(io.StringIO):
+        def __init__(self, body, status=200):
+            super().__init__(body)
+            self.status = status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        if "cursor=2" in request.full_url:
+            return Response("{not-json")
+        return Response(json.dumps(page1))
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions("#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    error = caught.value
+    assert error.code == "malformed_json"
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 10, "parsed": 10, "deduplicated": 0}
+
+
 def test_instagram_drops_a_stale_item_only_when_the_route_has_a_window():
     class Response(io.StringIO):
         def __enter__(self):
@@ -323,6 +470,8 @@ def test_instagram_drops_a_stale_item_only_when_the_route_has_a_window():
             return False
 
     def opener(request, timeout=0):
+        if "/v1/instagram/search/hashtag" in request.full_url:
+            return Response(json.dumps({"posts": []}))
         return Response(
             json.dumps(
                 {
