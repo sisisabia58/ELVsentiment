@@ -205,6 +205,11 @@ export function DashboardScreen(props: {
               <TextMatchSummary
                 counts={props.model?.textMatch ?? { candidates: 0, literal: 0, unknown: 0 }}
               />
+              {props.model && props.model.unknownPostedAt > 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatNumber(props.model.unknownPostedAt)} sebutan tanpa waktu posting; dihitung dalam rentang dan ringkasan berdasarkan waktu pengumpulan, bukan waktu posting.
+                </p>
+              ) : null}
             </Panel>
             {props.model ? (
               <div className="grid min-w-0 gap-4 xl:grid-cols-3 lg:gap-5">

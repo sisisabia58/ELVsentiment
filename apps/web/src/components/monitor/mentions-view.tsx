@@ -5,7 +5,7 @@ import { projectHref } from "@/monitor/links";
 import { selectedSourcesReady, type Workspace } from "@/monitor/load";
 import type { PresentedMention, Sentiment } from "@/monitor/present";
 import { SENTIMENT_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
-import { inWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
+import { mentionInWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
 import { TEXT_MATCH_LABEL, textMatchCounts } from "@/monitor/relevance";
 import { emptyCollectionBody } from "@/monitor/copy";
 import { EmptyState, PageHeader, Panel, SentimentTag, SourceMark } from "./bits";
@@ -256,7 +256,7 @@ function rowsFor(
   end: Date,
 ): PresentedMention[] {
   return workspace.mentions.filter((mention) => {
-    if (mention.postedAt && !inWindow(mention.postedAt, start, end)) return false;
+    if (!mentionInWindow(mention, start, end)) return false;
     if (source === "x" || source === "threads" || source === "instagram" || source === "tiktok") {
       if (mention.source !== source) return false;
     }

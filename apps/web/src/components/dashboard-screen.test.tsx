@@ -208,6 +208,7 @@ function touchModel(): DashboardModel {
     topics: [{ label: "harga", count: 2 }],
     attentionItems: [],
     textMatch: { candidates: 7, literal: 4, unknown: 2 },
+    unknownPostedAt: 0,
     partial: false,
   };
 }

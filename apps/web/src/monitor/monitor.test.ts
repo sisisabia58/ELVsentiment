@@ -254,7 +254,9 @@ describe("workspace loader", () => {
       uncertainOpen: 0,
       partial: false,
     });
-    expect(hiddenDay.totals.total).toBe(0);
+    expect(hiddenDay.totals.total).toBe(1);
+    expect(hiddenDay.unknownPostedAt).toBe(1);
+    expect(hiddenDay.points.every((point) => point.total === null)).toBe(true);
   });
 
   it("derives confirm versus correct on the server and rejects an unknown topic", async () => {
@@ -499,6 +501,8 @@ describe("explicit unknown posting time", () => {
       uncertainOpen: 0,
       partial: false,
     });
-    expect(model.textMatch).toEqual({ candidates: 0, literal: 0, unknown: 0 });
+    expect(model.textMatch).toEqual({ candidates: 1, literal: 0, unknown: 1 });
+    expect(model.unknownPostedAt).toBe(1);
+    expect(model.points.every((point) => point.total === null)).toBe(true);
   });
 });

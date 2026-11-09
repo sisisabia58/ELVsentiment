@@ -2,7 +2,7 @@ import { overviewScore } from "../domain/aggregates";
 import { describeChange, type ChangeTone } from "./format";
 import type { SourceId } from "./policy";
 import type { PresentedMention, Sentiment } from "./present";
-import { inWindow, rangeWindow, type RangeKey, type RangeWindow } from "./range";
+import { mentionInWindow, rangeWindow, type RangeKey, type RangeWindow } from "./range";
 import { textMatchCounts, type TextMatchCounts } from "./relevance";
 
 export type SourceKey = "all" | SourceId;
@@ -39,6 +39,7 @@ export type DashboardModel = {
   topics: { label: string; count: number }[];
   attentionItems: PresentedMention[];
   textMatch: TextMatchCounts;
+  unknownPostedAt: number;
   partial: boolean;
 };
 
@@ -70,8 +71,7 @@ function scoreOf(totals: { positif: number; netral: number; negatif: number }): 
 function includedIn(mentions: readonly PresentedMention[], start: Date, end: Date, source: SourceKey): PresentedMention[] {
   return mentions.filter((mention) => {
     if (source !== "all" && mention.source !== source) return false;
-    if (!mention.postedAt) return false;
-    return inWindow(mention.postedAt, start, end);
+    return mentionInWindow(mention, start, end);
   });
 }
 
@@ -87,8 +87,11 @@ export function buildDashboard(input: {
   const window = rangeWindow(input.range, input.now);
   const current = includedIn(input.mentions, window.start, window.end, input.source);
   const textMatch = textMatchCounts(current);
+  const unknownPostedAt = current.filter((mention) => mention.postedAt === null).length;
   const previous = includedIn(input.mentions, window.previousStart, window.start, input.source);
   const currentIncluded = current.filter((mention) => mention.bucket === "included" && mention.sentiment);
+  const currentDated = current.filter((mention) => mention.postedAt !== null);
+  const currentDatedIncluded = currentIncluded.filter((mention) => mention.postedAt !== null);
   const previousIncluded = previous.filter((mention) => mention.bucket === "included" && mention.sentiment);
   const totals = counts(currentIncluded);
   const previousTotals = counts(previousIncluded);
@@ -100,7 +103,7 @@ export function buildDashboard(input: {
       : ({ kind: "score", value: currentScore, included: totals.total } as const);
 
   const byDay = new Map<string, PresentedMention[]>();
-  for (const mention of currentIncluded) {
+  for (const mention of currentDatedIncluded) {
     const day = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Jakarta",
       year: "numeric",
@@ -127,7 +130,7 @@ export function buildDashboard(input: {
       };
     }
     const dayTotals = counts(rows);
-    const attention = current.filter(
+    const attention = currentDated.filter(
       (mention) =>
         mention.needsAttention &&
         new Intl.DateTimeFormat("en-CA", {
@@ -188,6 +191,7 @@ export function buildDashboard(input: {
     topics,
     attentionItems,
     textMatch,
+    unknownPostedAt,
     partial: input.partial,
   };
 }

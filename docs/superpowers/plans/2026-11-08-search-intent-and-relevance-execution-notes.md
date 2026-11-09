@@ -39,3 +39,24 @@ Base: `48fad3c`
    literal and needed the new required `keywordIntents: {}` field.
 
 No proposed behavior was widened beyond the approved defaults.
+
+## N1 repair — undated dashboard window rule (2026-11-09, user-approved local fix)
+
+- **Rule:** a mention belongs to a date range by `postedAt` when the posting time is
+  known, otherwise by `collectedAt`. This is implemented once in
+  `apps/web/src/monitor/range.ts` as `windowTimestamp` / `mentionInWindow`, and used by
+  the dashboard, Sebutan, and Perlu perhatian. It never writes `collectedAt` into
+  `postedAt`; Sebutan still renders `Waktu postingan tidak tersedia · Dikumpulkan …`,
+  and the dashboard shows `N sebutan tanpa waktu posting; dihitung dalam rentang dan
+  ringkasan berdasarkan waktu pengumpulan, bukan waktu posting.`
+- **Effect:** undated rows now count in dashboard candidate/text-match counts, sentiment
+  totals and score, and the Perlu perhatian tile/preview, consistently with Sebutan for
+  the same date/source filters. Trend/volume date buckets remain dated-only so an
+  unknown posting time is not placed on a posting-date axis.
+- **P3 note:** an undated row collected outside the range is now excluded from all
+  three screens by the same collection-time rule.
+- **Tests:** `apps/web/src/monitor/undated-window.test.tsx` covers equal dashboard/Sebutan
+  counts, an undated negative in the attention tile/preview, the dashboard disclosure,
+  and the old-undated-outside-range case.
+- **Unchanged:** scoring eligibility, F5 historical scoring-bucket list rules,
+  migrations 001–011, worker collection, and all other findings.

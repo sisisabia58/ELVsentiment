@@ -62,3 +62,13 @@ export function inWindow(iso: string, start: Date, end: Date): boolean {
   const time = new Date(iso).getTime();
   return time >= start.getTime() && time < end.getTime();
 }
+
+export type WindowedMention = { postedAt: string | null; collectedAt: string };
+
+export function windowTimestamp(mention: WindowedMention): string {
+  return mention.postedAt ?? mention.collectedAt;
+}
+
+export function mentionInWindow(mention: WindowedMention, start: Date, end: Date): boolean {
+  return inWindow(windowTimestamp(mention), start, end);
+}
