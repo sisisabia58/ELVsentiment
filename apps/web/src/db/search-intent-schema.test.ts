@@ -58,7 +58,7 @@ describe("search intent schema", () => {
     await db.query(
       `insert into mention_keyword_associations
          (id, customer_id, project_id, mention_id, keyword_text, intent, route_id, source, status, collected_at)
-       select gen_random_uuid(), $1, $2, m.id, '#kopi', 'hashtag', 'instagram.hashtag', 'instagram', 'literal_match', now()
+       select gen_random_uuid(), $1, $2, m.id, '#kopi', 'hashtag', 'threads.hashtag_text', 'threads', 'literal_match', now()
        from mentions m where m.project_id = $2`,
       [CUSTOMER, PROJECT_A],
     );
@@ -72,5 +72,23 @@ describe("search intent schema", () => {
     // test_postgres16_worker_association_rejects_other_customer asserts that a
     // worker-context insert for a different customer is rejected by the
     // tenant-scoped worker policy.
+  });
+
+  it("stores a mention whose posting time is explicitly unknown", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    await seed(db);
+    await db.query(
+      `insert into mentions
+         (id, customer_id, project_id, source, external_id, excerpt, url, author, posted_at, collected_at, matched_variants, scoring_status)
+       values (gen_random_uuid(), $1, $2, 'threads', 'undated', 'kopi', null, 'ani', null, now(), array['kopi'], 'pending')`,
+      [CUSTOMER, PROJECT_A],
+    );
+    const row = await db.query<{ posted_at: string | null }>(
+      "select posted_at from mentions where external_id = 'undated'",
+    );
+    expect(row.rows[0]?.posted_at).toBeNull();
+    const cursor = await db.query<{ n: number }>("select count(*)::int as n from source_cursors");
+    expect(cursor.rows[0]?.n).toBe(0);
   });
 });

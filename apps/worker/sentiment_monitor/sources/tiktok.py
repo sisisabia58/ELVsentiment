@@ -18,11 +18,6 @@ from sentiment_monitor.sources.scrapecreators import (
     unix_to_iso,
 )
 
-TIKTOK_KEYWORD_SEARCH_PATH = "/v1/tiktok/search/keyword"
-TIKTOK_TOP_SEARCH_PATH = "/v1/tiktok/search/top"
-TIKTOK_KEYWORD_SEARCH_URL = f"https://api.scrapecreators.com{TIKTOK_KEYWORD_SEARCH_PATH}"
-TIKTOK_TOP_SEARCH_URL = f"https://api.scrapecreators.com{TIKTOK_TOP_SEARCH_PATH}"
-
 
 def _extract_tiktok_author(aweme: dict[str, Any]) -> str | None:
     author = aweme.get("author")
@@ -86,13 +81,22 @@ def fetch_tiktok_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected) from None
+            raise carry_attempt_context(
+                error, credits, returned, collected, parsed=parsed_total
+            ) from None
         http_status = getattr(payload, "http_status", None)
         credits.append(credits_from(payload))
         try:
             raw = _extract_tiktok_list(payload)
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(error, credits, returned, collected, http_status=http_status) from None
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
         normalized_items = [
             normalize_tiktok_item(item, collected_at)
             for item in raw
@@ -108,11 +112,13 @@ def fetch_tiktok_mentions(
         retained_total += len(retained)
         collected.extend(retained)
         if raw and not has_usable_mentions(normalized_items):
+            counts = failure_counts(returned, collected)
+            counts["parsed"] = parsed_total
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
                 credits_charged=known_credits(credits),
-                counts=failure_counts(returned, collected),
+                counts=counts,
             )
 
     mentions = dedupe_mentions(collected)

@@ -945,3 +945,242 @@ def test_postgres16_multiple_keyword_routes_keep_one_post_and_distinct_count(pg1
         ("threads.hashtag_text", "#kopi", "literal_match"),
         ("threads.keyword", "kopi", "literal_match"),
     ]
+
+
+def test_postgres16_fetch_pipeline_keeps_two_keywords_times_two_routes(pg16):
+    from sentiment_monitor.intent import Keyword
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.scheduler import CursorRowAdapter, _unpack_fetched
+    from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions
+
+    conn = pg16
+    _seed(conn)
+    payload = {
+        "items": [
+            {
+                "aweme_id": "pipeline-same",
+                "desc": "alpha beta",
+                "create_time": 1794096000,
+                "author": {"unique_id": "ani"},
+            }
+        ],
+        "credits_charged": 2,
+    }
+
+    def fetch(keyword):
+        def opener(request, timeout=0):
+            import io
+            import json
+
+            return io.StringIO(json.dumps(payload))
+
+        result = fetch_tiktok_mentions(
+            Keyword(keyword, "phrase"), "synthetic", "2026-11-09T00:00:00Z", opener=opener
+        )
+        mentions, _cursor, counts, _credits, _status = _unpack_fetched(
+            result, Keyword(keyword, "phrase")
+        )
+        assert counts == {"returned": 2, "parsed": 2, "deduplicated": 1}
+        return mentions
+
+    def store(keyword):
+        conn.execute("begin")
+        conn.execute("set local role worker_role")
+        conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+        saved = PostgresStore(CursorRowAdapter(conn)).write_mentions_and_cursor(
+            customer_id=CUSTOMER_A,
+            project_id=PROJECT_A,
+            query_key=f"{CUSTOMER_A}:{PROJECT_A}:{keyword}",
+            source="tiktok",
+            mentions=fetch(keyword),
+            next_cursor=None,
+        )
+        conn.commit()
+        return saved
+
+    assert store("alpha") == 1
+    assert store("beta") == 0
+    assert store("beta") == 0
+
+    mentions = conn.execute(
+        "select id, matched_variants from mentions where external_id = 'pipeline-same'"
+    ).fetchall()
+    assert len(mentions) == 1
+    assert sorted(mentions[0][1]) == ["alpha", "beta"]
+    associations = conn.execute(
+        "select keyword_text, route_id from mention_keyword_associations order by keyword_text, route_id"
+    ).fetchall()
+    assert associations == [
+        ("alpha", "tiktok.keyword"),
+        ("alpha", "tiktok.top"),
+        ("beta", "tiktok.keyword"),
+        ("beta", "tiktok.top"),
+    ]
+
+
+def test_postgres16_conflict_status_matches_retained_excerpt(pg16):
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.relevance import literal_match_status
+    from sentiment_monitor.scheduler import CursorRowAdapter
+
+    conn = pg16
+    _seed(conn)
+    base = {
+        "external_id": "changed-caption",
+        "url": None,
+        "author": "ani",
+        "posted_at": "2026-11-01T00:00:00+00:00",
+        "variant": "alpha",
+        "intent": "phrase",
+        "route_id": "threads.keyword",
+    }
+
+    def write(excerpt):
+        conn.execute("begin")
+        conn.execute("set local role worker_role")
+        conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+        saved = PostgresStore(CursorRowAdapter(conn)).write_mentions_and_cursor(
+            customer_id=CUSTOMER_A,
+            project_id=PROJECT_A,
+            query_key="changed-caption",
+            source="threads",
+            mentions=[{**base, "excerpt": excerpt}],
+            next_cursor=None,
+        )
+        conn.commit()
+        return saved
+
+    assert write("unrelated") == 1
+    assert write("alpha") == 0
+    row = conn.execute(
+        """
+        select m.excerpt, a.status
+        from mentions m
+        join mention_keyword_associations a on a.mention_id = m.id
+        where m.external_id = 'changed-caption'
+        """
+    ).fetchone()
+    assert row[0] == "unrelated"
+    assert row[1] == literal_match_status(row[0], "alpha", "phrase")
+    assert row[1] == "no_literal_match"
+
+
+def test_postgres16_mixed_dated_and_undated_fetch_persists_both_and_cursor(pg16):
+    import io
+    import json
+
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.scheduler import CursorRowAdapter, _unpack_fetched
+    from sentiment_monitor.sources.threads import fetch_threads_mentions
+
+    conn = pg16
+    _seed(conn)
+
+    def opener(request, timeout=0):
+        return io.StringIO(
+            json.dumps(
+                {
+                    "posts": [
+                        {"pk": "dated", "taken_at": 1794096000, "caption": {"text": "kopi"}},
+                        {"pk": "undated", "caption": {"text": "kopi"}},
+                    ]
+                }
+            )
+        )
+
+    result = fetch_threads_mentions(
+        "kopi", "synthetic", "2026-11-09T00:00:00Z", intent="phrase", opener=opener
+    )
+    mentions, _cursor, _counts, _credits, _status = _unpack_fetched(result, "kopi")
+    assert len(mentions) == 2
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    saved = PostgresStore(CursorRowAdapter(conn)).write_mentions_and_cursor(
+        customer_id=CUSTOMER_A,
+        project_id=PROJECT_A,
+        query_key="mixed-dated-undated",
+        source="threads",
+        mentions=mentions,
+        next_cursor="cursor-mixed",
+    )
+    conn.commit()
+    assert saved == 2
+
+    rows = dict(
+        conn.execute(
+            "select external_id, posted_at from mentions where external_id in ('dated', 'undated')"
+        ).fetchall()
+    )
+    assert rows["dated"] is not None
+    assert rows["undated"] is None
+    assert conn.execute(
+        "select count(*) from source_cursors where query_key = 'mixed-dated-undated'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "select count(*) from mention_keyword_associations where customer_id = %s",
+        (CUSTOMER_A,),
+    ).fetchone()[0] == 2
+
+
+def test_postgres16_association_parent_project_customer_and_source_must_match(pg16):
+    conn = pg16
+    _seed(conn)
+    project_a2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    project_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    conn.execute(
+        "insert into projects (id, customer_id, brand_name, created_at) values (%s, %s, 'a2', now()), (%s, %s, 'b', now())",
+        (project_a2, CUSTOMER_A, project_b, CUSTOMER_B),
+    )
+    mention_a1 = conn.execute(
+        """insert into mentions (id, customer_id, project_id, source, external_id, excerpt, posted_at, collected_at, matched_variants, scoring_status)
+           values (gen_random_uuid(), %s, %s, 'threads', 'parent-a1', 'kopi', now(), now(), array['kopi'], 'pending') returning id""",
+        (CUSTOMER_A, PROJECT_A),
+    ).fetchone()[0]
+    mention_a2 = conn.execute(
+        """insert into mentions (id, customer_id, project_id, source, external_id, excerpt, posted_at, collected_at, matched_variants, scoring_status)
+           values (gen_random_uuid(), %s, %s, 'threads', 'parent-a2', 'kopi', now(), now(), array['kopi'], 'pending') returning id""",
+        (CUSTOMER_A, project_a2),
+    ).fetchone()[0]
+    mention_b = conn.execute(
+        """insert into mentions (id, customer_id, project_id, source, external_id, excerpt, posted_at, collected_at, matched_variants, scoring_status)
+           values (gen_random_uuid(), %s, %s, 'threads', 'parent-b', 'kopi', now(), now(), array['kopi'], 'pending') returning id""",
+        (CUSTOMER_B, project_b),
+    ).fetchone()[0]
+    conn.commit()
+
+    def association(customer_id, project_id, mention_id, source="threads"):
+        return (
+            "insert into mention_keyword_associations "
+            "(id, customer_id, project_id, mention_id, keyword_text, intent, route_id, source, status, collected_at) "
+            "values (gen_random_uuid(), %s, %s, %s, 'kopi', 'phrase', 'threads.keyword', %s, 'literal_match', now())",
+            (customer_id, project_id, mention_id, source),
+        )
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    for params in (
+        association(CUSTOMER_A, project_a2, mention_a1),
+        association(CUSTOMER_A, project_b, mention_b),
+        association(CUSTOMER_A, PROJECT_A, mention_a1, source="instagram"),
+    ):
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            conn.execute(*params)
+        conn.rollback()
+        conn.execute("begin")
+        conn.execute("set local role worker_role")
+        conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    conn.execute(*association(CUSTOMER_A, PROJECT_A, mention_a1))
+    conn.commit()
+
+    assert conn.execute(
+        "select count(*) from mention_keyword_associations where customer_id = %s",
+        (CUSTOMER_A,),
+    ).fetchone()[0] == 1
+    conn.execute("begin")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_B,))
+    conn.execute("set local role app_user")
+    assert conn.execute("select count(*) from mention_keyword_associations").fetchone()[0] == 0
+    conn.rollback()

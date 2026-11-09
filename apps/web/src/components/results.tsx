@@ -121,7 +121,7 @@ type MentionRow = {
   excerpt: string;
   source: SourceId;
   url: string;
-  postedAt: string;
+  postedAt: string | null;
   relevance: "relevant" | "irrelevant" | null;
   sentiment: "positive" | "neutral" | "negative" | null;
   topics: string[];
@@ -150,7 +150,7 @@ export function MentionFeed(props: { mentions: MentionRow[] }) {
             <li key={mention.id}>
               <p>{mention.excerpt}</p>
               <p>{SOURCE_NAME[mention.source]}</p>
-              <p>{mention.postedAt}</p>
+              <p>{mention.postedAt ?? "Waktu postingan tidak tersedia"}</p>
               <p>{mentionStatus(mention)}</p>
               {mention.relevance === "relevant" ? <p>Relevan</p> : mention.relevance === "irrelevant" ? <p>Tidak relevan</p> : null}
               {mention.sentiment ? <p>{SENTIMENT_TEXT[mention.sentiment]}</p> : null}

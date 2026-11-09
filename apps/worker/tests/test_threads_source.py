@@ -28,7 +28,7 @@ def test_threads_mentions_keep_null_posted_at_when_source_omits_timestamp() -> N
     assert mention["collected_at"] == "2026-04-19T06:00:00Z"
 
 
-def test_fetch_threads_calls_scrapecreators_with_id_region_and_api_key() -> None:
+def test_fetch_threads_calls_scrapecreators_without_region_and_passes_api_key() -> None:
     seen: list[tuple[str, dict[str, str]]] = []
 
     class Response(io.StringIO):

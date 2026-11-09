@@ -9,11 +9,21 @@ alter table keyword_variants
   add constraint keyword_variants_intent_check
   check (intent in ('phrase', 'hashtag'));
 
+alter table mentions alter column posted_at drop not null;
+
 alter table mentions drop constraint if exists mentions_customer_id_source_external_id_key;
 
 alter table mentions
   add constraint mentions_customer_id_project_id_source_external_id_key
   unique (customer_id, project_id, source, external_id);
+
+alter table projects
+  add constraint projects_id_customer_id_key
+  unique (id, customer_id);
+
+alter table mentions
+  add constraint mentions_id_customer_id_project_id_source_key
+  unique (id, customer_id, project_id, source);
 
 create table mention_keyword_associations (
   id uuid primary key,
@@ -32,6 +42,11 @@ create table mention_keyword_associations (
     check (source in ('x', 'threads', 'instagram', 'tiktok')),
   constraint mention_keyword_associations_status_check
     check (status in ('literal_match', 'no_literal_match', 'unknown_text')),
+  constraint mention_keyword_associations_project_tenant_fkey
+    foreign key (project_id, customer_id) references projects (id, customer_id),
+  constraint mention_keyword_associations_mention_parent_fkey
+    foreign key (mention_id, customer_id, project_id, source)
+    references mentions (id, customer_id, project_id, source) on delete cascade,
   unique (mention_id, keyword_text, route_id)
 );
 

@@ -376,3 +376,90 @@ def test_tiktok_hashtag_calls_only_the_hashtag_route():
     assert "hashtag=kopi" in seen[0]
     assert "region=" not in seen[0]
     assert result["mentions"][0]["route_id"] == "tiktok.hashtag"
+
+
+def test_tiktok_same_post_on_both_routes_keeps_all_route_ids():
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        return Response(json.dumps({"items": [{"aweme_id": "same", "desc": "kopi", "create_time": 1794096000}]}))
+
+    result = fetch_tiktok_mentions("Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
+    assert len(result["mentions"]) == 1
+    assert result["mentions"][0]["route_ids"] == ["tiktok.keyword", "tiktok.top"]
+
+
+def test_tiktok_partial_window_failure_preserves_parsed_count():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    class Response(io.StringIO):
+        def __init__(self, body, status=200):
+            super().__init__(body)
+            self.status = status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    first = Response(
+        json.dumps(
+            {"items": [{"aweme_id": "stale", "desc": "alpha", "create_time": 1577836800}], "credits_charged": 2}
+        ),
+        status=200,
+    )
+    second = Response("{", status=200)
+    responses = iter([first, second])
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions(
+            "alpha", "key", "2026-11-09T00:00:00Z", intent="phrase", opener=lambda *a, **k: next(responses)
+        )
+    error = caught.value
+    assert error.code == "malformed_json"
+    assert error.http_status == 200
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+
+
+def test_tiktok_partial_failure_with_fresh_first_route_and_http_second_keeps_parsed_and_credits():
+    import urllib.error
+
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    class Response(io.StringIO):
+        def __init__(self, body, status=200):
+            super().__init__(body)
+            self.status = status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    first = Response(
+        json.dumps(
+            {"items": [{"aweme_id": "fresh", "desc": "alpha", "create_time": 1794096000}], "credits_charged": 2}
+        ),
+        status=200,
+    )
+
+    def opener(request, timeout=0):
+        if "/v1/tiktok/search/keyword" in request.full_url:
+            return first
+        raise urllib.error.HTTPError(request.full_url, 503, "down", {}, None)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions("alpha", "key", "2026-11-09T00:00:00Z", intent="phrase", opener=opener)
+    error = caught.value
+    assert error.code == "http_503"
+    assert error.http_status == 503
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}

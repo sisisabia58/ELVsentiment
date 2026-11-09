@@ -20,23 +20,32 @@ def _returned_rows(result) -> int:
         return 0
 
 
-def _first_id(result):
+def _first_row(result):
     if not result:
         return None
     try:
-        row = result[0]
+        return result[0]
     except (TypeError, KeyError, IndexError):
         return None
+
+
+def _row_value(row, key, index):
+    if row is None:
+        return None
     if isinstance(row, dict):
-        return row.get("id")
+        return row.get(key)
     try:
-        return row["id"]
+        return row[key]
     except (TypeError, KeyError, IndexError):
         pass
     try:
-        return row[0]
+        return row[index]
     except (TypeError, KeyError, IndexError):
-        return getattr(row, "id", None)
+        return getattr(row, key, None)
+
+
+def _first_id(result):
+    return _row_value(_first_row(result), "id", 0)
 
 
 class PostgresStore:
@@ -145,15 +154,19 @@ class PostgresStore:
                     )
                     saved += _returned_rows(inserted)
                     mention_id = _first_id(inserted)
+                    retained_excerpt = mention.get("excerpt") or ""
                     if mention_id is None:
-                        mention_id = _first_id(
+                        existing = _first_row(
                             self._conn.execute(
-                                "select id from mentions "
+                                "select id, excerpt from mentions "
                                 "where customer_id = %s and project_id = %s "
                                 "and source = %s and external_id = %s",
                                 (customer_id, project_id, source, mention["external_id"]),
                             )
                         )
+                        mention_id = _row_value(existing, "id", 0)
+                        if existing is not None:
+                            retained_excerpt = _row_value(existing, "excerpt", 1) or ""
                     if mention_id is None:
                         continue
                     variant = mention["variant"]
@@ -169,31 +182,38 @@ class PostgresStore:
                         """,
                         ([variant], mention_id, customer_id),
                     )
-                    self._conn.execute(
-                        """
-                        insert into mention_keyword_associations (
-                          id, customer_id, project_id, mention_id, keyword_text, intent,
-                          route_id, source, status, collected_at
-                        ) values (
-                          gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, coalesce(%s, now())
-                        )
-                        on conflict (mention_id, keyword_text, route_id) do update
-                          set intent = excluded.intent,
-                              status = excluded.status,
-                              collected_at = excluded.collected_at
-                        """,
-                        (
-                            customer_id,
-                            project_id,
-                            mention_id,
-                            str(variant),
-                            intent,
-                            mention.get("route_id") or f"{source}.keyword",
-                            source,
-                            literal_match_status(mention.get("excerpt") or "", str(variant), intent),
-                            mention.get("collected_at"),
-                        ),
+                    route_ids = mention.get("route_ids") or [
+                        mention.get("route_id") or f"{source}.keyword"
+                    ]
+                    status = literal_match_status(
+                        retained_excerpt, str(variant), intent
                     )
+                    for route_id in dict.fromkeys(route_ids):
+                        self._conn.execute(
+                            """
+                            insert into mention_keyword_associations (
+                              id, customer_id, project_id, mention_id, keyword_text, intent,
+                              route_id, source, status, collected_at
+                            ) values (
+                              gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, coalesce(%s, now())
+                            )
+                            on conflict (mention_id, keyword_text, route_id) do update
+                              set intent = excluded.intent,
+                                  status = excluded.status,
+                                  collected_at = excluded.collected_at
+                            """,
+                            (
+                                customer_id,
+                                project_id,
+                                mention_id,
+                                str(variant),
+                                intent,
+                                route_id,
+                                source,
+                                status,
+                                mention.get("collected_at"),
+                            ),
+                        )
                 self.record_source_success(
                     query_key,
                     source,

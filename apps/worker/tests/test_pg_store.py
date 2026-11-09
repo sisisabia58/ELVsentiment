@@ -188,7 +188,7 @@ class AssociationTx(Tx):
         lowered = sql.lower()
         if "insert into mentions" in lowered:
             return self.insert_result
-        if lowered.startswith("select id from mentions"):
+        if lowered.startswith("select id, excerpt from mentions"):
             return self.lookup_result
         return result
 

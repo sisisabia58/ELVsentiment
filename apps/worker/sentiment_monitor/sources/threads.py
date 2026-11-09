@@ -23,9 +23,6 @@ from sentiment_monitor.sources.scrapecreators import (
     unix_to_iso,
 )
 
-THREADS_SEARCH_PATH = "/v1/threads/search"
-THREADS_SEARCH_URL = f"https://api.scrapecreators.com{THREADS_SEARCH_PATH}"
-
 
 def _extract_threads_text(item: dict[str, Any]) -> str:
     caption = item.get("caption")

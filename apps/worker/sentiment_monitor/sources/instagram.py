@@ -19,11 +19,6 @@ from sentiment_monitor.sources.scrapecreators import (
     unix_to_iso,
 )
 
-INSTAGRAM_REELS_SEARCH_PATH = "/v2/instagram/reels/search"
-INSTAGRAM_HASHTAG_SEARCH_PATH = "/v1/instagram/search/hashtag"
-INSTAGRAM_REELS_SEARCH_URL = f"https://api.scrapecreators.com{INSTAGRAM_REELS_SEARCH_PATH}"
-INSTAGRAM_HASHTAG_SEARCH_URL = f"https://api.scrapecreators.com{INSTAGRAM_HASHTAG_SEARCH_PATH}"
-
 
 def normalize_hashtag(variant: str) -> str:
     cleaned = re.sub(r"[^\w]+", "", variant.strip(), flags=re.UNICODE)

@@ -14,7 +14,7 @@ export async function ingestMention(
     excerpt: string;
     url: string | null;
     author: string | null;
-    postedAt: string;
+    postedAt: string | null;
   },
 ): Promise<{ id: string; result: "inserted" | "deduped" }> {
   return withCustomer(db, input.customerId, async () => {

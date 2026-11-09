@@ -466,3 +466,39 @@ describe("text match model", () => {
     expect(byId.get(legacy)).toBe("legacy_unassessed");
   });
 });
+
+
+describe("explicit unknown posting time", () => {
+  it("loads an undated mention with a null posting time and keeps it out of dated counts", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "undated@example.com", password: "sandi-panjang" });
+    const project = await createProject(db, owner.customerId, "Kopi Tanpa Waktu");
+    await withCustomer(db, owner.customerId, async () => {
+      await db.query(
+        `insert into mentions (id, customer_id, project_id, source, external_id, excerpt, url, author, posted_at, collected_at, matched_variants, scoring_status)
+         values (gen_random_uuid(), $1, $2, 'threads', 'undated', 'Kopi', null, 'ani', null, '2026-11-01T00:05:00.000Z', array['kopi'], 'pending')`,
+        [owner.customerId, project.projectId],
+      );
+    });
+    const workspace = await loadWorkspace(
+      db,
+      owner.customerId,
+      project.projectId,
+      new Date("2026-11-01T03:00:00.000Z"),
+      readLimits(),
+    );
+    expect(workspace.mentions).toHaveLength(1);
+    expect(workspace.mentions[0].postedAt).toBeNull();
+    const model = buildDashboard({
+      mentions: workspace.mentions,
+      range: "7",
+      source: "all",
+      now: new Date("2026-11-01T03:00:00.000Z"),
+      attentionUnread: 0,
+      uncertainOpen: 0,
+      partial: false,
+    });
+    expect(model.textMatch).toEqual({ candidates: 0, literal: 0, unknown: 0 });
+  });
+});

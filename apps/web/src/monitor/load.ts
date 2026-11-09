@@ -311,6 +311,7 @@ export async function loadWorkspace(
          select array_agg(distinct a.status) as statuses
          from mention_keyword_associations a
          where a.mention_id = m.id and a.customer_id = m.customer_id
+           and a.project_id = m.project_id and a.source = m.source
        ) assoc on true
        where m.project_id = $1
        order by coalesce(m.posted_at, m.collected_at) desc, m.id`,

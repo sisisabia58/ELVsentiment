@@ -71,6 +71,31 @@ describe("results", () => {
     expect(screen.getByText("0.8")).toBeTruthy();
   });
 
+  it("labels an explicitly unknown posting time instead of inventing one", () => {
+    render(
+      <MentionFeed
+        mentions={[
+          {
+            id: "undated",
+            excerpt: "kopi tanpa waktu",
+            source: "threads",
+            url: "https://www.threads.net/@ani/post/undated",
+            postedAt: null,
+            relevance: null,
+            sentiment: null,
+            topics: [],
+            confidence: null,
+            displaySource: "jev",
+            scoringStatus: "pending",
+            sourcePostUnavailable: false,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Waktu postingan tidak tersedia")).toBeTruthy();
+    expect(screen.queryByText("null")).toBeNull();
+  });
+
   it("asks for a timezone instead of inventing a bucket", () => {
     render(
       <TrendPanel

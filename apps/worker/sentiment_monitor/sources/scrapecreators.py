@@ -8,7 +8,6 @@ import urllib.parse
 import urllib.request
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com"
-DEFAULT_REGION = "ID"
 
 
 class ScrapeCreatorsError(Exception):
@@ -81,6 +80,7 @@ def carry_attempt_context(
     collected: list[dict[str, Any]],
     *,
     http_status: int | None = None,
+    parsed: int | None = None,
 ) -> ScrapeCreatorsError:
     if error.credits_charged is not None:
         credits.append(error.credits_charged)
@@ -95,6 +95,8 @@ def carry_attempt_context(
     else:
         total_returned = (returned or 0) + (extra_returned or 0)
     error.counts = failure_counts(total_returned, collected)
+    if parsed is not None:
+        error.counts["parsed"] = parsed
     if error.http_status is None and http_status is not None:
         error.http_status = http_status
     return error
@@ -182,12 +184,25 @@ def unix_to_iso(value: Any) -> str | None:
 
 
 def dedupe_mentions(mentions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
+    seen: dict[str, dict[str, Any]] = {}
     unique: list[dict[str, Any]] = []
     for mention in mentions:
         ext_id = str(mention.get("external_id") or "").strip()
-        if not ext_id or ext_id in seen:
+        if not ext_id:
             continue
-        seen.add(ext_id)
-        unique.append(mention)
+        route_id = mention.get("route_id")
+        existing = seen.get(ext_id)
+        if existing is not None:
+            if route_id:
+                route_ids = existing.setdefault(
+                    "route_ids", [existing["route_id"]] if existing.get("route_id") else []
+                )
+                if route_id not in route_ids:
+                    route_ids.append(route_id)
+            continue
+        kept = dict(mention)
+        if route_id:
+            kept["route_ids"] = [route_id]
+        seen[ext_id] = kept
+        unique.append(kept)
     return unique
