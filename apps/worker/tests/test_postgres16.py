@@ -844,3 +844,104 @@ def test_postgres16_worker_association_rejects_other_customer(pg16):
             (CUSTOMER_B, PROJECT_A, mention_id),
         )
     conn.rollback()
+
+
+def test_postgres16_same_external_id_two_customers_stay_isolated(pg16):
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.scheduler import CursorRowAdapter
+
+    conn = pg16
+    _seed(conn)
+    project_b = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1"
+    conn.execute(
+        "insert into projects (id, customer_id, brand_name, created_at) values (%s, %s, 'tenant b', now())",
+        (project_b, CUSTOMER_B),
+    )
+    conn.commit()
+    mention = {
+        "external_id": "shared-post",
+        "excerpt": "kopi",
+        "url": None,
+        "author": "ani",
+        "posted_at": "2026-11-01T00:00:00+00:00",
+        "variant": "kopi",
+        "intent": "phrase",
+        "route_id": "threads.keyword",
+    }
+    for customer, project in ((CUSTOMER_A, PROJECT_A), (CUSTOMER_B, project_b)):
+        conn.execute("begin")
+        conn.execute("set local role worker_role")
+        conn.execute("select set_config('app.customer_id', %s::text, true)", (customer,))
+        saved = PostgresStore(CursorRowAdapter(conn)).write_mentions_and_cursor(
+            customer_id=customer,
+            project_id=project,
+            query_key=f"{customer}:shared",
+            source="threads",
+            mentions=[mention],
+            next_cursor=None,
+        )
+        assert saved == 1
+        conn.commit()
+
+    total, distinct_external = conn.execute(
+        "select count(*), count(distinct external_id) from mentions where external_id = 'shared-post'"
+    ).fetchone()
+    assert (total, distinct_external) == (2, 1)
+
+    def visible(customer):
+        conn.execute("begin")
+        conn.execute("select set_config('app.customer_id', %s::text, true)", (customer,))
+        conn.execute("set local role app_user")
+        rows = conn.execute("select project_id::text from mentions where external_id = 'shared-post'").fetchall()
+        conn.rollback()
+        return [row[0] for row in rows]
+
+    assert visible(CUSTOMER_A) == [PROJECT_A]
+    assert visible(CUSTOMER_B) == [project_b]
+
+
+def test_postgres16_multiple_keyword_routes_keep_one_post_and_distinct_count(pg16):
+    from sentiment_monitor.pg_store import PostgresStore
+    from sentiment_monitor.scheduler import CursorRowAdapter
+
+    conn = pg16
+    _seed(conn)
+    base = {
+        "external_id": "multi-route",
+        "excerpt": "kopi",
+        "url": None,
+        "author": "ani",
+        "posted_at": "2026-11-01T00:00:00+00:00",
+    }
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    conn.execute("select set_config('app.customer_id', %s::text, true)", (CUSTOMER_A,))
+    saved = PostgresStore(CursorRowAdapter(conn)).write_mentions_and_cursor(
+        customer_id=CUSTOMER_A,
+        project_id=PROJECT_A,
+        query_key="q",
+        source="threads",
+        mentions=[
+            {**base, "variant": "kopi", "intent": "phrase", "route_id": "threads.keyword"},
+            {**base, "variant": "#kopi", "intent": "hashtag", "route_id": "threads.hashtag_text"},
+        ],
+        next_cursor=None,
+    )
+    assert saved == 1
+    conn.commit()
+
+    mention_count, distinct_count = conn.execute(
+        "select count(*), count(distinct external_id) from mentions where external_id = 'multi-route'"
+    ).fetchone()
+    assert (mention_count, distinct_count) == (1, 1)
+    variants = conn.execute(
+        "select matched_variants from mentions where external_id = 'multi-route'"
+    ).fetchone()[0]
+    assert sorted(variants) == ["#kopi", "kopi"]
+    associations = conn.execute(
+        "select route_id, keyword_text, status from mention_keyword_associations order by route_id"
+    ).fetchall()
+    assert associations == [
+        ("threads.hashtag_text", "#kopi", "literal_match"),
+        ("threads.keyword", "kopi", "literal_match"),
+    ]

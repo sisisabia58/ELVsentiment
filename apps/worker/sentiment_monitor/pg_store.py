@@ -32,6 +32,10 @@ def _first_id(result):
     try:
         return row["id"]
     except (TypeError, KeyError, IndexError):
+        pass
+    try:
+        return row[0]
+    except (TypeError, KeyError, IndexError):
         return getattr(row, "id", None)
 
 

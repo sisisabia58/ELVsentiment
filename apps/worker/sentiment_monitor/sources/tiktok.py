@@ -72,6 +72,8 @@ def fetch_tiktok_mentions(
     routes = routes_for("tiktok", keyword)
     credits: list[int | None] = []
     returned: int | None = None
+    parsed_total = 0
+    retained_total = 0
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
 
@@ -97,11 +99,14 @@ def fetch_tiktok_mentions(
             if isinstance(item, dict)
         ]
         returned = len(raw) if returned is None else returned + len(raw)
-        collected.extend(
+        parsed_total += len(normalized_items)
+        retained = [
             {**item, "route_id": route.id}
             for item in normalized_items
             if within_overlap(item["posted_at"], collected_at, route)
-        )
+        ]
+        retained_total += len(retained)
+        collected.extend(retained)
         if raw and not has_usable_mentions(normalized_items):
             raise ScrapeCreatorsError(
                 "malformed_posts",
@@ -111,14 +116,18 @@ def fetch_tiktok_mentions(
             )
 
     mentions = dedupe_mentions(collected)
+    counts = {
+        "returned": returned,
+        "parsed": parsed_total,
+        "deduplicated": retained_total - len(mentions),
+    }
+    dropped = parsed_total - retained_total
+    if dropped > 0:
+        counts["dropped_out_of_window"] = dropped
     return {
         "mentions": mentions,
         "outcome": "success",
-        "counts": {
-            "returned": returned,
-            "parsed": len(collected),
-            "deduplicated": len(collected) - len(mentions),
-        },
+        "counts": counts,
         "credits_charged": known_credits(credits),
         "http_status": http_status,
     }

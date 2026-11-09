@@ -336,3 +336,9 @@ def test_instagram_drops_a_stale_item_only_when_the_route_has_a_window():
 
     result = fetch_instagram_mentions("Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener)
     assert [item["external_id"] for item in result["mentions"]] == ["fresh"]
+    assert result["counts"] == {
+        "returned": 2,
+        "parsed": 2,
+        "deduplicated": 0,
+        "dropped_out_of_window": 1,
+    }

@@ -118,14 +118,18 @@ def fetch_threads_mentions(
             credits_charged=known_credits(credits),
             counts=failure_counts(returned, items),
         )
+    counts = {
+        "returned": len(raw_items),
+        "parsed": len(normalized_items),
+        "deduplicated": len(items) - len(mentions),
+    }
+    dropped = len(normalized_items) - len(items)
+    if dropped > 0:
+        counts["dropped_out_of_window"] = dropped
     return {
         "mentions": mentions,
         "outcome": "empty_or_success",
-        "counts": {
-            "returned": len(raw_items),
-            "parsed": len(items),
-            "deduplicated": len(items) - len(mentions),
-        },
+        "counts": counts,
         "credits_charged": known_credits(credits),
         "http_status": http_status,
     }

@@ -119,11 +119,12 @@ def fetch_instagram_mentions(
         for item in raw_items
         if isinstance(item, dict)
     ]
-    collected.extend(
+    retained_items = [
         {**item, "route_id": route.id}
         for item in normalized_items
         if within_overlap(item["posted_at"], collected_at, route)
-    )
+    ]
+    collected.extend(retained_items)
     if raw_items and not has_usable_mentions(normalized_items):
         raise ScrapeCreatorsError(
             "malformed_posts",
@@ -133,14 +134,18 @@ def fetch_instagram_mentions(
         )
 
     mentions = dedupe_mentions(collected)
+    counts = {
+        "returned": returned,
+        "parsed": len(normalized_items),
+        "deduplicated": len(retained_items) - len(mentions),
+    }
+    dropped = len(normalized_items) - len(retained_items)
+    if dropped > 0:
+        counts["dropped_out_of_window"] = dropped
     return {
         "mentions": mentions,
         "outcome": "success",
-        "counts": {
-            "returned": returned,
-            "parsed": len(collected),
-            "deduplicated": len(collected) - len(mentions),
-        },
+        "counts": counts,
         "credits_charged": known_credits(credits),
         "http_status": http_status,
     }
