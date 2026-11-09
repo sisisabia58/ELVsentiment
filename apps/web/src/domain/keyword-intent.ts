@@ -4,8 +4,8 @@ export type Keyword = { text: string; intent: KeywordIntent };
 
 const ROUTE_COUNT: Record<string, Record<KeywordIntent, number>> = {
   threads: { phrase: 1, hashtag: 1 },
-  instagram: { phrase: 1, hashtag: 1 },
-  tiktok: { phrase: 2, hashtag: 1 },
+  instagram: { phrase: 2, hashtag: 2 },
+  tiktok: { phrase: 3, hashtag: 2 },
 };
 
 export function canonicalKeywordText(raw: string): string {

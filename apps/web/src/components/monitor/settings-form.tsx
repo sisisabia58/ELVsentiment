@@ -99,11 +99,12 @@ export function SettingsForm(props: {
         </div>
         <div className="mt-3 space-y-1 text-xs text-muted-foreground">
           <p className="text-sm tabular-nums text-foreground">
-            {requestCount(keywords, workingSources(sources, props.credentials))} permintaan per pengumpulan
+            hingga {requestCount(keywords, workingSources(sources, props.credentials))} permintaan per pengumpulan
           </p>
-          <p>Jumlah ini adalah kata kunci × rute tetap; kredit hanya ditampilkan bila penyedia melaporkannya.</p>
+          <p>Jumlah ini adalah batas atas kata kunci × rute; kredit hanya ditampilkan bila penyedia melaporkannya.</p>
           <p>Threads tidak punya pencarian tagar; tagar dicari sebagai teks.</p>
-          <p>Instagram frasa mencari reel yang terindeks Google; tagar memakai pencarian tagar.</p>
+          <p>Instagram frasa mencari reel dan tagar gabungan; tagar memakai pencarian tagar.</p>
+          <p>Halaman kedua Instagram tagar hanya diambil bila halaman pertama mayoritas cocok literal.</p>
         </div>
       </Panel>
       <Panel title="Sumber" subtitle="Platform yang kami pantau untuk proyek ini.">

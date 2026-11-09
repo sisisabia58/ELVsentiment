@@ -61,8 +61,9 @@ describe("keyword intent disclosure", () => {
     );
     expect(screen.getByText("Kata kunci: kopi")).toBeTruthy();
     expect(screen.getByText("Tagar: #kopi")).toBeTruthy();
-    expect(screen.getByText("7 permintaan per pengumpulan")).toBeTruthy();
+    expect(screen.getByText("hingga 11 permintaan per pengumpulan")).toBeTruthy();
     expect(screen.getByText("Threads tidak punya pencarian tagar; tagar dicari sebagai teks.")).toBeTruthy();
-    expect(screen.getByText("Instagram frasa mencari reel yang terindeks Google; tagar memakai pencarian tagar.")).toBeTruthy();
+    expect(screen.getByText(/Instagram frasa mencari reel dan tagar gabungan/)).toBeTruthy();
+    expect(screen.getByText(/halaman kedua Instagram tagar/i)).toBeTruthy();
   });
 });

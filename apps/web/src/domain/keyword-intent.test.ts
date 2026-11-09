@@ -19,16 +19,18 @@ describe("keyword intent", () => {
     expect(keywordLabel("hashtag")).toBe("Tagar");
   });
 
-  it("counts keywords times fixed ScrapeCreators routes", () => {
-    expect(
-      requestCount(
-        [
-          { text: "kopi", intent: "phrase" },
-          { text: "#kopi", intent: "hashtag" },
-        ],
-        ["threads", "instagram", "tiktok"],
-      ),
-    ).toBe(7);
-    expect(requestCount([{ text: "kopi", intent: "phrase" }], ["x"])).toBe(0);
+  it("counts the empirical routes per platform and intent", () => {
+    const phrase = { text: "kopi", intent: "phrase" as const };
+    const hashtag = { text: "#kopi", intent: "hashtag" as const };
+    expect(requestCount([phrase], ["threads"])).toBe(1);
+    expect(requestCount([phrase], ["instagram"])).toBe(2);
+    expect(requestCount([phrase], ["tiktok"])).toBe(3);
+    expect(requestCount([hashtag], ["threads"])).toBe(1);
+    expect(requestCount([hashtag], ["instagram"])).toBe(2);
+    expect(requestCount([hashtag], ["tiktok"])).toBe(2);
+    expect(requestCount([phrase], ["threads", "instagram", "tiktok"])).toBe(6);
+    expect(requestCount([hashtag], ["threads", "instagram", "tiktok"])).toBe(5);
+    expect(requestCount([phrase, hashtag], ["threads", "instagram", "tiktok"])).toBe(11);
+    expect(requestCount([phrase], ["x"])).toBe(0);
   });
 });
