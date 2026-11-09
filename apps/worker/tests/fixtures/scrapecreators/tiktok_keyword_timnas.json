@@ -1,0 +1,71 @@
+{
+  "success": true,
+  "credits_charged": 1,
+  "search_item_list": [
+    {
+      "aweme_info": {
+        "aweme_id": "7706022298507136263",
+        "desc": "Rafel Struick dipanggil lagi ke Timnas Indonesia? El Klemer is back!",
+        "create_time": 1794216600,
+        "author": {
+          "unique_id": "ngerti_bola"
+        },
+        "text_extra": []
+      }
+    },
+    {
+      "aweme_info": {
+        "aweme_id": "7706179171478768903",
+        "desc": "pemain yg karirnya di hancurkan oleh dokter palsu💔 #jackbrown #timnas #timnasindonesia #fyp #foryou",
+        "create_time": 1794234664,
+        "author": {
+          "unique_id": "garudasupport_"
+        },
+        "text_extra": [
+          {
+            "hashtag_name": "jackbrown"
+          },
+          {
+            "hashtag_name": "timnas"
+          },
+          {
+            "hashtag_name": "timnasindonesia"
+          },
+          {
+            "hashtag_name": "fyp"
+          },
+          {
+            "hashtag_name": "foryou"
+          }
+        ]
+      }
+    },
+    {
+      "aweme_info": {
+        "aweme_id": "7706122416765914376",
+        "desc": "#justinhubner #jennifercoppen #kamariskywassink #timnasindonesia #fyp ",
+        "create_time": 1794221453,
+        "author": {
+          "unique_id": "timnas_garuda48"
+        },
+        "text_extra": [
+          {
+            "hashtag_name": "justinhubner"
+          },
+          {
+            "hashtag_name": "jennifercoppen"
+          },
+          {
+            "hashtag_name": "kamariskywassink"
+          },
+          {
+            "hashtag_name": "timnasindonesia"
+          },
+          {
+            "hashtag_name": "fyp"
+          }
+        ]
+      }
+    }
+  ]
+}
