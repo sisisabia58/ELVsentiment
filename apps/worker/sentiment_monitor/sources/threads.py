@@ -83,7 +83,7 @@ def fetch_threads_mentions(
     route = routes_for("threads", keyword)[0]
     payload = fetch_scrapecreators_json(
         route.path,
-        request_params(route, keyword),
+        request_params(route, keyword, now=collected_at),
         api_key,
         opener=opener,
     )

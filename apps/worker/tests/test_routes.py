@@ -1,8 +1,11 @@
+from datetime import datetime, timezone
+
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.sources.routes import (
     request_params,
     routes_for,
     scrapecreators_request_count,
+    threads_date_window,
     within_overlap,
 )
 
@@ -19,9 +22,23 @@ def test_route_whitelist_is_fixed_per_platform_and_intent():
     )
 
 
+def test_threads_date_window_uses_jakarta_civil_days_and_the_ledger_format():
+    assert threads_date_window("2026-11-09T16:31:00Z") == ("2026-11-02", "2026-11-10")
+    assert threads_date_window("2026-11-09T18:00:00Z") == ("2026-11-03", "2026-11-11")
+    assert threads_date_window(datetime(2026, 11, 9, 16, 31, tzinfo=timezone.utc)) == (
+        "2026-11-02",
+        "2026-11-10",
+    )
+
+
 def test_request_params_use_documented_windows_and_never_region():
     phrase = Keyword("Kopi Kenangan", "phrase")
-    assert request_params(routes_for("threads", phrase)[0], phrase) == {"query": "Kopi Kenangan"}
+    now = "2026-11-09T16:31:00Z"
+    assert request_params(routes_for("threads", phrase)[0], phrase, now=now) == {
+        "query": "Kopi Kenangan",
+        "start_date": "2026-11-02",
+        "end_date": "2026-11-10",
+    }
     assert request_params(routes_for("instagram", phrase)[0], phrase) == {
         "query": "Kopi Kenangan",
         "date_posted": "last-week",
@@ -39,12 +56,27 @@ def test_request_params_use_documented_windows_and_never_region():
 
 def test_hashtag_params_are_compact_but_threads_keeps_the_literal_hash():
     hashtag = Keyword("#Kopi Kenangan", "hashtag")
+    now = "2026-11-09T16:31:00Z"
     assert request_params(routes_for("instagram", hashtag)[0], hashtag) == {
         "hashtag": "kopikenangan",
         "date_posted": "last-week",
     }
     assert request_params(routes_for("tiktok", hashtag)[0], hashtag) == {"hashtag": "kopikenangan"}
-    assert request_params(routes_for("threads", hashtag)[0], hashtag) == {"query": "#Kopi Kenangan"}
+    assert request_params(routes_for("threads", hashtag)[0], hashtag, now=now) == {
+        "query": "#Kopi Kenangan",
+        "start_date": "2026-11-02",
+        "end_date": "2026-11-10",
+    }
+
+
+def test_threads_phrase_is_never_quoted():
+    phrase = Keyword("timnas indonesia", "phrase")
+    params = request_params(
+        routes_for("threads", phrase)[0], phrase, now="2026-11-09T16:31:00Z"
+    )
+    assert params["query"] == "timnas indonesia"
+    assert not params["query"].startswith('"')
+    assert not params["query"].endswith('"')
 
 
 def test_request_count_is_keywords_times_fixed_routes():

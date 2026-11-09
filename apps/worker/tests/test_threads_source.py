@@ -69,6 +69,8 @@ def test_fetch_threads_calls_scrapecreators_without_region_and_passes_api_key() 
     url, headers = seen[0]
     assert url.startswith("https://api.scrapecreators.com/v1/threads/search?")
     assert "query=kopi+kenangan" in url
+    assert "start_date=2026-04-12" in url
+    assert "end_date=2026-04-20" in url
     assert "region=" not in url
     assert headers.get("x-api-key") == "sc-secret-key"
     assert result["outcome"] == "empty_or_success"
@@ -271,6 +273,9 @@ def test_threads_phrase_uses_keyword_route_without_region():
     assert len(seen) == 1
     assert seen[0].startswith("https://api.scrapecreators.com/v1/threads/search?")
     assert "query=Kopi+Kenangan" in seen[0]
+    assert "start_date=2026-11-01" in seen[0]
+    assert "end_date=2026-11-09" in seen[0]
+    assert "%22" not in seen[0]
     assert "region=" not in seen[0]
     assert result["mentions"][0]["route_id"] == "threads.keyword"
 
@@ -291,5 +296,30 @@ def test_threads_hashtag_uses_literal_text_search_with_route_provenance():
 
     result = fetch_threads_mentions("#Kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
     assert "query=%23Kopi" in seen[0]
+    assert "start_date=2026-11-01" in seen[0]
+    assert "end_date=2026-11-09" in seen[0]
     assert "region=" not in seen[0]
     assert result["mentions"] == []
+
+
+def test_threads_multi_word_phrase_is_unquoted_and_uses_the_date_window():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(json.dumps({"posts": []}))
+
+    fetch_threads_mentions(
+        "timnas indonesia", "key", "2026-11-09T16:31:00Z", intent="phrase", opener=opener
+    )
+    assert "query=timnas+indonesia" in seen[0]
+    assert "%22" not in seen[0]
+    assert "start_date=2026-11-02" in seen[0]
+    assert "end_date=2026-11-10" in seen[0]
