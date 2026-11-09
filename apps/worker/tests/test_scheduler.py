@@ -1592,6 +1592,41 @@ def test_storage_failure_preserves_fetch_counts_and_credits(tmp_path):
     assert "detail=storage_failed" in line
 
 
+def test_collection_log_keeps_zero_credit_distinct_from_unknown(tmp_path):
+    root = _policy_root(tmp_path, True)
+    for credits, expected in ((0, "credits_charged=0"), (None, "credits_charged=-")):
+        world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+        world.sources = ["threads"]
+        lines = []
+
+        def fetch_threads(variant, credits=credits):
+            payload = {
+                "mentions": [],
+                "counts": {"returned": 0, "parsed": 0, "deduplicated": 0},
+            }
+            if credits is not None:
+                payload["credits_charged"] = credits
+            return payload
+
+        def stop(_seconds):
+            raise SystemExit
+
+        with pytest.raises(SystemExit):
+            serve(
+                world.connect,
+                stop,
+                load_limits(Path("config/limits.json"), {}),
+                "worker-1",
+                root,
+                lambda *_args, **_kwargs: ([], None),
+                fetch_threads,
+                log=lines.append,
+            )
+
+        line = next(line for line in lines if line.startswith("source_collection"))
+        assert expected in line
+
+
 def test_malformed_failure_logs_known_credits_and_counts(tmp_path):
     from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 

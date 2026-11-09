@@ -323,3 +323,14 @@ def test_threads_multi_word_phrase_is_unquoted_and_uses_the_date_window():
     assert "%22" not in seen[0]
     assert "start_date=2026-11-02" in seen[0]
     assert "end_date=2026-11-10" in seen[0]
+
+
+def test_threads_empty_zero_credit_is_known_zero_not_unknown():
+    result = _threads({"posts": [], "credits_charged": 0})
+    assert result["credits_charged"] == 0
+    assert result["counts"] == {"returned": 0, "parsed": 0, "deduplicated": 0}
+
+
+def test_threads_empty_missing_credit_is_unknown():
+    result = _threads({"posts": []})
+    assert result["credits_charged"] is None

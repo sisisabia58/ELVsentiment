@@ -504,3 +504,19 @@ def test_tiktok_partial_failure_with_fresh_first_route_and_http_second_keeps_par
     assert error.http_status == 503
     assert error.credits_charged == 2
     assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+
+
+def test_tiktok_empty_zero_credit_is_known_zero_not_unknown():
+    result = _tiktok(
+        (
+            {"search_item_list": [], "credits_charged": 0},
+            {"search_item_list": [], "credits_charged": 0},
+        )
+    )
+    assert result["credits_charged"] == 0
+    assert result["counts"]["returned"] == 0
+
+
+def test_tiktok_empty_missing_credit_is_unknown():
+    result = _tiktok(({"search_item_list": []}, {"search_item_list": []}))
+    assert result["credits_charged"] is None

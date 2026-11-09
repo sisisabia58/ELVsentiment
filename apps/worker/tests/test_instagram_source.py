@@ -491,3 +491,19 @@ def test_instagram_drops_a_stale_item_only_when_the_route_has_a_window():
         "deduplicated": 0,
         "dropped_out_of_window": 1,
     }
+
+
+def test_instagram_empty_zero_credit_is_known_zero_not_unknown():
+    result = _instagram({"reels": [], "credits_charged": 0})
+    assert result["credits_charged"] == 0
+    assert result["counts"]["returned"] == 0
+
+
+def test_instagram_empty_missing_credit_is_unknown():
+    result = _instagram({"reels": []})
+    assert result["credits_charged"] is None
+
+
+def test_instagram_hashtag_empty_zero_credit_is_known_zero():
+    result = _instagram({"posts": [], "credits_charged": 0}, intent="hashtag")
+    assert result["credits_charged"] == 0
