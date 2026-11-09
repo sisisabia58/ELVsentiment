@@ -139,12 +139,19 @@ def fetch_instagram_mentions(
             page2_route = route
             continue
 
-        payload = fetch_scrapecreators_json(
-            route.path,
-            request_params(route, keyword, now=collected_at),
-            api_key,
-            opener=opener,
-        )
+        try:
+            payload = fetch_scrapecreators_json(
+                route.path,
+                request_params(route, keyword, now=collected_at),
+                api_key,
+                opener=opener,
+            )
+        except ScrapeCreatorsError as error:
+            if credits or returned is not None or parsed_total:
+                raise carry_attempt_context(
+                    error, credits, returned, collected, parsed=parsed_total
+                ) from None
+            raise
         http_status = getattr(payload, "http_status", None)
         credits.append(credits_from(payload))
         try:

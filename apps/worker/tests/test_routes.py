@@ -126,3 +126,11 @@ def test_local_overlap_keeps_undated_and_threads_items():
     assert within_overlap("2026-11-01T00:00:00Z", "2026-11-08T00:00:00Z", instagram) is True
     assert within_overlap("2026-10-30T00:00:00Z", "2026-11-08T00:00:00Z", instagram) is False
     assert within_overlap("2020-01-01T00:00:00Z", "2026-11-08T00:00:00Z", threads) is True
+
+
+def test_threads_phrase_with_internal_quotes_is_sent_verbatim_without_outer_quotes():
+    phrase = Keyword('Kopi "Kenangan"', "phrase")
+    params = request_params(
+        routes_for("threads", phrase)[0], phrase, now="2026-11-09T16:31:00Z"
+    )
+    assert params["query"] == 'Kopi "Kenangan"'

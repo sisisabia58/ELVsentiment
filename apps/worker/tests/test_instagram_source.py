@@ -507,3 +507,44 @@ def test_instagram_empty_missing_credit_is_unknown():
 def test_instagram_hashtag_empty_zero_credit_is_known_zero():
     result = _instagram({"posts": [], "credits_charged": 0}, intent="hashtag")
     assert result["credits_charged"] == 0
+
+
+def test_instagram_second_route_failure_preserves_first_route_counts_and_credits():
+    import urllib.error
+
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        if "/v1/instagram/search/hashtag" in request.full_url:
+            raise urllib.error.HTTPError(request.full_url, 500, "down", {}, None)
+        return Response(
+            json.dumps(
+                {
+                    "reels": [
+                        {
+                            "pk": "ig-keep",
+                            "taken_at": 1794096000,
+                            "caption": "Kopi",
+                        }
+                    ],
+                    "credits_charged": 2,
+                }
+            )
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions(
+            "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+        )
+    error = caught.value
+    assert error.code == "http_500"
+    assert error.http_status == 500
+    assert error.credits_charged == 2
+    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
