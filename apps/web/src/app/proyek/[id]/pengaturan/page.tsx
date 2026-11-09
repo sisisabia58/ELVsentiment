@@ -34,6 +34,7 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
             projectId={project.id}
             brandName={project.name}
             keywords={workspace.keywords}
+            keywordIntents={workspace.keywordIntents}
             sources={project.sources}
             schedule={project.schedule}
             credentials={workspace.credentials}

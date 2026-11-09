@@ -39,6 +39,7 @@ function workspace(configured: boolean): Workspace {
     lastCollectedAt: null,
     control: { manualBlocked: false, retryAt: null, lastSeenAt: null, inProgress: false },
     keywords: ["kedai"],
+    keywordIntents: { kedai: "phrase" },
     topicLabels: [],
     topicCountingApproved: false,
     highImpact: false,

@@ -1,12 +1,29 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
+import { parseKeyword, type Keyword, type KeywordIntent } from "../domain/keyword-intent";
 import { effectOfKeywordEdit } from "../domain/keyword-history";
-import { generateCandidates, validateVariantList } from "../domain/variants";
+import { generateCandidates, normalizeVariant, validateVariantList } from "../domain/variants";
 import { asSources, workingSources, type SourceCredentials, type SourceId } from "../monitor/onboarding-draft";
 import { applySchedule, normalizeSchedule, readLimits, type ScheduleLimits } from "./schedules";
 import type { ScheduleChoice } from "../monitor/schedule-choice";
 import { toPersist } from "../monitor/schedule-choice";
+
+export type KeywordInput = string | { text: string; intent: KeywordIntent };
+
+function asKeywords(values: readonly KeywordInput[]): Keyword[] {
+  return values.map((value) => {
+    if (typeof value === "string") {
+      return parseKeyword(normalizeVariant(value));
+    }
+    return { text: normalizeVariant(value.text), intent: value.intent };
+  });
+}
+
+function withIntents(texts: readonly string[], keywords: readonly Keyword[]): Keyword[] {
+  const intents = new Map(keywords.map((keyword) => [keyword.text, keyword.intent]));
+  return texts.map((text) => ({ text, intent: intents.get(text) ?? "phrase" }));
+}
 
 export async function createProject(
   db: Queryable,
@@ -64,19 +81,21 @@ export async function saveActiveVariants(
   db: Queryable,
   customerId: string,
   projectId: string,
-  variants: string[],
+  variants: KeywordInput[],
   rescore: (mentionIds: string[]) => Promise<void>,
 ): Promise<
   | { ok: true; active: string[] }
   | { ok: false; reason: "empty" | "duplicate" | "too_long"; value: string }
 > {
-  const validated = validateVariantList(variants);
+  const keywords = asKeywords(variants);
+  const validated = validateVariantList(keywords.map((keyword) => keyword.text));
   if (!validated.ok) return validated;
   const effect = effectOfKeywordEdit(validated.variants);
   if (effect.reclassifyExisting) {
     await rescore([]);
   }
-  await withCustomer(db, customerId, () => replaceActiveVariants(db, customerId, projectId, effect.futureQueries));
+  const resolved = withIntents(effect.futureQueries, keywords);
+  await withCustomer(db, customerId, () => replaceActiveVariants(db, customerId, projectId, resolved));
   return { ok: true, active: [...effect.futureQueries] };
 }
 
@@ -84,18 +103,19 @@ async function replaceActiveVariants(
   db: Queryable,
   customerId: string,
   projectId: string,
-  texts: readonly string[],
+  keywords: readonly Keyword[],
 ): Promise<void> {
   await db.query("update keyword_variants set active = false where project_id = $1 and customer_id = $2", [
     projectId,
     customerId,
   ]);
-  for (const text of texts) {
+  for (const keyword of keywords) {
     await db.query(
-      `insert into keyword_variants (id, customer_id, project_id, text, active, created_at)
-       values ($1, $2, $3, $4, true, now())
-       on conflict (project_id, text) do update set active = true`,
-      [randomUUID(), customerId, projectId, text],
+      `insert into keyword_variants (id, customer_id, project_id, text, active, created_at, intent)
+       values ($1, $2, $3, $4, true, now(), $5)
+       on conflict (project_id, text) do update
+         set active = true, text = excluded.text, intent = excluded.intent`,
+      [randomUUID(), customerId, projectId, keyword.text, keyword.intent],
     );
   }
 }
@@ -124,7 +144,7 @@ export async function saveProjectConfiguration(
   input: {
     projectId: string;
     brandName: string;
-    variants: string[];
+    variants: KeywordInput[];
     sources: SourceId[];
     schedule: ScheduleChoice;
     now?: Date;
@@ -140,7 +160,8 @@ export async function saveProjectConfiguration(
   );
   if (!input.brandName.trim()) return { ok: false, error: "Masukkan nama merek." };
   if (anyConfigured && sources.length === 0) return { ok: false, error: "Pilih setidaknya satu sumber." };
-  const validated = validateVariantList(input.variants);
+  const keywords = asKeywords(input.variants);
+  const validated = validateVariantList(keywords.map((keyword) => keyword.text));
   if (!validated.ok) {
     if (validated.reason === "duplicate") return { ok: false, error: "Variasi ini sudah ditambahkan." };
     if (validated.reason === "empty") return { ok: false, error: "Masukkan variasi kata kunci." };
@@ -155,7 +176,7 @@ export async function saveProjectConfiguration(
       return { ok: false as const, error: "Halaman tidak ditemukan atau Anda tidak memiliki akses." };
     }
     await db.query("update projects set brand_name = $1 where id = $2", [input.brandName.trim(), input.projectId]);
-    await replaceActiveVariants(db, customerId, input.projectId, texts);
+    await replaceActiveVariants(db, customerId, input.projectId, withIntents(texts, keywords));
     await db.query("update project_settings set enabled_sources = $1 where project_id = $2", [
       sources,
       input.projectId,

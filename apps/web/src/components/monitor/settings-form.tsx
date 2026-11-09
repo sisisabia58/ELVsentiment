@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Info } from "lucide-react";
+import { keywordLabel, parseKeyword, requestCount, type Keyword, type KeywordIntent } from "@/domain/keyword-intent";
+import { normalizeVariant } from "@/domain/variants";
 import { workingSources, type SourceCredentials, type SourceId } from "@/monitor/onboarding-draft";
 import type { ScheduleChoice } from "@/monitor/schedule-choice";
 import { saveProjectSettingsAction } from "@/app/proyek/actions";
@@ -14,12 +16,18 @@ export function SettingsForm(props: {
   projectId: string;
   brandName: string;
   keywords: string[];
+  keywordIntents?: Record<string, KeywordIntent>;
   sources: SourceId[];
   schedule: ScheduleChoice;
   credentials: SourceCredentials;
 }) {
   const [brand, setBrand] = useState(props.brandName);
-  const [keywords, setKeywords] = useState(props.keywords);
+  const [keywords, setKeywords] = useState<Keyword[]>(() =>
+    props.keywords.map((text) => ({
+      text,
+      intent: props.keywordIntents?.[text] ?? parseKeyword(text).intent,
+    })),
+  );
   const [draft, setDraft] = useState("");
   const [sources, setSources] = useState(workingSources(props.sources, props.credentials));
   const [schedule, setSchedule] = useState(props.schedule);
@@ -57,13 +65,13 @@ export function SettingsForm(props: {
       <Panel title="Variasi kata kunci" subtitle="Semua ejaan dan sebutan merek yang ingin kami pantau.">
         <ul className="flex flex-wrap gap-2">
           {keywords.map((keyword) => (
-            <li key={keyword}>
+            <li key={keyword.text}>
               <button
                 type="button"
                 className="inline-flex h-11 max-w-full items-center break-all rounded-full bg-info-bg px-3 text-sm text-primary"
-                onClick={() => setKeywords((current) => current.filter((item) => item !== keyword))}
+                onClick={() => setKeywords((current) => current.filter((item) => item.text !== keyword.text))}
               >
-                {keyword} <span className="sr-only">hapus</span>
+                <span>{keywordLabel(keyword.intent)}: {keyword.text}</span> <span className="sr-only">hapus</span>
               </button>
             </li>
           ))}
@@ -74,18 +82,28 @@ export function SettingsForm(props: {
             type="button"
             className="h-11 shrink-0 rounded-lg border border-border px-3 text-sm font-medium"
             onClick={() => {
-              const value = draft.trim().replace(/\s+/g, " ").toLocaleLowerCase("id-ID");
-              if (!value || keywords.includes(value)) {
-                setError(keywords.includes(value) ? "Variasi ini sudah ditambahkan." : "Masukkan variasi kata kunci.");
+              const parsed = parseKeyword(draft);
+              const text = normalizeVariant(parsed.text);
+              const duplicate = keywords.some((keyword) => keyword.text === text);
+              if (!text || duplicate) {
+                setError(duplicate ? "Variasi ini sudah ditambahkan." : "Masukkan variasi kata kunci.");
                 return;
               }
-              setKeywords((current) => [...current, value]);
+              setKeywords((current) => [...current, { text, intent: parsed.intent }]);
               setDraft("");
               setError(null);
             }}
           >
             Tambahkan
           </button>
+        </div>
+        <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+          <p className="text-sm tabular-nums text-foreground">
+            {requestCount(keywords, workingSources(sources, props.credentials))} permintaan per pengumpulan
+          </p>
+          <p>Jumlah ini adalah kata kunci × rute tetap; kredit hanya ditampilkan bila penyedia melaporkannya.</p>
+          <p>Threads tidak punya pencarian tagar; tagar dicari sebagai teks.</p>
+          <p>Instagram frasa mencari reel yang terindeks Google; tagar memakai pencarian tagar.</p>
         </div>
       </Panel>
       <Panel title="Sumber" subtitle="Platform yang kami pantau untuk proyek ini.">

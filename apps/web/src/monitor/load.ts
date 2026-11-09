@@ -1,6 +1,7 @@
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
 import type { OwnerCorrection } from "../domain/display";
+import type { KeywordIntent } from "../domain/keyword-intent";
 import type { ScheduleLimits } from "../projects/schedules";
 import { buildDashboard, type DashboardModel, type SourceKey } from "./dashboard";
 import { asSources, type SourceCredentials } from "./onboarding-draft";
@@ -64,6 +65,7 @@ export type Workspace = {
   lastCollectedAt: string | null;
   control: { manualBlocked: boolean; retryAt: string | null; lastSeenAt: string | null; inProgress: boolean };
   keywords: string[];
+  keywordIntents: Record<string, KeywordIntent>;
   topicLabels: { id: string; label: string }[];
   topicCountingApproved: boolean;
   highImpact: boolean;
@@ -286,6 +288,7 @@ export async function loadWorkspace(
         lastCollectedAt: null,
         control: { manualBlocked: false, retryAt: null, lastSeenAt: null, inProgress: false },
         keywords: [],
+        keywordIntents: {},
         topicLabels: reviewTopicChoices(policy),
         topicCountingApproved: policy.topicCountingApproved,
         highImpact: policy.highImpact,
@@ -314,8 +317,8 @@ export async function loadWorkspace(
       [project.id],
     );
     const mentions = mentionRows.rows.map((row) => presentMention(toStored(row), policy.scoring));
-    const keywordRows = await db.query<{ text: string }>(
-      "select text from keyword_variants where project_id = $1 and active order by created_at, text",
+    const keywordRows = await db.query<{ text: string; intent: KeywordIntent }>(
+      "select text, intent from keyword_variants where project_id = $1 and active order by created_at, text",
       [project.id],
     );
     const statusRows = await db.query<{
@@ -404,6 +407,7 @@ export async function loadWorkspace(
         inProgress: active.rows.length > 0,
       },
       keywords: keywordRows.rows.map((row) => row.text),
+      keywordIntents: Object.fromEntries(keywordRows.rows.map((row) => [row.text, row.intent])),
       topicLabels: reviewTopicChoices(policy),
       topicCountingApproved: policy.topicCountingApproved,
       highImpact: policy.highImpact,

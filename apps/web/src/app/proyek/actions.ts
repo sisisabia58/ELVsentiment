@@ -3,7 +3,7 @@
 import { refresh } from "next/cache";
 import { withSessionDeps } from "@/auth/request-session";
 import { customerIdFromSessionToken } from "@/auth/session";
-import { ownsProject, saveProjectConfiguration } from "@/projects/handlers";
+import { ownsProject, saveProjectConfiguration, type KeywordInput } from "@/projects/handlers";
 import { readLimits, saveSchedule } from "@/projects/schedules";
 import { sourceCredentials, type SourceId } from "@/monitor/policy";
 import { toPersist, type ScheduleChoice } from "@/monitor/schedule-choice";
@@ -11,7 +11,7 @@ import { toPersist, type ScheduleChoice } from "@/monitor/schedule-choice";
 export async function saveProjectSettingsAction(input: {
   projectId: string;
   brandName: string;
-  variants: string[];
+  variants: KeywordInput[];
   sources: SourceId[];
   schedule: ScheduleChoice;
 }): Promise<{ ok: true; message: string } | { ok: false; error: string }> {

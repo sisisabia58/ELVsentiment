@@ -197,3 +197,39 @@ describe("saving sources", () => {
   });
 });
 
+
+describe("keyword intent persistence", () => {
+  it("stores explicit intent and keeps a legacy hash keyword as a phrase", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "intent@example.com", password: "sandi-panjang" });
+    const project = await createProject(db, owner.customerId, "Kedai Contoh");
+    const saved = await saveProjectConfiguration(
+      db,
+      owner.customerId,
+      {
+        projectId: project.projectId,
+        brandName: "Kedai Contoh",
+        variants: [
+          { text: "#Kopi", intent: "hashtag" },
+          { text: "#lama", intent: "phrase" },
+        ],
+        sources: ["x"],
+        schedule: { mode: "off", intervalHours: 6 },
+      },
+      readLimits(),
+      { x: true, threads: false },
+    );
+    expect(saved.ok).toBe(true);
+    const rows = await withCustomer(db, owner.customerId, () =>
+      db.query<{ text: string; intent: string }>(
+        "select text, intent from keyword_variants where project_id = $1 order by text",
+        [project.projectId],
+      ),
+    );
+    expect(rows.rows).toEqual([
+      { text: "#kopi", intent: "hashtag" },
+      { text: "#lama", intent: "phrase" },
+    ]);
+  });
+});

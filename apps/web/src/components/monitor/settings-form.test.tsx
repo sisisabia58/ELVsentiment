@@ -45,3 +45,24 @@ describe("project settings", () => {
     expect(screen.getByText(/WIB/)).toBeTruthy();
   });
 });
+
+describe("keyword intent disclosure", () => {
+  it("shows intent in plain words, the Threads disclosure, and the request count", () => {
+    render(
+      <SettingsForm
+        projectId="p1"
+        brandName="QA Test Brand"
+        keywords={["kopi", "#kopi"]}
+        keywordIntents={{ kopi: "phrase", "#kopi": "hashtag" }}
+        sources={["threads", "instagram", "tiktok"]}
+        schedule={{ mode: "off", intervalHours: 6 }}
+        credentials={{ x: false, threads: true, instagram: true, tiktok: true }}
+      />,
+    );
+    expect(screen.getByText("Kata kunci: kopi")).toBeTruthy();
+    expect(screen.getByText("Tagar: #kopi")).toBeTruthy();
+    expect(screen.getByText("7 permintaan per pengumpulan")).toBeTruthy();
+    expect(screen.getByText("Threads tidak punya pencarian tagar; tagar dicari sebagai teks.")).toBeTruthy();
+    expect(screen.getByText("Instagram frasa mencari reel yang terindeks Google; tagar memakai pencarian tagar.")).toBeTruthy();
+  });
+});
