@@ -8,7 +8,7 @@ from urllib.parse import unquote
 import pytest
 
 from sentiment_monitor.intent import Keyword
-from sentiment_monitor.scheduler import _log_route_events
+from sentiment_monitor.scheduler import _log_route_events, _safe_error_label
 from sentiment_monitor.sources.instagram import fetch_instagram_mentions
 from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 
@@ -273,3 +273,15 @@ def test_ig404_full_pipeline_never_logs_provider_body_text(case_id, body, marker
     _assert_body_contract(lines[0], len(body.encode("utf-8")), case_id)
     if "http_status=404" not in lines[0]:
         pytest.fail(f"{case_id}: status_missing")
+
+
+def test_exception_message_and_repr_are_not_used_as_error_labels():
+    class ReprError(RuntimeError):
+        def __repr__(self):
+            return UNKNOWN
+
+    label = _safe_error_label(ReprError(UNKNOWN))
+    if UNKNOWN in label or UNKNOWN[:12] in label:
+        pytest.fail("exception_repr_leaked=true")
+    if label != "Exception other":
+        pytest.fail("exception_label_not_safe_enum")
