@@ -419,3 +419,121 @@ def test_threads_404_is_not_retried():
     assert caught.value.code == "http_404"
     assert caught.value.route_events[0]["http_status"] == 404
     assert "missing" in caught.value.route_events[0]["body"]
+
+
+@pytest.mark.parametrize("first_500", [False, True])
+def test_threads_malformed_posts_events_use_per_attempt_credits(first_500):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if first_500 and len(seen) == 1:
+            raise _http_error_with_body(
+                request.full_url, 500, '{"credits_charged": 2}'
+            )
+        return _StatusResponse(
+            json.dumps({"credits_charged": 3, "posts": 123}), status=200
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_threads_mentions(
+            "kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+        )
+
+    error = caught.value
+    assert error.code == "malformed_posts"
+    assert error.http_status == 200
+    assert error.credits_charged == (5 if first_500 else 3)
+    assert len(seen) == (2 if first_500 else 1)
+    events = error.route_events
+    expected_credits = [2, 3] if first_500 else [3]
+    assert [event["credits_charged"] for event in events] == expected_credits
+    assert [event["http_status"] for event in events] == (
+        [500, 200] if first_500 else [200]
+    )
+
+
+def test_threads_natural_malformed_caption_after_paid_retry_keeps_context():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if len(seen) == 1:
+            raise _http_error_with_body(
+                request.full_url, 500, '{"credits_charged": 2}'
+            )
+        return _StatusResponse(
+            json.dumps(
+                {
+                    "credits_charged": 3,
+                    "posts": [
+                        {
+                            "id": "1",
+                            "text_post_app_info": {"text_fragments": 123},
+                        }
+                    ],
+                }
+            ),
+            status=200,
+        )
+
+    with pytest.raises(AttributeError) as caught:
+        fetch_threads_mentions(
+            "kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+        )
+
+    error = caught.value
+    assert len(seen) == 2
+    assert error.credits_charged == 5
+    assert error.http_status == 200
+    assert error.counts == {"returned": 1, "parsed": 0, "deduplicated": 0}
+    assert [(event["http_status"], event["credits_charged"]) for event in error.route_events] == [
+        (500, 2),
+        (200, 3),
+    ]
+
+
+@pytest.mark.parametrize("first_500", [False, True])
+def test_threads_injected_parser_failure_keeps_paid_context_and_fails_job(
+    monkeypatch, first_500
+):
+    import sentiment_monitor.sources.threads as threads
+
+    from sentiment_monitor.scheduler import SourceFetchError, _guarded_fetch
+
+    def broken_normalize(item, collected_at):
+        raise AttributeError("synthetic parser failure")
+
+    monkeypatch.setattr(threads, "normalize_threads_item", broken_normalize)
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if first_500 and len(seen) == 1:
+            raise _http_error_with_body(
+                request.full_url, 500, '{"credits_charged": 2}'
+            )
+        return _StatusResponse(
+            json.dumps({"credits_charged": 3, "posts": [{"id": "1"}]}),
+            status=200,
+        )
+
+    with pytest.raises(SourceFetchError) as caught:
+        _guarded_fetch(
+            "threads",
+            lambda: fetch_threads_mentions(
+                "kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+            ),
+        )
+
+    error = caught.value
+    assert len(seen) == (2 if first_500 else 1)
+    assert error.recoverable is False
+    assert error.detail == "collection_failed"
+    assert error.http_status == 200
+    assert error.credits_charged == (5 if first_500 else 3)
+    assert error.counts == {"returned": 1, "parsed": 0, "deduplicated": 0}
+    expected_credits = [2, 3] if first_500 else [3]
+    assert [event["credits_charged"] for event in error.route_events] == expected_credits

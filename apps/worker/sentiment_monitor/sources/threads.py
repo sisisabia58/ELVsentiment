@@ -27,6 +27,11 @@ from sentiment_monitor.sources.scrapecreators import (
 )
 
 
+def _route_error_detail(error: Exception) -> str:
+    code = getattr(error, "code", None)
+    return code if isinstance(code, str) else "collection_failed"
+
+
 def _extract_threads_text(item: dict[str, Any]) -> str:
     caption = item.get("caption")
     if isinstance(caption, dict) and isinstance(caption.get("text"), str):
@@ -153,7 +158,7 @@ def fetch_threads_mentions(
             route.id,
             "failed",
             http_status=http_status,
-            credits_charged=known_credits(credits),
+            credits_charged=payload_credits,
             detail=error.code,
             body=error.body,
         )
@@ -166,23 +171,42 @@ def fetch_threads_mentions(
             route_events=route_events,
         ) from None
     returned = len(raw_items)
-    normalized_items = [
-        normalize_threads_item(item, collected_at)
-        for item in raw_items
-        if isinstance(item, dict)
-    ]
-    items = [
-        {**item, "route_id": route.id}
-        for item in normalized_items
-        if within_overlap(item["posted_at"], collected_at, route)
-    ]
-    mentions = dedupe_mentions(items)
+    try:
+        normalized_items = [
+            normalize_threads_item(item, collected_at)
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        items = [
+            {**item, "route_id": route.id}
+            for item in normalized_items
+            if within_overlap(item["posted_at"], collected_at, route)
+        ]
+        mentions = dedupe_mentions(items)
+    except Exception as error:
+        error.body = getattr(error, "body", None) or getattr(payload, "body", None)
+        route_events[-1] = route_event(
+            route.id,
+            "failed",
+            http_status=http_status,
+            credits_charged=payload_credits,
+            detail=_route_error_detail(error),
+            body=error.body,
+        )
+        raise carry_attempt_context(
+            error,
+            credits,
+            returned,
+            [],
+            http_status=http_status,
+            route_events=route_events,
+        ) from None
     if raw_items and not has_usable_mentions(normalized_items):
         route_events[-1] = route_event(
             route.id,
             "failed",
             http_status=http_status,
-            credits_charged=known_credits(credits),
+            credits_charged=payload_credits,
             detail="malformed_posts",
             body=getattr(payload, "body", None),
         )
