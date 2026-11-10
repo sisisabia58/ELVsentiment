@@ -585,6 +585,7 @@ class SourceFetchError(Exception):
         http_status: int | None = None,
         credits_charged: int | None = None,
         counts: dict[str, int] | None = None,
+        recoverable: bool = True,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
@@ -592,6 +593,22 @@ class SourceFetchError(Exception):
         self.http_status = http_status
         self.credits_charged = credits_charged
         self.counts = counts
+        # Only provider/transport failures may continue as partial failures.
+        # Unexpected programming errors keep this False so a source handler
+        # re-raises them and the job fails instead of reporting partial success.
+        self.recoverable = recoverable
+
+
+def _is_provider_transport_failure(error: Exception, detail: str) -> bool:
+    """True for transport/HTTP failures, not programming errors.
+
+    Programming errors (TypeError/ValueError/plain RuntimeError, ...) keep the
+    neutral ``collection_failed`` detail and are not OSError subclasses, so the
+    source handlers re-raise them and the job fails.
+    """
+    if isinstance(error, OSError):
+        return True
+    return detail != "collection_failed"
 
 
 def _guarded_fetch(source: str, fetch):
@@ -606,6 +623,7 @@ def _guarded_fetch(source: str, fetch):
             http_status=error.http_status,
             credits_charged=error.credits_charged,
             counts=error.counts,
+            recoverable=True,
         ) from None
     except Exception as error:
         detail = _failure_detail(error, source)
@@ -618,6 +636,7 @@ def _guarded_fetch(source: str, fetch):
             http_status=status,
             credits_charged=getattr(error, "credits_charged", None),
             counts=getattr(error, "counts", None),
+            recoverable=_is_provider_transport_failure(error, detail),
         ) from None
 
 
@@ -950,6 +969,8 @@ def serve(
                                     )
                                     committed_sources += 1
                                 except SourceFetchError as error:
+                                    if not error.recoverable:
+                                        raise
                                     _record_source_failure(connect, log, job, "x", error)
                                     failures.append(_source_failure_note("x", variant, error.detail))
 
@@ -990,6 +1011,8 @@ def serve(
                                     )
                                     committed_sources += 1
                                 except SourceFetchError as error:
+                                    if not error.recoverable:
+                                        raise
                                     _record_source_failure(connect, log, job, "threads", error)
                                     failures.append(_source_failure_note("threads", variant, error.detail))
 
@@ -1030,6 +1053,8 @@ def serve(
                                     )
                                     committed_sources += 1
                                 except SourceFetchError as error:
+                                    if not error.recoverable:
+                                        raise
                                     _record_source_failure(connect, log, job, "instagram", error)
                                     failures.append(_source_failure_note("instagram", variant, error.detail))
 
@@ -1070,6 +1095,8 @@ def serve(
                                     )
                                     committed_sources += 1
                                 except SourceFetchError as error:
+                                    if not error.recoverable:
+                                        raise
                                     _record_source_failure(connect, log, job, "tiktok", error)
                                     failures.append(_source_failure_note("tiktok", variant, error.detail))
 
@@ -1090,6 +1117,14 @@ def serve(
                     detail="storage_commit_unknown",
                 )
                 fail_job("storage_commit_unknown")
+                continue
+            except SourceFetchError as error:
+                # Non-recoverable (programming) errors re-raised by a source
+                # handler fail the whole job, matching the pre-continue behaviour.
+                _record_source_failure(
+                    connect, log, job, context["source"] or "threads", error
+                )
+                fail_job(error.detail)
                 continue
             except Exception as error:
                 if context["committed"]:

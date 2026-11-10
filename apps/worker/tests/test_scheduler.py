@@ -2518,3 +2518,73 @@ def test_every_source_failing_fails_the_job_with_a_summary(tmp_path):
         if "update jobs set status = 'succeeded'" in sql.lower()
     ]
     assert succeeded == []
+
+
+@pytest.mark.parametrize("error_type", [TypeError, ValueError, RuntimeError])
+def test_unexpected_fetch_error_fails_job_instead_of_partial_success(tmp_path, error_type):
+    world = LoopWorld(
+        jobs=[_due_job()],
+        variants=["ayam barayam", "ayam geprek", "sambal"],
+        cursor=None,
+    )
+    world.sources = ["threads", "instagram", "tiktok"]
+    calls = []
+    lines = []
+
+    def post(source, variant):
+        return [{
+            "external_id": f"{source}-{variant}",
+            "excerpt": f"{source} {variant}",
+            "url": f"https://example.com/{source}/{variant}",
+            "author": "a",
+            "posted_at": "2026-11-01T00:00:00Z",
+            "variant": variant,
+        }]
+
+    def fetch_threads(variant):
+        calls.append(("threads", variant))
+        return post("threads", variant), None
+
+    def fetch_instagram(variant):
+        calls.append(("instagram", variant))
+        if variant == "ayam barayam":
+            raise error_type("synthetic programming error")
+        return post("instagram", variant), None
+
+    def fetch_tiktok(variant):
+        calls.append(("tiktok", variant))
+        return post("tiktok", variant), None
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+            fetch_tiktok=fetch_tiktok,
+        )
+
+    assert calls == [
+        ("threads", "ayam barayam"),
+        ("instagram", "ayam barayam"),
+    ]
+    failed_jobs = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'failed'" in sql.lower()
+        and "claim_expired" not in sql.lower()
+    ]
+    assert failed_jobs == [("collection_failed", "job-1")]
+    succeeded = [
+        sql for sql, _params in world.calls
+        if "update jobs set status = 'succeeded'" in sql.lower()
+    ]
+    assert succeeded == []
+    assert all("synthetic programming error" not in line for line in lines)
