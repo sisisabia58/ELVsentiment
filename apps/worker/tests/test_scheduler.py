@@ -3024,3 +3024,108 @@ def test_parser_failure_uses_actual_http_status(tmp_path):
     assert "outcome=failed" in line
     assert "http_status=200" in line
     assert "credits_charged=2" in line
+
+
+def _route_line(monkeypatch, body, secret):
+    from sentiment_monitor.scheduler import _log_route_events
+
+    monkeypatch.setenv("SCRAPECREATORS_API_KEY", secret)
+    lines = []
+    _log_route_events(
+        lines.append,
+        {"id": "job-1", "project_id": "project-1"},
+        "threads",
+        [
+            {
+                "route": "threads.keyword",
+                "outcome": "failed",
+                "http_status": 500,
+                "credits_charged": 1,
+                "detail": "http_500",
+                "body": body,
+            }
+        ],
+    )
+    assert len(lines) == 1
+    return lines[0]
+
+
+def test_route_telemetry_redacts_known_env_secret_before_truncation(monkeypatch):
+    secret = "SYNTHETIC_ONLY_1234567890ABCDEFGHIJ"
+    line = _route_line(monkeypatch, "x" * 185 + secret, secret)
+
+    assert secret not in line
+    assert "SYNTHETIC_ON" not in line
+    assert "SYNTHETIC" not in line
+    assert "[REDACTED]" in line
+    assert len(line) < 500
+
+
+def test_route_telemetry_redacts_quoted_env_secret_before_json_escaping(monkeypatch):
+    import json
+
+    secret = 'SYNTHETIC"Q\\B_1234567890'
+    body = json.dumps({"message": "x" * 150 + secret, "note": "diagnosis kept"})
+    line = _route_line(monkeypatch, body, secret)
+
+    assert secret not in line
+    assert "SYNTHETIC" not in line
+    assert "Q\\\\B" not in line
+    assert "[REDACTED]" in line
+    assert len(line) < 500
+
+
+def test_redact_provider_body_removes_complete_quoted_credential_values():
+    from sentiment_monitor.scheduler import _redact_provider_body
+
+    result = _redact_provider_body('{"password":"first second third"}')
+
+    assert "first" not in result
+    assert "second" not in result
+    assert "third" not in result
+    assert "password" in result
+    assert "[REDACTED]" in result
+
+
+def test_redact_provider_body_handles_nested_json_sensitive_keys_and_cookies():
+    from sentiment_monitor.scheduler import _redact_provider_body
+
+    result = _redact_provider_body(
+        '{"error":{"client_secret":"alpha beta gamma","message":"rate limited"},'
+        '"cookie":"session=abc def; Path=/","note":"keep me"}'
+    )
+
+    for leaked in ("alpha", "beta", "gamma", "session=abc", "Path=/"):
+        assert leaked not in result
+    assert "rate limited" in result
+    assert "keep me" in result
+    assert "client_secret" in result
+    assert "[REDACTED]" in result
+
+
+def test_redact_provider_body_non_json_fallback_handles_spaces_and_escaped_quotes():
+    from sentiment_monitor.scheduler import _redact_provider_body
+
+    result = _redact_provider_body(
+        'upstream password="first \\"quoted\\" third" '
+        "token=abc123 client_secret='alpha beta' worker=ok"
+    )
+
+    for leaked in ("first", "quoted", "abc123", "alpha", "beta"):
+        assert leaked not in result
+    assert "password" in result
+    assert "worker=ok" in result
+    assert "[REDACTED]" in result
+
+
+def test_redact_provider_body_non_json_cookie_header_does_not_leak_cookie_value():
+    from sentiment_monitor.scheduler import _redact_provider_body
+
+    result = _redact_provider_body(
+        "Set-Cookie: session=abc def; Path=/; HttpOnly"
+    )
+
+    assert "session=abc" not in result
+    assert "def" not in result
+    assert "Set-Cookie" in result
+    assert "[REDACTED]" in result

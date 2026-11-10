@@ -184,6 +184,21 @@ def _url_password_secrets(value: str) -> set[str]:
     return {password, decoded, quote(password, safe=""), quote(decoded, safe="")}
 
 
+def _known_secret_values(env: Mapping[str, str]) -> set[str]:
+    secrets: set[str] = set()
+    for name in _SECRET_NAMES:
+        value = env.get(name, "")
+        if not value:
+            continue
+        secrets.add(value)
+        secrets.add(quote(value, safe=""))
+        secrets.add(json.dumps(value)[1:-1])
+        secrets.add(json.dumps(value, ensure_ascii=False)[1:-1])
+        if "URL" in name:
+            secrets.update(_url_password_secrets(value))
+    return {secret for secret in secrets if secret}
+
+
 def format_log(
     message: str,
     *,
@@ -192,23 +207,13 @@ def format_log(
 ) -> str:
     source_env = os.environ if env is None else env
     replacement = "[REDACTED]" if env is not None or fields else "[redacted]"
-    secrets: set[str] = set()
-    for name in _SECRET_NAMES:
-        value = source_env.get(name, "")
-        if not value:
-            continue
-        secrets.add(value)
-        secrets.add(quote(value, safe=""))
-        if "URL" in name:
-            secrets.update(_url_password_secrets(value))
     combined = message
     if fields:
         suffix = " ".join(f"{key}={val}" for key, val in fields.items())
         combined = f"{message} {suffix}"
     redacted = combined
-    for secret in sorted(secrets, key=len, reverse=True):
-        if secret:
-            redacted = redacted.replace(secret, replacement)
+    for secret in sorted(_known_secret_values(source_env), key=len, reverse=True):
+        redacted = redacted.replace(secret, replacement)
     return redacted
 
 
@@ -277,33 +282,132 @@ def _safe_error_label(error: Exception) -> str:
 
 
 _MAX_ERROR_BODY_LOG = 200
+_BODY_SENSITIVE_KEY = (
+    r"authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|"
+    r"api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|"
+    r"auth[-_]?token|client[-_]?secret|token|password|passwd|secret|"
+    r"credentials|credential|cookie|set[-_]?cookie|key"
+)
+_BODY_HEADER_KEY = (
+    r"authorization|proxy[-_]?authorization|cookie|set[-_]?cookie"
+)
 _BODY_URL_USERINFO = re.compile(
     r"(?i)\b(https?://[^/\s:@]+:)[^@\s/]+(@)"
 )
 _BODY_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
-_BODY_SECRET_ASSIGN = re.compile(
-    r"(?i)\b(authorization|x-api-key|api[-_]?key|apikey|access[-_]?token|"
-    r"refresh[-_]?token|auth[-_]?token|token|password|passwd|secret|credential)"
-    r"\b[\"']?(\s*[:=]\s*|\s+)[\"']?([^\"'\s,;&}]+)"
+_BODY_HEADER_SECRET = re.compile(
+    r"(?i)(\b(?:" + _BODY_HEADER_KEY + r")\b\s*[:=]\s*)[^}\]]+"
+)
+_BODY_QUOTED_SECRET = re.compile(
+    r"(?i)(\b(?:" + _BODY_SENSITIVE_KEY + r")\b[\"']?\s*[:=]\s*)"
+    r"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
+)
+_BODY_UNQUOTED_SECRET = re.compile(
+    r"(?i)(\b(?:" + _BODY_SENSITIVE_KEY + r")\b[\"']?\s*[:=]\s*)"
+    r"(?![\"'])([^\s,;&}]+)"
 )
 _BODY_JWT = re.compile(
     r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b"
 )
+_SENSITIVE_JSON_KEYS = frozenset(
+    {
+        "auth",
+        "api_key",
+        "apikey",
+        "access_token",
+        "auth_token",
+        "authorization",
+        "client_secret",
+        "cookie",
+        "credential",
+        "credentials",
+        "key",
+        "password",
+        "passwd",
+        "proxy_authorization",
+        "refresh_token",
+        "secret",
+        "set_cookie",
+        "token",
+        "x_api_key",
+    }
+)
+_SENSITIVE_JSON_SUFFIXES = (
+    "_api_key",
+    "_apikey",
+    "_cookie",
+    "_credential",
+    "_credentials",
+    "_password",
+    "_passwd",
+    "_secret",
+    "_token",
+)
+
+
+def _normalized_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", key.strip().lower()).strip("_")
+
+
+def _is_sensitive_json_key(key: str) -> bool:
+    normalized = _normalized_key(key)
+    return normalized in _SENSITIVE_JSON_KEYS or normalized.endswith(
+        _SENSITIVE_JSON_SUFFIXES
+    )
+
+
+def _redact_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (
+                "[REDACTED]"
+                if _is_sensitive_json_key(str(key))
+                else _redact_json_value(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_json_value(item) for item in value]
+    return value
+
+
+def _redact_json_body(text: str) -> str | None:
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    try:
+        data = json.loads(stripped)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return json.dumps(
+        _redact_json_value(data), ensure_ascii=False, separators=(",", ":")
+    )
 
 
 def _redact_provider_body(
-    value: Any, max_length: int = _MAX_ERROR_BODY_LOG
+    value: Any,
+    max_length: int = _MAX_ERROR_BODY_LOG,
+    *,
+    env: Mapping[str, str] | None = None,
 ) -> str | None:
     if value is None:
         return None
     text = value if isinstance(value, str) else str(value)
-    text = " ".join(text.split())
-    if not text:
+    if not text.strip():
         return None
+    source_env = os.environ if env is None else env
+    for secret in sorted(_known_secret_values(source_env), key=len, reverse=True):
+        text = text.replace(secret, "[REDACTED]")
+    json_text = _redact_json_body(text)
+    if json_text is not None:
+        text = json_text
+    text = _BODY_HEADER_SECRET.sub(r"\1[REDACTED]", text)
     text = _BODY_URL_USERINFO.sub(r"\1[REDACTED]\2", text)
     text = _BODY_BEARER.sub("Bearer [REDACTED]", text)
-    text = _BODY_SECRET_ASSIGN.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _BODY_QUOTED_SECRET.sub(r'\1"[REDACTED]"', text)
+    text = _BODY_UNQUOTED_SECRET.sub(r"\1[REDACTED]", text)
     text = _BODY_JWT.sub("[REDACTED]", text)
+    text = " ".join(text.split())
     if len(text) > max_length:
         text = text[: max_length - 3].rstrip() + "..."
     return text
