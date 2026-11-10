@@ -334,3 +334,88 @@ def test_threads_empty_zero_credit_is_known_zero_not_unknown():
 def test_threads_empty_missing_credit_is_unknown():
     result = _threads({"posts": []})
     assert result["credits_charged"] is None
+
+
+def _http_error_with_body(url: str, status: int, body: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url, status, "synthetic", {}, io.BytesIO(body.encode("utf-8"))
+    )
+
+
+def test_threads_retries_once_after_500_then_succeeds():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if len(seen) == 1:
+            raise _http_error_with_body(
+                request.full_url, 500, '{"credits_charged": 2, "error": "temporary"}'
+            )
+        return _StatusResponse(
+            json.dumps({"posts": [], "credits_charged": 3}), status=200
+        )
+
+    result = fetch_threads_mentions(
+        "kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+    )
+
+    assert len(seen) == 2
+    assert result["credits_charged"] == 5
+    assert [event["outcome"] for event in result["route_events"]] == [
+        "failed",
+        "success",
+    ]
+    assert result["route_events"][0]["route"] == "threads.keyword"
+    assert result["route_events"][0]["http_status"] == 500
+    assert result["route_events"][0]["credits_charged"] == 2
+    assert "temporary" in result["route_events"][0]["body"]
+
+
+def test_threads_two_500s_stop_after_two_attempts():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+    credits = iter([2, 3])
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        raise _http_error_with_body(
+            request.full_url,
+            500,
+            json.dumps({"credits_charged": next(credits)}),
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_threads_mentions(
+            "kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+        )
+
+    assert len(seen) == 2
+    assert caught.value.code == "http_500"
+    assert caught.value.http_status == 500
+    assert caught.value.credits_charged == 5
+    assert [event["outcome"] for event in caught.value.route_events] == [
+        "failed",
+        "failed",
+    ]
+    assert [event["credits_charged"] for event in caught.value.route_events] == [2, 3]
+
+
+def test_threads_404_is_not_retried():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        raise _http_error_with_body(request.full_url, 404, '{"error": "missing"}')
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_threads_mentions(
+            "kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+        )
+
+    assert len(seen) == 1
+    assert caught.value.code == "http_404"
+    assert caught.value.route_events[0]["http_status"] == 404
+    assert "missing" in caught.value.route_events[0]["body"]

@@ -664,3 +664,34 @@ def test_tiktok_unexpected_parser_error_after_paid_routes_keeps_context(monkeypa
 
     assert caught.value.credits_charged == 5
     assert caught.value.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+
+
+def test_tiktok_all_routes_404_captures_each_route_event():
+    import urllib.error
+
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        body = json.dumps({"error": f"down {len(seen)}"})
+        raise urllib.error.HTTPError(
+            request.full_url, 404, "missing", {}, io.BytesIO(body.encode("utf-8"))
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions(
+            "Kopi", "key", "2026-11-01T00:00:00Z", intent="phrase", opener=opener
+        )
+
+    error = caught.value
+    assert error.code == "http_404"
+    assert len(seen) == 3
+    assert [(event["route"], event["outcome"]) for event in error.route_events] == [
+        ("tiktok.keyword", "failed"),
+        ("tiktok.top", "failed"),
+        ("tiktok.keyword_page2", "failed"),
+    ]
+    assert [event["http_status"] for event in error.route_events] == [404, 404, 404]
+    assert all("down" in event["body"] for event in error.route_events)

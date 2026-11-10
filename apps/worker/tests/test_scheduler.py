@@ -2815,3 +2815,212 @@ def test_instagram_paid_context_survives_unexpected_error_and_job_fails(
     assert "returned=2" in source_line
     assert "parsed=1" in source_line
     assert "credits_charged=5" in source_line
+
+
+def test_route_telemetry_logs_status_credits_and_redacted_truncated_body(monkeypatch):
+    from sentiment_monitor.scheduler import _log_route_events
+
+    monkeypatch.setenv("SCRAPECREATORS_API_KEY", "sc-super-secret")
+    body = (
+        "Authorization: Bearer visible-bearer x-api-key=visible-api-key "
+        "password=visible-password token=visible-token "
+        "https://user:visible-url-password@example.com/path "
+        "sc-super-secret " + ("z" * 500)
+    )
+    lines = []
+
+    _log_route_events(
+        lines.append,
+        {"id": "job-1", "project_id": "project-1"},
+        "instagram",
+        [
+            {
+                "route": "instagram.reels",
+                "outcome": "failed",
+                "http_status": 404,
+                "credits_charged": 3,
+                "detail": "http_404",
+                "body": body,
+            }
+        ],
+    )
+
+    assert len(lines) == 1
+    line = lines[0]
+    assert line.startswith("source_route")
+    assert "job_id=job-1" in line
+    assert "project_id=project-1" in line
+    assert "source=instagram" in line
+    assert "route=instagram.reels" in line
+    assert "outcome=failed" in line
+    assert "http_status=404" in line
+    assert "credits_charged=3" in line
+    assert "detail=http_404" in line
+    for leaked in (
+        "visible-bearer",
+        "visible-api-key",
+        "visible-password",
+        "visible-token",
+        "visible-url-password",
+        "sc-super-secret",
+    ):
+        assert leaked not in line
+    assert len(line) < 500
+
+
+def test_route_telemetry_without_body_uses_dash_without_raw_exception_text():
+    from sentiment_monitor.scheduler import _log_route_events
+
+    lines = []
+    _log_route_events(
+        lines.append,
+        {"id": "job-1", "project_id": "project-1"},
+        "threads",
+        [
+            {
+                "route": "threads.keyword",
+                "outcome": "success",
+                "http_status": 200,
+                "credits_charged": 1,
+                "detail": "ok",
+            }
+        ],
+    )
+    assert len(lines) == 1
+    assert "outcome=success" in lines[0]
+    assert "http_status=200" in lines[0]
+    assert "credits_charged=1" in lines[0]
+    assert "body=-" in lines[0]
+
+
+def test_serve_logs_each_failed_route_individually(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    world = LoopWorld(jobs=[_due_job()], variants=["ayam barayam"], cursor=None)
+    world.sources = ["instagram"]
+    lines = []
+
+    def fetch_instagram(_variant):
+        error = ScrapeCreatorsError("http_404", http_status=404)
+        error.route_events = [
+            {
+                "route": "instagram.reels",
+                "outcome": "failed",
+                "http_status": 404,
+                "credits_charged": None,
+                "detail": "http_404",
+                "body": '{"error": "reels missing"}',
+            },
+            {
+                "route": "instagram.hashtag_from_phrase",
+                "outcome": "failed",
+                "http_status": 404,
+                "credits_charged": 2,
+                "detail": "http_404",
+                "body": '{"error": "hashtag missing"}',
+            },
+        ]
+        raise error
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            lambda *_args, **_kwargs: ([], None),
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+        )
+
+    route_lines = [line for line in lines if line.startswith("source_route")]
+    assert len(route_lines) == 2
+    assert "route=instagram.reels" in route_lines[0]
+    assert "reels missing" in route_lines[0]
+    assert "route=instagram.hashtag_from_phrase" in route_lines[1]
+    assert "credits_charged=2" in route_lines[1]
+    assert "hashtag missing" in route_lines[1]
+    assert len([line for line in lines if line.startswith("source_collection")]) == 1
+
+
+def test_serve_logs_success_route_telemetry(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["threads"]
+    lines = []
+
+    def fetch_threads(_variant):
+        return {
+            "mentions": [],
+            "counts": {"returned": 0, "parsed": 0, "deduplicated": 0},
+            "credits_charged": 2,
+            "http_status": 200,
+            "route_events": [
+                {
+                    "route": "threads.keyword",
+                    "outcome": "success",
+                    "http_status": 200,
+                    "credits_charged": 2,
+                    "detail": "ok",
+                }
+            ],
+        }
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+        )
+
+    route_lines = [line for line in lines if line.startswith("source_route")]
+    assert len(route_lines) == 1
+    assert "route=threads.keyword" in route_lines[0]
+    assert "outcome=success" in route_lines[0]
+    assert "http_status=200" in route_lines[0]
+    assert "credits_charged=2" in route_lines[0]
+
+
+def test_parser_failure_uses_actual_http_status(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["instagram"]
+    lines = []
+
+    def fetch_instagram(_variant):
+        error = AttributeError("synthetic parser error")
+        error.http_status = 200
+        error.credits_charged = 2
+        raise error
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            lambda *_args, **_kwargs: ([], None),
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+        )
+
+    line = next(line for line in lines if line.startswith("source_collection"))
+    assert "outcome=failed" in line
+    assert "http_status=200" in line
+    assert "credits_charged=2" in line

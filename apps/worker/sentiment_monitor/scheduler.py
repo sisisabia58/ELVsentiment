@@ -276,6 +276,77 @@ def _safe_error_label(error: Exception) -> str:
     return f"{class_name} {safe_code}"[:_MAX_SAFE_LABEL_LENGTH]
 
 
+_MAX_ERROR_BODY_LOG = 200
+_BODY_URL_USERINFO = re.compile(
+    r"(?i)\b(https?://[^/\s:@]+:)[^@\s/]+(@)"
+)
+_BODY_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+_BODY_SECRET_ASSIGN = re.compile(
+    r"(?i)\b(authorization|x-api-key|api[-_]?key|apikey|access[-_]?token|"
+    r"refresh[-_]?token|auth[-_]?token|token|password|passwd|secret|credential)"
+    r"\b[\"']?(\s*[:=]\s*|\s+)[\"']?([^\"'\s,;&}]+)"
+)
+_BODY_JWT = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b"
+)
+
+
+def _redact_provider_body(
+    value: Any, max_length: int = _MAX_ERROR_BODY_LOG
+) -> str | None:
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else str(value)
+    text = " ".join(text.split())
+    if not text:
+        return None
+    text = _BODY_URL_USERINFO.sub(r"\1[REDACTED]\2", text)
+    text = _BODY_BEARER.sub("Bearer [REDACTED]", text)
+    text = _BODY_SECRET_ASSIGN.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _BODY_JWT.sub("[REDACTED]", text)
+    if len(text) > max_length:
+        text = text[: max_length - 3].rstrip() + "..."
+    return text
+
+
+def _log_route_events(log, job, source: str, events: Any) -> None:
+    if not isinstance(events, (list, tuple)):
+        return
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        route = event.get("route")
+        if not isinstance(route, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", route):
+            route = "other"
+        outcome = event.get("outcome")
+        if outcome not in ("success", "failed", "empty_or_success"):
+            outcome = "other"
+        status = event.get("http_status")
+        credits = event.get("credits_charged")
+        detail = event.get("detail")
+        detail = _safe_detail_code(detail) if isinstance(detail, str) else "other"
+        body = _redact_provider_body(event.get("body"))
+
+        def render(
+            route=route,
+            outcome=outcome,
+            status=status,
+            credits=credits,
+            detail=detail,
+            body=body,
+        ) -> str:
+            line = (
+                f"source_route job_id={job['id']} project_id={job['project_id']} "
+                f"source={source} route={route} outcome={outcome} "
+                f"http_status={status if type(status) is int else '-'} "
+                f"credits_charged={credits if type(credits) is int else '-'} "
+                f"detail={detail} body={json.dumps(body) if body else '-'}"
+            )
+            return format_log(line)
+
+        _safe_log(log, render)
+
+
 def _safe_log(log, message) -> None:
     """Logging must never change data or job outcome, and never recurse."""
     try:
@@ -580,6 +651,15 @@ def _unpack_fetched(
     return normalized, next_cursor, counts, credits, http_status
 
 
+def _route_events_from(result: Any) -> list[dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    events = result.get("route_events")
+    if not isinstance(events, list):
+        return []
+    return [event for event in events if isinstance(event, dict)]
+
+
 class SourceFetchError(Exception):
     def __init__(
         self,
@@ -590,6 +670,7 @@ class SourceFetchError(Exception):
         credits_charged: int | None = None,
         counts: dict[str, int] | None = None,
         recoverable: bool = True,
+        route_events: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
@@ -597,6 +678,7 @@ class SourceFetchError(Exception):
         self.http_status = http_status
         self.credits_charged = credits_charged
         self.counts = counts
+        self.route_events = route_events
         # Only provider/transport failures may continue as partial failures.
         # Unexpected programming errors keep this False so a source handler
         # re-raises them and the job fails instead of reporting partial success.
@@ -643,10 +725,13 @@ def _guarded_fetch(source: str, fetch):
             credits_charged=error.credits_charged,
             counts=error.counts,
             recoverable=True,
+            route_events=getattr(error, "route_events", None),
         ) from None
     except Exception as error:
         detail = _failure_detail(error, source)
-        status = getattr(error, "code", None)
+        status = getattr(error, "http_status", None)
+        if type(status) is not int:
+            status = getattr(error, "code", None)
         if type(status) is not int:
             status = None
         raise SourceFetchError(
@@ -656,6 +741,7 @@ def _guarded_fetch(source: str, fetch):
             credits_charged=getattr(error, "credits_charged", None),
             counts=getattr(error, "counts", None),
             recoverable=_is_provider_transport_failure(error, detail),
+            route_events=getattr(error, "route_events", None),
         ) from None
 
 
@@ -711,6 +797,7 @@ def _record_source_failure(connect, log, job, source: str, error: SourceFetchErr
         )
     except Exception as status_error:
         _log_status_write_failed(log, job, source, status_error)
+    _log_route_events(log, job, source, getattr(error, "route_events", None))
     _log_collection(
         log,
         job,
@@ -998,6 +1085,12 @@ def serve(
                                 try:
                                     context["attempt"] = True
                                     threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
+                                    _log_route_events(
+                                        log,
+                                        job,
+                                        "threads",
+                                        _route_events_from(threads_result),
+                                    )
                                     (
                                         threads_mentions,
                                         threads_cursor,
@@ -1040,6 +1133,12 @@ def serve(
                                 try:
                                     context["attempt"] = True
                                     ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
+                                    _log_route_events(
+                                        log,
+                                        job,
+                                        "instagram",
+                                        _route_events_from(ig_result),
+                                    )
                                     (
                                         ig_mentions,
                                         ig_cursor,
@@ -1082,6 +1181,12 @@ def serve(
                                 try:
                                     context["attempt"] = True
                                     tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
+                                    _log_route_events(
+                                        log,
+                                        job,
+                                        "tiktok",
+                                        _route_events_from(tt_result),
+                                    )
                                     (
                                         tt_mentions,
                                         tt_cursor,

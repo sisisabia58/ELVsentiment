@@ -12,6 +12,7 @@ from sentiment_monitor.intent import Keyword
 from sentiment_monitor.sources.routes import request_params, routes_for, within_overlap
 from sentiment_monitor.sources.scrapecreators import (
     ScrapeCreatorsError,
+    attach_route_events,
     carry_attempt_context,
     credits_from,
     dedupe_mentions,
@@ -20,6 +21,7 @@ from sentiment_monitor.sources.scrapecreators import (
     hashtag_field_names,
     has_usable_mentions,
     known_credits,
+    route_event,
     select_post_list,
     unix_to_iso,
 )
@@ -83,20 +85,85 @@ def fetch_threads_mentions(
 ) -> dict[str, Any]:
     keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
     route = routes_for("threads", keyword)[0]
-    payload = fetch_scrapecreators_json(
-        route.path,
-        request_params(route, keyword, now=collected_at),
-        api_key,
-        opener=opener,
-    )
+    params = request_params(route, keyword, now=collected_at)
+    credits: list[int | None] = []
+    route_events: list[dict[str, Any]] = []
+    try:
+        payload = fetch_scrapecreators_json(
+            route.path, params, api_key, opener=opener
+        )
+    except ScrapeCreatorsError as error:
+        route_events.append(
+            route_event(
+                route.id,
+                "failed",
+                http_status=error.http_status,
+                credits_charged=error.credits_charged,
+                detail=error.code,
+                body=error.body,
+            )
+        )
+        status = error.http_status
+        if not (type(status) is int and 500 <= status <= 599):
+            raise attach_route_events(error, route_events) from None
+        if error.credits_charged is not None:
+            credits.append(error.credits_charged)
+        try:
+            payload = fetch_scrapecreators_json(
+                route.path, params, api_key, opener=opener
+            )
+        except ScrapeCreatorsError as retry_error:
+            route_events.append(
+                route_event(
+                    route.id,
+                    "failed",
+                    http_status=retry_error.http_status,
+                    credits_charged=retry_error.credits_charged,
+                    detail=retry_error.code,
+                    body=retry_error.body,
+                )
+            )
+            raise carry_attempt_context(
+                retry_error,
+                credits,
+                None,
+                [],
+                body=retry_error.body,
+                route_events=route_events,
+            ) from None
+
     http_status = getattr(payload, "http_status", None)
-    credits: list[int | None] = [credits_from(payload)]
+    payload_credits = credits_from(payload)
+    credits.append(payload_credits)
+    route_events.append(
+        route_event(
+            route.id,
+            "success",
+            http_status=http_status,
+            credits_charged=payload_credits,
+            detail="ok",
+        )
+    )
     returned: int | None = None
     try:
         raw_items = select_post_list(payload, ("posts", "items", "data"))
     except ScrapeCreatorsError as error:
+        error.body = error.body or getattr(payload, "body", None)
+        route_events[-1] = route_event(
+            route.id,
+            "failed",
+            http_status=http_status,
+            credits_charged=known_credits(credits),
+            detail=error.code,
+            body=error.body,
+        )
         raise carry_attempt_context(
-            error, credits, returned, [], http_status=http_status
+            error,
+            credits,
+            returned,
+            [],
+            http_status=http_status,
+            route_events=route_events,
         ) from None
     returned = len(raw_items)
     normalized_items = [
@@ -111,11 +178,21 @@ def fetch_threads_mentions(
     ]
     mentions = dedupe_mentions(items)
     if raw_items and not has_usable_mentions(normalized_items):
+        route_events[-1] = route_event(
+            route.id,
+            "failed",
+            http_status=http_status,
+            credits_charged=known_credits(credits),
+            detail="malformed_posts",
+            body=getattr(payload, "body", None),
+        )
         raise ScrapeCreatorsError(
             "malformed_posts",
             http_status=http_status,
             credits_charged=known_credits(credits),
             counts=failure_counts(returned, items),
+            body=getattr(payload, "body", None),
+            route_events=route_events,
         )
     counts = {
         "returned": len(raw_items),
@@ -131,6 +208,7 @@ def fetch_threads_mentions(
         "counts": counts,
         "credits_charged": known_credits(credits),
         "http_status": http_status,
+        "route_events": route_events,
     }
 
 

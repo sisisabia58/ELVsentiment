@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { LogoutForm } from "@/components/logout-form";
 import { formatWib } from "@/monitor/format";
 import type { Workspace } from "@/monitor/load";
+import { SOURCE_NAME } from "@/monitor/policy";
 import { choiceLabel } from "@/monitor/schedule-choice";
 import { EmptyState, PageHeader, Panel } from "./bits";
 import { Frame } from "./shell";
@@ -31,7 +32,7 @@ export function ProjectsView(props: { workspace: Workspace }) {
                   <div className="min-w-0">
                     <p className="text-sm font-semibold">{project.name}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {project.keywordCount} variasi · {project.sources.map((source) => (source === "x" ? "X" : "Threads")).join(", ")} · {choiceLabel(project.schedule)}
+                      {project.keywordCount} variasi · {project.sources.map((source) => SOURCE_NAME[source]).join(", ")} · {choiceLabel(project.schedule)}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {project.lastCollectedAt ? `Pengumpulan terakhir ${formatWib(project.lastCollectedAt)}` : "Belum ada pengumpulan data"}

@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com"
+MAX_ERROR_BODY_CHARS = 8192
 
 
 class ScrapeCreatorsError(Exception):
@@ -18,12 +19,72 @@ class ScrapeCreatorsError(Exception):
         http_status: int | None = None,
         credits_charged: int | None = None,
         counts: dict[str, int] | None = None,
+        body: str | None = None,
+        route_events: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
         self.http_status = http_status
         self.credits_charged = credits_charged
         self.counts = counts
+        self.body = body
+        self.route_events = route_events
+
+
+def route_event(
+    route: str,
+    outcome: str,
+    *,
+    http_status: int | None = None,
+    credits_charged: int | None = None,
+    detail: str = "ok",
+    body: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "route": route,
+        "outcome": outcome,
+        "http_status": http_status,
+        "credits_charged": credits_charged,
+        "detail": detail or "ok",
+        "body": body,
+    }
+
+
+def attach_route_events(
+    error: Exception, events: list[dict[str, Any]]
+) -> Exception:
+    error.route_events = events
+    return error
+
+
+def _decode_body(raw: Any) -> str | None:
+    if isinstance(raw, bytes):
+        text = raw.decode("utf-8", errors="replace")
+    elif isinstance(raw, str):
+        text = raw
+    else:
+        return None
+    return text[:MAX_ERROR_BODY_CHARS]
+
+
+def _read_http_error_body(error: urllib.error.HTTPError) -> str | None:
+    read = getattr(error, "read", None)
+    if not callable(read):
+        return None
+    try:
+        return _decode_body(read())
+    except Exception:
+        return None
+
+
+def _credits_from_body(body: str | None) -> int | None:
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return credits_from(data) if isinstance(data, dict) else None
 
 
 def credits_from(payload: dict[str, Any]) -> int | None:
@@ -127,6 +188,8 @@ def carry_attempt_context(
     http_status: int | None = None,
     parsed: int | None = None,
     error_credits_already_counted: bool = False,
+    body: str | None = None,
+    route_events: list[dict[str, Any]] | None = None,
 ) -> Exception:
     error_credits = getattr(error, "credits_charged", None)
     if error_credits is not None and not error_credits_already_counted:
@@ -147,15 +210,25 @@ def carry_attempt_context(
         error.counts["parsed"] = parsed
     if getattr(error, "http_status", None) is None and http_status is not None:
         error.http_status = http_status
+    if body is not None and getattr(error, "body", None) is None:
+        error.body = body
+    if route_events is not None:
+        error.route_events = route_events
     return error
 
 
 class FetchedJSON(dict):
     """Decoded JSON object plus the transport status that produced it."""
 
-    def __init__(self, data: dict[str, Any], http_status: int | None) -> None:
+    def __init__(
+        self,
+        data: dict[str, Any],
+        http_status: int | None,
+        body: str | None = None,
+    ) -> None:
         super().__init__(data)
         self.http_status = http_status
+        self.body = body
 
 
 def _response_status(response: Any) -> int | None:
@@ -199,23 +272,35 @@ def fetch_scrapecreators_json(
             http_status = _response_status(response)
             raw = response.read()
     except urllib.error.HTTPError as error:
-        raise ScrapeCreatorsError(f"http_{error.code}", http_status=error.code) from None
+        body = _read_http_error_body(error)
+        raise ScrapeCreatorsError(
+            f"http_{error.code}",
+            http_status=error.code,
+            credits_charged=_credits_from_body(body),
+            body=body,
+        ) from None
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         code = "read_timeout" if isinstance(error, TimeoutError) else "transport_error"
         raise ScrapeCreatorsError(code, http_status=http_status) from None
+    body = _decode_body(raw)
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ScrapeCreatorsError("malformed_json", http_status=http_status) from None
+        raise ScrapeCreatorsError(
+            "malformed_json", http_status=http_status, body=body
+        ) from None
     if not isinstance(data, dict):
-        raise ScrapeCreatorsError("malformed_envelope", http_status=http_status)
+        raise ScrapeCreatorsError(
+            "malformed_envelope", http_status=http_status, body=body
+        )
     if data.get("success") is False:
         raise ScrapeCreatorsError(
             "success_false",
             http_status=http_status,
             credits_charged=credits_from(data),
+            body=body,
         )
-    return FetchedJSON(data, http_status)
+    return FetchedJSON(data, http_status, body=body)
 
 
 def unix_to_iso(value: Any) -> str | None:

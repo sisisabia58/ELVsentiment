@@ -9,6 +9,7 @@ from sentiment_monitor.relevance import literal_match_status
 from sentiment_monitor.sources.routes import request_params, routes_for, within_overlap
 from sentiment_monitor.sources.scrapecreators import (
     ScrapeCreatorsError,
+    attach_route_events,
     carry_attempt_context,
     credits_from,
     dedupe_mentions,
@@ -17,9 +18,15 @@ from sentiment_monitor.sources.scrapecreators import (
     hashtag_field_names,
     has_usable_mentions,
     known_credits,
+    route_event,
     select_post_list,
     unix_to_iso,
 )
+
+
+def _route_error_detail(error: Exception) -> str:
+    code = getattr(error, "code", None)
+    return code if isinstance(code, str) else "collection_failed"
 
 
 def normalize_hashtag(variant: str) -> str:
@@ -136,6 +143,7 @@ def fetch_instagram_mentions(
     page2_route = None
     page2_cursor: str | None = None
     route_errors: list[ScrapeCreatorsError] = []
+    route_events: list[dict[str, Any]] = []
 
     for route in routes:
         if route.conditional:
@@ -150,25 +158,80 @@ def fetch_instagram_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
+            route_events.append(
+                route_event(
+                    route.id,
+                    "failed",
+                    http_status=error.http_status,
+                    credits_charged=error.credits_charged,
+                    detail=error.code,
+                    body=error.body,
+                )
+            )
             if credits or returned is not None or parsed_total:
                 raise carry_attempt_context(
-                    error, credits, returned, collected, parsed=parsed_total
+                    error,
+                    credits,
+                    returned,
+                    collected,
+                    parsed=parsed_total,
+                    route_events=route_events,
                 ) from None
             if error.credits_charged is not None:
                 credits.append(error.credits_charged)
             route_errors.append(error)
             continue
         http_status = getattr(payload, "http_status", None)
-        credits.append(credits_from(payload))
+        route_credits = credits_from(payload)
+        credits.append(route_credits)
+        route_events.append(
+            route_event(
+                route.id,
+                "success",
+                http_status=http_status,
+                credits_charged=route_credits,
+                detail="ok",
+            )
+        )
         try:
             raw_items = select_post_list(payload, _post_keys(route))
         except ScrapeCreatorsError as error:
+            error.body = error.body or getattr(payload, "body", None)
+            route_events[-1] = route_event(
+                route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail=error.code,
+                body=error.body,
+            )
             raise carry_attempt_context(
-                error, credits, returned, collected, http_status=http_status, parsed=parsed_total
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+                route_events=route_events,
             ) from None
         except Exception as error:
+            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
+            route_events[-1] = route_event(
+                route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail=_route_error_detail(error),
+                body=error.body,
+            )
             raise carry_attempt_context(
-                error, credits, returned, collected, http_status=http_status, parsed=parsed_total
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+                route_events=route_events,
             ) from None
         returned = len(raw_items) if returned is None else returned + len(raw_items)
         try:
@@ -186,17 +249,42 @@ def fetch_instagram_mentions(
             retained_total += len(retained_items)
             collected.extend(retained_items)
         except Exception as error:
+            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
+            route_events[-1] = route_event(
+                route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail=_route_error_detail(error),
+                body=error.body,
+            )
             raise carry_attempt_context(
-                error, credits, returned, collected, http_status=http_status, parsed=parsed_total
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+                route_events=route_events,
             ) from None
         if raw_items and not has_usable_mentions(normalized_items):
             counts = failure_counts(returned, collected)
             counts["parsed"] = parsed_total
+            route_events[-1] = route_event(
+                route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail="malformed_posts",
+                body=getattr(payload, "body", None),
+            )
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
                 credits_charged=known_credits(credits),
                 counts=counts,
+                body=getattr(payload, "body", None),
+                route_events=route_events,
             )
 
         if route.id == "instagram.hashtag":
@@ -221,8 +309,9 @@ def fetch_instagram_mentions(
                 collected,
                 parsed=parsed_total,
                 error_credits_already_counted=True,
+                route_events=route_events,
             ) from None
-        raise first_error
+        raise attach_route_events(first_error, route_events)
 
     if page2_route is not None and page2_cursor is not None:
         params = request_params(page2_route, keyword, now=collected_at)
@@ -235,18 +324,48 @@ def fetch_instagram_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
+            route_events.append(
+                route_event(
+                    page2_route.id,
+                    "failed",
+                    http_status=error.http_status,
+                    credits_charged=error.credits_charged,
+                    detail=error.code,
+                    body=error.body,
+                )
+            )
             raise carry_attempt_context(
                 error,
                 credits,
                 returned,
                 collected,
                 parsed=parsed_total,
+                route_events=route_events,
             ) from None
         http_status = getattr(payload, "http_status", None)
-        credits.append(credits_from(payload))
+        page2_credits = credits_from(payload)
+        credits.append(page2_credits)
+        route_events.append(
+            route_event(
+                page2_route.id,
+                "success",
+                http_status=http_status,
+                credits_charged=page2_credits,
+                detail="ok",
+            )
+        )
         try:
             raw_items = select_post_list(payload, _post_keys(page2_route))
         except ScrapeCreatorsError as error:
+            error.body = error.body or getattr(payload, "body", None)
+            route_events[-1] = route_event(
+                page2_route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail=error.code,
+                body=error.body,
+            )
             raise carry_attempt_context(
                 error,
                 credits,
@@ -254,8 +373,18 @@ def fetch_instagram_mentions(
                 collected,
                 http_status=http_status,
                 parsed=parsed_total,
+                route_events=route_events,
             ) from None
         except Exception as error:
+            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
+            route_events[-1] = route_event(
+                page2_route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail=_route_error_detail(error),
+                body=error.body,
+            )
             raise carry_attempt_context(
                 error,
                 credits,
@@ -263,6 +392,7 @@ def fetch_instagram_mentions(
                 collected,
                 http_status=http_status,
                 parsed=parsed_total,
+                route_events=route_events,
             ) from None
         returned = len(raw_items) if returned is None else returned + len(raw_items)
         try:
@@ -280,6 +410,15 @@ def fetch_instagram_mentions(
             retained_total += len(retained_items)
             collected.extend(retained_items)
         except Exception as error:
+            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
+            route_events[-1] = route_event(
+                page2_route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail=_route_error_detail(error),
+                body=error.body,
+            )
             raise carry_attempt_context(
                 error,
                 credits,
@@ -287,15 +426,26 @@ def fetch_instagram_mentions(
                 collected,
                 http_status=http_status,
                 parsed=parsed_total,
+                route_events=route_events,
             ) from None
         if raw_items and not has_usable_mentions(normalized_items):
             counts = failure_counts(returned, collected)
             counts["parsed"] = parsed_total
+            route_events[-1] = route_event(
+                page2_route.id,
+                "failed",
+                http_status=http_status,
+                credits_charged=known_credits(credits),
+                detail="malformed_posts",
+                body=getattr(payload, "body", None),
+            )
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
                 credits_charged=known_credits(credits),
                 counts=counts,
+                body=getattr(payload, "body", None),
+                route_events=route_events,
             )
 
     mentions = dedupe_mentions(collected)
@@ -313,4 +463,5 @@ def fetch_instagram_mentions(
         "counts": counts,
         "credits_charged": known_credits(credits),
         "http_status": http_status,
+        "route_events": route_events,
     }

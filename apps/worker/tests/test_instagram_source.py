@@ -749,3 +749,103 @@ def test_instagram_unexpected_parser_error_after_paid_routes_keeps_context(monke
 
     assert caught.value.credits_charged == 5
     assert caught.value.counts == {"returned": 2, "parsed": 1, "deduplicated": 0}
+
+
+def _ig_http_error(url: str, status: int, body: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url, status, "synthetic", {}, io.BytesIO(body.encode("utf-8"))
+    )
+
+
+def test_instagram_route_events_cover_failed_then_success():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v2/instagram/reels/search" in request.full_url:
+            raise _ig_http_error(request.full_url, 404, '{"error": "reels missing"}')
+        return _StatusResponse(
+            json.dumps(
+                {
+                    "posts": [{"pk": "ig-h", "caption": "Kopi hashtag"}],
+                    "credits_charged": 1,
+                }
+            ),
+            status=200,
+        )
+
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+    )
+
+    events = result["route_events"]
+    assert [(event["route"], event["outcome"]) for event in events] == [
+        ("instagram.reels", "failed"),
+        ("instagram.hashtag_from_phrase", "success"),
+    ]
+    assert events[0]["http_status"] == 404
+    assert events[0]["credits_charged"] is None
+    assert "reels missing" in events[0]["body"]
+    assert events[1]["http_status"] == 200
+    assert events[1]["credits_charged"] == 1
+
+
+def test_instagram_500_is_not_retried_by_threads_change():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v2/instagram/reels/search" in request.full_url:
+            raise _ig_http_error(request.full_url, 500, '{"error": "down"}')
+        return _StatusResponse(
+            json.dumps(
+                {
+                    "posts": [{"pk": "ig-h", "caption": "Kopi hashtag"}],
+                    "credits_charged": 1,
+                }
+            ),
+            status=200,
+        )
+
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+    )
+
+    assert len(seen) == 2
+    assert [event["outcome"] for event in result["route_events"]] == [
+        "failed",
+        "success",
+    ]
+    assert [event["route"] for event in result["route_events"]] == [
+        "instagram.reels",
+        "instagram.hashtag_from_phrase",
+    ]
+
+
+def test_instagram_all_routes_404_fails_and_captures_each_body():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        body = "reels missing" if "/v2/instagram/reels/search" in request.full_url else "hashtag missing"
+        raise _ig_http_error(request.full_url, 404, json.dumps({"error": body}))
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions(
+            "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+        )
+
+    error = caught.value
+    assert error.code == "http_404"
+    assert error.http_status == 404
+    assert len(seen) == 2
+    events = error.route_events
+    assert [(event["route"], event["outcome"]) for event in events] == [
+        ("instagram.reels", "failed"),
+        ("instagram.hashtag_from_phrase", "failed"),
+    ]
+    assert "reels missing" in events[0]["body"]
+    assert "hashtag missing" in events[1]["body"]
+    assert all(event["http_status"] == 404 for event in events)

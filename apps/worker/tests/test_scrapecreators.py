@@ -220,3 +220,38 @@ def test_hashtag_field_names_reads_common_payload_shapes():
     assert hashtag_field_names(["#Kopi", {"name": "Teh"}]) == ["Kopi", "Teh"]
     assert hashtag_field_names({"edges": [{"node": {"name": "Kopi"}}]}) == ["Kopi"]
     assert hashtag_field_names(None) == []
+
+
+def test_http_error_captures_bounded_body_and_known_credits():
+    body = json.dumps(
+        {
+            "credits_charged": 3,
+            "error": "Authorization: Bearer synthetic-secret",
+        }
+    )
+
+    def opener(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url, 500, "down", {}, io.BytesIO(body.encode("utf-8"))
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json(
+            "/v1/threads/search", {"query": "x"}, "key", opener=opener
+        )
+
+    error = caught.value
+    assert error.code == "http_500"
+    assert error.http_status == 500
+    assert error.credits_charged == 3
+    assert "synthetic-secret" in error.body
+
+
+def test_success_payload_carries_body_for_parser_failures():
+    def opener(request, timeout=0):
+        return StatusResponse('{"unexpected": []}', status=200)
+
+    payload = fetch_scrapecreators_json(
+        "/v1/threads/search", {"query": "x"}, "key", opener=opener
+    )
+    assert payload.body == '{"unexpected": []}'
