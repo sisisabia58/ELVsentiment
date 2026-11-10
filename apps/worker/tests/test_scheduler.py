@@ -3028,4 +3028,3 @@ def test_parser_failure_uses_actual_http_status(tmp_path):
     assert "outcome=failed" in line
     assert "http_status=200" in line
     assert "credits_charged=2" in line
-
