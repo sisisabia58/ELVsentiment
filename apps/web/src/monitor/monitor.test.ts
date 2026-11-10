@@ -218,6 +218,16 @@ describe("workspace loader", () => {
     expect(row.rows[0]).toEqual({ cadence: "daily", daily_minute: 480 });
     expect(jobPresentation("deferred", "skipped_overlap").label).toBe("Dilewati");
     expect(jobPresentation("queued", null).label).toBe("Antri");
+    const partial = jobPresentation(
+      "succeeded",
+      "partial_failures:instagram:ayam%20barayam:instagram_http_404|tiktok:sambal:tiktok_http_500",
+    );
+    expect(partial.label).toBe("Selesai");
+    expect(partial.explanation).toContain("Instagram");
+    expect(partial.explanation).toContain("ayam barayam");
+    expect(partial.explanation).toContain("TikTok");
+    expect(partial.explanation).toContain("sambal");
+    expect(partial.explanation).not.toContain("partial_failures");
   });
 
   it("does not invent an attention change or a post time", () => {

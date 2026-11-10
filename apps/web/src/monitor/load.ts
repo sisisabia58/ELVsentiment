@@ -104,12 +104,43 @@ function asTextArray(value: unknown): string[] {
   return [];
 }
 
+function decodeKeyword(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function partialFailureExplanation(detail: string): string | null {
+  const prefix = "partial_failures:";
+  if (!detail.startsWith(prefix)) return null;
+  const bySource = new Map<string, string[]>();
+  for (const entry of detail.slice(prefix.length).split("|")) {
+    const [source, rawKeyword] = entry.split(":");
+    const name = SOURCE_NAME[source as SourceId];
+    if (!name) continue;
+    const keyword = decodeKeyword(rawKeyword ?? "").trim();
+    if (!keyword) continue;
+    const keywords = bySource.get(name) ?? [];
+    if (!keywords.includes(keyword)) keywords.push(keyword);
+    bySource.set(name, keywords);
+  }
+  if (bySource.size === 0) return null;
+  const parts = [...bySource].map(([name, keywords]) => `${name} (kata kunci ${keywords.join(", ")})`);
+  return `Pengumpulan selesai. Beberapa sumber gagal: ${parts.join(", ")}.`;
+}
+
 export function jobPresentation(status: string, detail: string | null): { label: string; explanation: string } {
   if (detail === "skipped_overlap") {
     return {
       label: "Dilewati",
       explanation: "Dilewati karena pengumpulan sebelumnya masih berjalan.",
     };
+  }
+  if (status === "succeeded") {
+    const partial = detail ? partialFailureExplanation(detail) : null;
+    if (partial) return { label: "Selesai", explanation: partial };
   }
   if (status === "queued") return { label: "Antri", explanation: "Menunggu giliran untuk mulai." };
   if (status === "claimed") return { label: "Berjalan", explanation: "Sedang mengumpulkan data dari sumber yang dipilih." };
