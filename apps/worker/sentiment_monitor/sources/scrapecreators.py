@@ -126,8 +126,9 @@ def carry_attempt_context(
     *,
     http_status: int | None = None,
     parsed: int | None = None,
+    error_credits_already_counted: bool = False,
 ) -> ScrapeCreatorsError:
-    if error.credits_charged is not None:
+    if error.credits_charged is not None and not error_credits_already_counted:
         credits.append(error.credits_charged)
     error.credits_charged = known_credits(credits)
     extra_returned = None

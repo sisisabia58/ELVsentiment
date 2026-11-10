@@ -595,3 +595,81 @@ def test_instagram_second_route_failure_preserves_first_route_counts_and_credits
     assert error.http_status == 500
     assert error.credits_charged == 2
     assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+
+
+class _PaidFailureResponse(io.StringIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_instagram_hashtag_paid_failure_counts_credits_once():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return _PaidFailureResponse(
+            json.dumps({"success": False, "credits_charged": 1})
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions(
+            "#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener
+        )
+
+    assert caught.value.code == "success_false"
+    assert caught.value.credits_charged == 1
+    assert len(seen) == 1
+
+
+def test_instagram_hashtag_zero_credit_failure_stays_zero():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return _PaidFailureResponse(
+            json.dumps({"success": False, "credits_charged": 0})
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions(
+            "#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener
+        )
+
+    assert caught.value.credits_charged == 0
+    assert len(seen) == 1
+
+
+def test_instagram_paid_route_failure_then_success_sums_credits_once():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v2/instagram/reels/search" in request.full_url:
+            return _PaidFailureResponse(
+                json.dumps({"success": False, "credits_charged": 2})
+            )
+        return _PaidFailureResponse(
+            json.dumps(
+                {
+                    "posts": [{"pk": "ig-h", "caption": "Kopi hashtag"}],
+                    "credits_charged": 3,
+                }
+            )
+        )
+
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+    )
+
+    assert len(seen) == 2
+    assert result["credits_charged"] == 5
+    assert [m["external_id"] for m in result["mentions"]] == ["ig-h"]

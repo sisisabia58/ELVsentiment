@@ -559,3 +559,53 @@ def test_tiktok_all_routes_404_still_fails_as_source_failure():
     assert caught.value.code == "http_404"
     assert caught.value.http_status == 404
     assert len(seen) == 3
+
+
+def test_tiktok_hashtag_all_routes_paid_failure_sums_credits_once():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+    credits = iter([2, 3])
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return _Response(
+            json.dumps({"success": False, "credits_charged": next(credits)})
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions(
+            "#kopi", "key", "2026-11-01T00:00:00Z", intent="hashtag", opener=opener
+        )
+
+    assert caught.value.credits_charged == 5
+    assert len(seen) == 2
+
+
+def test_tiktok_paid_route_failure_then_success_sums_credits_once():
+    seen = []
+    credits = iter([2, 3])
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        amount = next(credits)
+        if "/v1/tiktok/search/hashtag" in request.full_url:
+            return _Response(
+                json.dumps({"success": False, "credits_charged": amount})
+            )
+        return _Response(
+            json.dumps(
+                {
+                    "search_item_list": [{"aweme_id": "tt-1", "desc": "Kopi"}],
+                    "credits_charged": amount,
+                }
+            )
+        )
+
+    result = fetch_tiktok_mentions(
+        "#kopi", "key", "2026-11-01T00:00:00Z", intent="hashtag", opener=opener
+    )
+
+    assert len(seen) == 2
+    assert result["credits_charged"] == 5
+    assert [m["external_id"] for m in result["mentions"]] == ["tt-1"]

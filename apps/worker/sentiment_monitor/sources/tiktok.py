@@ -141,8 +141,15 @@ def fetch_tiktok_mentions(
     if returned is None and route_errors:
         first_error = route_errors[0]
         if credits or collected or parsed_total:
+            # Keep parity with Instagram: an error already appended by the
+            # continue path must not have its credit counted a second time.
             raise carry_attempt_context(
-                first_error, credits, returned, collected, parsed=parsed_total
+                first_error,
+                credits,
+                returned,
+                collected,
+                parsed=parsed_total,
+                error_credits_already_counted=True,
             ) from None
         raise first_error
 
