@@ -222,7 +222,7 @@ def test_hashtag_field_names_reads_common_payload_shapes():
     assert hashtag_field_names(None) == []
 
 
-def test_http_error_captures_bounded_body_and_known_credits():
+def test_http_error_captures_full_body_length_and_known_credits():
     body = json.dumps(
         {
             "credits_charged": 3,
@@ -244,14 +244,32 @@ def test_http_error_captures_bounded_body_and_known_credits():
     assert error.code == "http_500"
     assert error.http_status == 500
     assert error.credits_charged == 3
-    assert "synthetic-secret" in error.body
+    assert error.body_length == len(body)
+    assert not hasattr(error, "body")
 
 
-def test_success_payload_carries_body_for_parser_failures():
+def test_http_error_body_length_survives_internal_credit_cap():
+    prefix = " " * 8178
+    body = prefix + "qa_security_known_1234567890 trailing"
+
+    def opener(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url, 500, "down", {}, io.BytesIO(body.encode("utf-8"))
+        )
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json(
+            "/v1/threads/search", {"query": "x"}, "key", opener=opener
+        )
+    assert caught.value.body_length == len(body)
+
+
+def test_success_payload_carries_full_body_length_for_parser_failures():
     def opener(request, timeout=0):
         return StatusResponse('{"unexpected": []}', status=200)
 
     payload = fetch_scrapecreators_json(
         "/v1/threads/search", {"query": "x"}, "key", opener=opener
     )
-    assert payload.body == '{"unexpected": []}'
+    assert payload.body_length == len('{"unexpected": []}')
+    assert not hasattr(payload, "body")

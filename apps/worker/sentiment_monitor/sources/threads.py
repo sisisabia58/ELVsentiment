@@ -105,7 +105,7 @@ def fetch_threads_mentions(
                 http_status=error.http_status,
                 credits_charged=error.credits_charged,
                 detail=error.code,
-                body=error.body,
+                body_length=getattr(error, "body_length", None),
             )
         )
         status = error.http_status
@@ -125,7 +125,7 @@ def fetch_threads_mentions(
                     http_status=retry_error.http_status,
                     credits_charged=retry_error.credits_charged,
                     detail=retry_error.code,
-                    body=retry_error.body,
+                    body_length=getattr(retry_error, "body_length", None),
                 )
             )
             raise carry_attempt_context(
@@ -133,7 +133,7 @@ def fetch_threads_mentions(
                 credits,
                 None,
                 [],
-                body=retry_error.body,
+                body_length=getattr(retry_error, "body_length", None),
                 route_events=route_events,
             ) from None
 
@@ -147,20 +147,20 @@ def fetch_threads_mentions(
             http_status=http_status,
             credits_charged=payload_credits,
             detail="ok",
+            body_length=getattr(payload, "body_length", None),
         )
     )
     returned: int | None = None
     try:
         raw_items = select_post_list(payload, ("posts", "items", "data"))
     except ScrapeCreatorsError as error:
-        error.body = error.body or getattr(payload, "body", None)
         route_events[-1] = route_event(
             route.id,
             "failed",
             http_status=http_status,
             credits_charged=payload_credits,
             detail=error.code,
-            body=error.body,
+            body_length=getattr(error, "body_length", None),
         )
         raise carry_attempt_context(
             error,
@@ -184,14 +184,13 @@ def fetch_threads_mentions(
         ]
         mentions = dedupe_mentions(items)
     except Exception as error:
-        error.body = getattr(error, "body", None) or getattr(payload, "body", None)
         route_events[-1] = route_event(
             route.id,
             "failed",
             http_status=http_status,
             credits_charged=payload_credits,
             detail=_route_error_detail(error),
-            body=error.body,
+            body_length=getattr(error, "body_length", None),
         )
         raise carry_attempt_context(
             error,
@@ -208,14 +207,14 @@ def fetch_threads_mentions(
             http_status=http_status,
             credits_charged=payload_credits,
             detail="malformed_posts",
-            body=getattr(payload, "body", None),
+            body_length=getattr(payload, "body_length", None),
         )
         raise ScrapeCreatorsError(
             "malformed_posts",
             http_status=http_status,
             credits_charged=known_credits(credits),
             counts=failure_counts(returned, items),
-            body=getattr(payload, "body", None),
+            body_length=getattr(payload, "body_length", None),
             route_events=route_events,
         )
     counts = {

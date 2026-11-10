@@ -785,7 +785,8 @@ def test_instagram_route_events_cover_failed_then_success():
     ]
     assert events[0]["http_status"] == 404
     assert events[0]["credits_charged"] is None
-    assert "reels missing" in events[0]["body"]
+    assert events[0]["body_length"] == len(json.dumps({"error": "reels missing"}))
+    assert "reels missing" not in str(events[0])
     assert events[1]["http_status"] == 200
     assert events[1]["credits_charged"] == 1
 
@@ -846,6 +847,8 @@ def test_instagram_all_routes_404_fails_and_captures_each_body():
         ("instagram.reels", "failed"),
         ("instagram.hashtag_from_phrase", "failed"),
     ]
-    assert "reels missing" in events[0]["body"]
-    assert "hashtag missing" in events[1]["body"]
+    assert events[0]["body_length"] == len(json.dumps({"error": "reels missing"}))
+    assert events[1]["body_length"] == len(json.dumps({"error": "hashtag missing"}))
+    assert "reels missing" not in str(events[0])
+    assert "hashtag missing" not in str(events[1])
     assert all(event["http_status"] == 404 for event in events)

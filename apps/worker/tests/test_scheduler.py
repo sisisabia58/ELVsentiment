@@ -2817,7 +2817,7 @@ def test_instagram_paid_context_survives_unexpected_error_and_job_fails(
     assert "credits_charged=5" in source_line
 
 
-def test_route_telemetry_logs_status_credits_and_redacted_truncated_body(monkeypatch):
+def test_route_telemetry_logs_status_credits_length_and_no_provider_text(monkeypatch):
     from sentiment_monitor.scheduler import _log_route_events
 
     monkeypatch.setenv("SCRAPECREATORS_API_KEY", "sc-super-secret")
@@ -2856,6 +2856,8 @@ def test_route_telemetry_logs_status_credits_and_redacted_truncated_body(monkeyp
     assert "http_status=404" in line
     assert "credits_charged=3" in line
     assert "detail=http_404" in line
+    assert f"body_length={len(body)}" in line
+    assert " body=-" in line
     for leaked in (
         "visible-bearer",
         "visible-api-key",
@@ -2865,7 +2867,6 @@ def test_route_telemetry_logs_status_credits_and_redacted_truncated_body(monkeyp
         "sc-super-secret",
     ):
         assert leaked not in line
-    assert len(line) < 500
 
 
 def test_route_telemetry_without_body_uses_dash_without_raw_exception_text():
@@ -2890,6 +2891,7 @@ def test_route_telemetry_without_body_uses_dash_without_raw_exception_text():
     assert "outcome=success" in lines[0]
     assert "http_status=200" in lines[0]
     assert "credits_charged=1" in lines[0]
+    assert "body_length=-" in lines[0]
     assert "body=-" in lines[0]
 
 
@@ -2941,10 +2943,12 @@ def test_serve_logs_each_failed_route_individually(tmp_path):
     route_lines = [line for line in lines if line.startswith("source_route")]
     assert len(route_lines) == 2
     assert "route=instagram.reels" in route_lines[0]
-    assert "reels missing" in route_lines[0]
+    assert f"body_length={len('{\"error\": \"reels missing\"}')}" in route_lines[0]
+    assert "reels missing" not in route_lines[0]
     assert "route=instagram.hashtag_from_phrase" in route_lines[1]
     assert "credits_charged=2" in route_lines[1]
-    assert "hashtag missing" in route_lines[1]
+    assert "hashtag missing" not in route_lines[1]
+    assert "body=-" in route_lines[1]
     assert len([line for line in lines if line.startswith("source_collection")]) == 1
 
 
@@ -3025,107 +3029,3 @@ def test_parser_failure_uses_actual_http_status(tmp_path):
     assert "http_status=200" in line
     assert "credits_charged=2" in line
 
-
-def _route_line(monkeypatch, body, secret):
-    from sentiment_monitor.scheduler import _log_route_events
-
-    monkeypatch.setenv("SCRAPECREATORS_API_KEY", secret)
-    lines = []
-    _log_route_events(
-        lines.append,
-        {"id": "job-1", "project_id": "project-1"},
-        "threads",
-        [
-            {
-                "route": "threads.keyword",
-                "outcome": "failed",
-                "http_status": 500,
-                "credits_charged": 1,
-                "detail": "http_500",
-                "body": body,
-            }
-        ],
-    )
-    assert len(lines) == 1
-    return lines[0]
-
-
-def test_route_telemetry_redacts_known_env_secret_before_truncation(monkeypatch):
-    secret = "SYNTHETIC_ONLY_1234567890ABCDEFGHIJ"
-    line = _route_line(monkeypatch, "x" * 185 + secret, secret)
-
-    assert secret not in line
-    assert "SYNTHETIC_ON" not in line
-    assert "SYNTHETIC" not in line
-    assert "[REDACTED]" in line
-    assert len(line) < 500
-
-
-def test_route_telemetry_redacts_quoted_env_secret_before_json_escaping(monkeypatch):
-    import json
-
-    secret = 'SYNTHETIC"Q\\B_1234567890'
-    body = json.dumps({"message": "x" * 150 + secret, "note": "diagnosis kept"})
-    line = _route_line(monkeypatch, body, secret)
-
-    assert secret not in line
-    assert "SYNTHETIC" not in line
-    assert "Q\\\\B" not in line
-    assert "[REDACTED]" in line
-    assert len(line) < 500
-
-
-def test_redact_provider_body_removes_complete_quoted_credential_values():
-    from sentiment_monitor.scheduler import _redact_provider_body
-
-    result = _redact_provider_body('{"password":"first second third"}')
-
-    assert "first" not in result
-    assert "second" not in result
-    assert "third" not in result
-    assert "password" in result
-    assert "[REDACTED]" in result
-
-
-def test_redact_provider_body_handles_nested_json_sensitive_keys_and_cookies():
-    from sentiment_monitor.scheduler import _redact_provider_body
-
-    result = _redact_provider_body(
-        '{"error":{"client_secret":"alpha beta gamma","message":"rate limited"},'
-        '"cookie":"session=abc def; Path=/","note":"keep me"}'
-    )
-
-    for leaked in ("alpha", "beta", "gamma", "session=abc", "Path=/"):
-        assert leaked not in result
-    assert "rate limited" in result
-    assert "keep me" in result
-    assert "client_secret" in result
-    assert "[REDACTED]" in result
-
-
-def test_redact_provider_body_non_json_fallback_handles_spaces_and_escaped_quotes():
-    from sentiment_monitor.scheduler import _redact_provider_body
-
-    result = _redact_provider_body(
-        'upstream password="first \\"quoted\\" third" '
-        "token=abc123 client_secret='alpha beta' worker=ok"
-    )
-
-    for leaked in ("first", "quoted", "abc123", "alpha", "beta"):
-        assert leaked not in result
-    assert "password" in result
-    assert "worker=ok" in result
-    assert "[REDACTED]" in result
-
-
-def test_redact_provider_body_non_json_cookie_header_does_not_leak_cookie_value():
-    from sentiment_monitor.scheduler import _redact_provider_body
-
-    result = _redact_provider_body(
-        "Set-Cookie: session=abc def; Path=/; HttpOnly"
-    )
-
-    assert "session=abc" not in result
-    assert "def" not in result
-    assert "Set-Cookie" in result
-    assert "[REDACTED]" in result

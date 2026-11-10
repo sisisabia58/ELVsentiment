@@ -281,136 +281,14 @@ def _safe_error_label(error: Exception) -> str:
     return f"{class_name} {safe_code}"[:_MAX_SAFE_LABEL_LENGTH]
 
 
-_MAX_ERROR_BODY_LOG = 200
-_BODY_SENSITIVE_KEY = (
-    r"authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|"
-    r"api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|"
-    r"auth[-_]?token|client[-_]?secret|token|password|passwd|secret|"
-    r"credentials|credential|cookie|set[-_]?cookie|key"
-)
-_BODY_HEADER_KEY = (
-    r"authorization|proxy[-_]?authorization|cookie|set[-_]?cookie"
-)
-_BODY_URL_USERINFO = re.compile(
-    r"(?i)\b(https?://[^/\s:@]+:)[^@\s/]+(@)"
-)
-_BODY_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
-_BODY_HEADER_SECRET = re.compile(
-    r"(?i)(\b(?:" + _BODY_HEADER_KEY + r")\b\s*[:=]\s*)[^}\]]+"
-)
-_BODY_QUOTED_SECRET = re.compile(
-    r"(?i)(\b(?:" + _BODY_SENSITIVE_KEY + r")\b[\"']?\s*[:=]\s*)"
-    r"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
-)
-_BODY_UNQUOTED_SECRET = re.compile(
-    r"(?i)(\b(?:" + _BODY_SENSITIVE_KEY + r")\b[\"']?\s*[:=]\s*)"
-    r"(?![\"'])([^\s,;&}]+)"
-)
-_BODY_JWT = re.compile(
-    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b"
-)
-_SENSITIVE_JSON_KEYS = frozenset(
-    {
-        "auth",
-        "api_key",
-        "apikey",
-        "access_token",
-        "auth_token",
-        "authorization",
-        "client_secret",
-        "cookie",
-        "credential",
-        "credentials",
-        "key",
-        "password",
-        "passwd",
-        "proxy_authorization",
-        "refresh_token",
-        "secret",
-        "set_cookie",
-        "token",
-        "x_api_key",
-    }
-)
-_SENSITIVE_JSON_SUFFIXES = (
-    "_api_key",
-    "_apikey",
-    "_cookie",
-    "_credential",
-    "_credentials",
-    "_password",
-    "_passwd",
-    "_secret",
-    "_token",
-)
-
-
-def _normalized_key(key: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", key.strip().lower()).strip("_")
-
-
-def _is_sensitive_json_key(key: str) -> bool:
-    normalized = _normalized_key(key)
-    return normalized in _SENSITIVE_JSON_KEYS or normalized.endswith(
-        _SENSITIVE_JSON_SUFFIXES
-    )
-
-
-def _redact_json_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: (
-                "[REDACTED]"
-                if _is_sensitive_json_key(str(key))
-                else _redact_json_value(item)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_json_value(item) for item in value]
-    return value
-
-
-def _redact_json_body(text: str) -> str | None:
-    stripped = text.strip()
-    if not stripped or stripped[0] not in "{[":
-        return None
-    try:
-        data = json.loads(stripped)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return json.dumps(
-        _redact_json_value(data), ensure_ascii=False, separators=(",", ":")
-    )
-
-
-def _redact_provider_body(
-    value: Any,
-    max_length: int = _MAX_ERROR_BODY_LOG,
-    *,
-    env: Mapping[str, str] | None = None,
-) -> str | None:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    if not text.strip():
-        return None
-    source_env = os.environ if env is None else env
-    for secret in sorted(_known_secret_values(source_env), key=len, reverse=True):
-        text = text.replace(secret, "[REDACTED]")
-    json_text = _redact_json_body(text)
-    if json_text is not None:
-        text = json_text
-    text = _BODY_HEADER_SECRET.sub(r"\1[REDACTED]", text)
-    text = _BODY_URL_USERINFO.sub(r"\1[REDACTED]\2", text)
-    text = _BODY_BEARER.sub("Bearer [REDACTED]", text)
-    text = _BODY_QUOTED_SECRET.sub(r'\1"[REDACTED]"', text)
-    text = _BODY_UNQUOTED_SECRET.sub(r"\1[REDACTED]", text)
-    text = _BODY_JWT.sub("[REDACTED]", text)
-    text = " ".join(text.split())
-    if len(text) > max_length:
-        text = text[: max_length - 3].rstrip() + "..."
-    return text
+def _event_body_length(event: Mapping[str, Any]) -> int | None:
+    value = event.get("body_length")
+    if type(value) is int and value >= 0:
+        return value
+    body = event.get("body")
+    if isinstance(body, (str, bytes)):
+        return len(body)
+    return None
 
 
 def _log_route_events(log, job, source: str, events: Any) -> None:
@@ -429,7 +307,7 @@ def _log_route_events(log, job, source: str, events: Any) -> None:
         credits = event.get("credits_charged")
         detail = event.get("detail")
         detail = _safe_detail_code(detail) if isinstance(detail, str) else "other"
-        body = _redact_provider_body(event.get("body"))
+        body_length = _event_body_length(event)
 
         def render(
             route=route,
@@ -437,14 +315,15 @@ def _log_route_events(log, job, source: str, events: Any) -> None:
             status=status,
             credits=credits,
             detail=detail,
-            body=body,
+            body_length=body_length,
         ) -> str:
             line = (
                 f"source_route job_id={job['id']} project_id={job['project_id']} "
                 f"source={source} route={route} outcome={outcome} "
                 f"http_status={status if type(status) is int else '-'} "
                 f"credits_charged={credits if type(credits) is int else '-'} "
-                f"detail={detail} body={json.dumps(body) if body else '-'}"
+                f"detail={detail} body_length="
+                f"{body_length if type(body_length) is int else '-'} body=-"
             )
             return format_log(line)
 

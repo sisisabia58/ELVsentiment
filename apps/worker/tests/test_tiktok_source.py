@@ -694,4 +694,5 @@ def test_tiktok_all_routes_404_captures_each_route_event():
         ("tiktok.keyword_page2", "failed"),
     ]
     assert [event["http_status"] for event in error.route_events] == [404, 404, 404]
-    assert all("down" in event["body"] for event in error.route_events)
+    assert all(event["body_length"] > 0 for event in error.route_events)
+    assert all("down" not in str(event) for event in error.route_events)

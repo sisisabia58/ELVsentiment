@@ -108,7 +108,7 @@ def fetch_tiktok_mentions(
                     http_status=error.http_status,
                     credits_charged=error.credits_charged,
                     detail=error.code,
-                    body=error.body,
+                    body_length=getattr(error, "body_length", None),
                 )
             )
             if credits or returned is not None or parsed_total:
@@ -134,19 +134,19 @@ def fetch_tiktok_mentions(
                 http_status=http_status,
                 credits_charged=route_credits,
                 detail="ok",
+                body_length=getattr(payload, "body_length", None),
             )
         )
         try:
             raw = _extract_tiktok_list(payload)
         except ScrapeCreatorsError as error:
-            error.body = error.body or getattr(payload, "body", None)
             route_events[-1] = route_event(
                 route.id,
                 "failed",
                 http_status=http_status,
-                credits_charged=known_credits(credits),
+                credits_charged=route_credits,
                 detail=error.code,
-                body=error.body,
+                body_length=getattr(error, "body_length", None),
             )
             raise carry_attempt_context(
                 error,
@@ -158,14 +158,13 @@ def fetch_tiktok_mentions(
                 route_events=route_events,
             ) from None
         except Exception as error:
-            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
             route_events[-1] = route_event(
                 route.id,
                 "failed",
                 http_status=http_status,
-                credits_charged=known_credits(credits),
+                credits_charged=route_credits,
                 detail=_route_error_detail(error),
-                body=error.body,
+                body_length=getattr(error, "body_length", None),
             )
             raise carry_attempt_context(
                 error,
@@ -183,14 +182,13 @@ def fetch_tiktok_mentions(
                 if isinstance(item, dict)
             ]
         except Exception as error:
-            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
             route_events[-1] = route_event(
                 route.id,
                 "failed",
                 http_status=http_status,
-                credits_charged=known_credits(credits),
+                credits_charged=route_credits,
                 detail=_route_error_detail(error),
-                body=error.body,
+                body_length=getattr(error, "body_length", None),
             )
             raise carry_attempt_context(
                 error,
@@ -212,14 +210,13 @@ def fetch_tiktok_mentions(
             retained_total += len(retained)
             collected.extend(retained)
         except Exception as error:
-            error.body = getattr(error, "body", None) or getattr(payload, "body", None)
             route_events[-1] = route_event(
                 route.id,
                 "failed",
                 http_status=http_status,
-                credits_charged=known_credits(credits),
+                credits_charged=route_credits,
                 detail=_route_error_detail(error),
-                body=error.body,
+                body_length=getattr(error, "body_length", None),
             )
             raise carry_attempt_context(
                 error,
@@ -237,16 +234,16 @@ def fetch_tiktok_mentions(
                 route.id,
                 "failed",
                 http_status=http_status,
-                credits_charged=known_credits(credits),
+                credits_charged=route_credits,
                 detail="malformed_posts",
-                body=getattr(payload, "body", None),
+                body_length=getattr(payload, "body_length", None),
             )
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
                 credits_charged=known_credits(credits),
                 counts=counts,
-                body=getattr(payload, "body", None),
+                body_length=getattr(payload, "body_length", None),
                 route_events=route_events,
             )
 

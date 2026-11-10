@@ -368,7 +368,10 @@ def test_threads_retries_once_after_500_then_succeeds():
     assert result["route_events"][0]["route"] == "threads.keyword"
     assert result["route_events"][0]["http_status"] == 500
     assert result["route_events"][0]["credits_charged"] == 2
-    assert "temporary" in result["route_events"][0]["body"]
+    assert result["route_events"][0]["body_length"] == len(
+        '{"credits_charged": 2, "error": "temporary"}'
+    )
+    assert "temporary" not in str(result["route_events"][0])
 
 
 def test_threads_two_500s_stop_after_two_attempts():
@@ -418,7 +421,8 @@ def test_threads_404_is_not_retried():
     assert len(seen) == 1
     assert caught.value.code == "http_404"
     assert caught.value.route_events[0]["http_status"] == 404
-    assert "missing" in caught.value.route_events[0]["body"]
+    assert caught.value.route_events[0]["body_length"] == len('{"error": "missing"}')
+    assert "missing" not in str(caught.value.route_events[0])
 
 
 @pytest.mark.parametrize("first_500", [False, True])
