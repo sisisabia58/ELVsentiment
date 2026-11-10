@@ -203,6 +203,53 @@ class _UnknownStatusResponse(io.StringIO):
 import urllib.error
 
 
+def test_instagram_phrase_first_route_404_falls_through_to_hashtag():
+    seen = []
+
+    class Response(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v2/instagram/reels/search" in request.full_url:
+            raise urllib.error.HTTPError(request.full_url, 404, "missing", {}, None)
+        return Response(json.dumps({"posts": [{"pk": "ig-h", "caption": "Kopi hashtag"}], "credits_charged": 1}))
+
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-01T00:00:00Z", intent="phrase", opener=opener
+    )
+
+    assert len(seen) == 2
+    assert [m["external_id"] for m in result["mentions"]] == ["ig-h"]
+    assert result["mentions"][0]["route_id"] == "instagram.hashtag_from_phrase"
+    assert result["counts"]["returned"] == 1
+    assert result["counts"]["parsed"] == 1
+    assert result["credits_charged"] == 1
+
+
+def test_instagram_all_routes_404_still_fails_as_source_failure():
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        raise urllib.error.HTTPError(request.full_url, 404, "missing", {}, None)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_instagram_mentions(
+            "Kopi", "key", "2026-11-01T00:00:00Z", intent="phrase", opener=opener
+        )
+
+    assert caught.value.code == "http_404"
+    assert caught.value.http_status == 404
+    assert len(seen) == 2
+
+
 def test_instagram_transport_failure_is_typed_without_accumulated_counts():
     from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
 

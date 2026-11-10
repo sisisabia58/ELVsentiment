@@ -133,6 +133,7 @@ def fetch_instagram_mentions(
     http_status: int | None = None
     page2_route = None
     page2_cursor: str | None = None
+    route_errors: list[ScrapeCreatorsError] = []
 
     for route in routes:
         if route.conditional:
@@ -151,7 +152,10 @@ def fetch_instagram_mentions(
                 raise carry_attempt_context(
                     error, credits, returned, collected, parsed=parsed_total
                 ) from None
-            raise
+            if error.credits_charged is not None:
+                credits.append(error.credits_charged)
+            route_errors.append(error)
+            continue
         http_status = getattr(payload, "http_status", None)
         credits.append(credits_from(payload))
         try:
@@ -194,6 +198,14 @@ def fetch_instagram_mentions(
                 cursor,
             ):
                 page2_cursor = str(cursor)
+
+    if returned is None and route_errors:
+        first_error = route_errors[0]
+        if credits or collected or parsed_total:
+            raise carry_attempt_context(
+                first_error, credits, returned, collected, parsed=parsed_total
+            ) from None
+        raise first_error
 
     if page2_route is not None and page2_cursor is not None:
         params = request_params(page2_route, keyword, now=collected_at)
