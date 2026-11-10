@@ -652,6 +652,40 @@ def _log_collection(
     _safe_log(log, render)
 
 
+def _source_failure_note(source: str, variant: Any, detail: str) -> str:
+    keyword = quote(str(variant), safe="")
+    return f"{source}:{keyword}:{detail}"
+
+
+def _record_source_failure(connect, log, job, source: str, error: SourceFetchError) -> None:
+    try:
+        _call(
+            connect,
+            lambda conn: record_source_failure(
+                conn,
+                job["customer_id"],
+                job["project_id"],
+                source,
+                error.detail,
+                error.state,
+            ),
+            log_error=False,
+        )
+    except Exception as status_error:
+        _log_status_write_failed(log, job, source, status_error)
+    _log_collection(
+        log,
+        job,
+        source,
+        "failed",
+        error.counts,
+        0,
+        http_status=error.http_status,
+        credits=error.credits_charged,
+        detail=error.detail,
+    )
+
+
 def _log_status_write_failed(log, job, source: str, error: Exception) -> None:
     _safe_log(
         log,
@@ -801,6 +835,8 @@ def serve(
         gate_code, jobs = _call(connect, claim)
         for job in jobs:
             context = _job_context(job)
+            failures: list[str] = []
+            committed_sources = 0
 
             def fail_job(detail, job=job):
                 try:
@@ -873,146 +909,170 @@ def serve(
                                         lambda conn, job=job: admit_x_read(conn, job["customer_id"], 10, limits),
                                     )
 
-                                context["attempt"] = True
-                                collected = collect_newer_x(
-                                    fetch_page,
-                                    admit_page,
-                                    floor_id=floor_id,
-                                    floor_since=floor_since,
-                                    first_limit=admission,
-                                )
-                                x_mentions = list(collected.mentions)
-                                x_counts = {
-                                    "returned": len(x_mentions),
-                                    "parsed": len(x_mentions),
-                                    "deduplicated": 0,
-                                }
-                                context["counts"] = x_counts
-                                context["credits"] = None
-                                context["http_status"] = None
+                                try:
+                                    context["attempt"] = True
+                                    collected = collect_newer_x(
+                                        fetch_page,
+                                        admit_page,
+                                        floor_id=floor_id,
+                                        floor_since=floor_since,
+                                        first_limit=admission,
+                                    )
+                                    x_mentions = list(collected.mentions)
+                                    x_counts = {
+                                        "returned": len(x_mentions),
+                                        "parsed": len(x_mentions),
+                                        "deduplicated": 0,
+                                    }
+                                    context["counts"] = x_counts
+                                    context["credits"] = None
+                                    context["http_status"] = None
 
-                                def store_x(
-                                    conn,
-                                    job=job,
-                                    mentions=x_mentions,
-                                    key=key,
-                                    floor=collected.floor_id,
-                                    marker_since=collected.floor_since,
-                                ):
-                                    return store_source(conn, job, mentions, key, "x", floor, marker_since)
+                                    def store_x(
+                                        conn,
+                                        job=job,
+                                        mentions=x_mentions,
+                                        key=key,
+                                        floor=collected.floor_id,
+                                        marker_since=collected.floor_since,
+                                    ):
+                                        return store_source(conn, job, mentions, key, "x", floor, marker_since)
 
-                                _commit_source(
-                                    connect,
-                                    log,
-                                    job,
-                                    context,
-                                    store_x,
-                                    counts=x_counts,
-                                    credits=None,
-                                    http_status=None,
-                                )
+                                    _commit_source(
+                                        connect,
+                                        log,
+                                        job,
+                                        context,
+                                        store_x,
+                                        counts=x_counts,
+                                        credits=None,
+                                        http_status=None,
+                                    )
+                                    committed_sources += 1
+                                except SourceFetchError as error:
+                                    _record_source_failure(connect, log, job, "x", error)
+                                    failures.append(_source_failure_note("x", variant, error.detail))
+
                             if "threads" in sources and fetch_threads is not None:
                                 _reset_source_attempt(context, "threads")
-                                context["attempt"] = True
-                                threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
-                                (
-                                    threads_mentions,
-                                    threads_cursor,
-                                    threads_counts,
-                                    threads_credits,
-                                    threads_http_status,
-                                ) = _unpack_fetched(threads_result, variant)
-                                context["counts"] = threads_counts
-                                context["credits"] = threads_credits
-                                context["http_status"] = threads_http_status
+                                try:
+                                    context["attempt"] = True
+                                    threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
+                                    (
+                                        threads_mentions,
+                                        threads_cursor,
+                                        threads_counts,
+                                        threads_credits,
+                                        threads_http_status,
+                                    ) = _unpack_fetched(threads_result, variant)
+                                    context["counts"] = threads_counts
+                                    context["credits"] = threads_credits
+                                    context["http_status"] = threads_http_status
 
-                                def store_threads(
-                                    conn,
-                                    job=job,
-                                    key=key,
-                                    threads_mentions=threads_mentions,
-                                    threads_cursor=threads_cursor,
-                                ):
-                                    return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
+                                    def store_threads(
+                                        conn,
+                                        job=job,
+                                        key=key,
+                                        threads_mentions=threads_mentions,
+                                        threads_cursor=threads_cursor,
+                                    ):
+                                        return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
 
-                                _commit_source(
-                                    connect,
-                                    log,
-                                    job,
-                                    context,
-                                    store_threads,
-                                    counts=threads_counts,
-                                    credits=threads_credits,
-                                    http_status=threads_http_status,
-                                )
+                                    _commit_source(
+                                        connect,
+                                        log,
+                                        job,
+                                        context,
+                                        store_threads,
+                                        counts=threads_counts,
+                                        credits=threads_credits,
+                                        http_status=threads_http_status,
+                                    )
+                                    committed_sources += 1
+                                except SourceFetchError as error:
+                                    _record_source_failure(connect, log, job, "threads", error)
+                                    failures.append(_source_failure_note("threads", variant, error.detail))
+
                             if "instagram" in sources and fetch_instagram is not None:
                                 _reset_source_attempt(context, "instagram")
-                                context["attempt"] = True
-                                ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
-                                (
-                                    ig_mentions,
-                                    ig_cursor,
-                                    ig_counts,
-                                    ig_credits,
-                                    ig_http_status,
-                                ) = _unpack_fetched(ig_result, variant)
-                                context["counts"] = ig_counts
-                                context["credits"] = ig_credits
-                                context["http_status"] = ig_http_status
+                                try:
+                                    context["attempt"] = True
+                                    ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
+                                    (
+                                        ig_mentions,
+                                        ig_cursor,
+                                        ig_counts,
+                                        ig_credits,
+                                        ig_http_status,
+                                    ) = _unpack_fetched(ig_result, variant)
+                                    context["counts"] = ig_counts
+                                    context["credits"] = ig_credits
+                                    context["http_status"] = ig_http_status
 
-                                def store_instagram(
-                                    conn,
-                                    job=job,
-                                    key=key,
-                                    ig_mentions=ig_mentions,
-                                    ig_cursor=ig_cursor,
-                                ):
-                                    return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
+                                    def store_instagram(
+                                        conn,
+                                        job=job,
+                                        key=key,
+                                        ig_mentions=ig_mentions,
+                                        ig_cursor=ig_cursor,
+                                    ):
+                                        return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
 
-                                _commit_source(
-                                    connect,
-                                    log,
-                                    job,
-                                    context,
-                                    store_instagram,
-                                    counts=ig_counts,
-                                    credits=ig_credits,
-                                    http_status=ig_http_status,
-                                )
+                                    _commit_source(
+                                        connect,
+                                        log,
+                                        job,
+                                        context,
+                                        store_instagram,
+                                        counts=ig_counts,
+                                        credits=ig_credits,
+                                        http_status=ig_http_status,
+                                    )
+                                    committed_sources += 1
+                                except SourceFetchError as error:
+                                    _record_source_failure(connect, log, job, "instagram", error)
+                                    failures.append(_source_failure_note("instagram", variant, error.detail))
+
                             if "tiktok" in sources and fetch_tiktok is not None:
                                 _reset_source_attempt(context, "tiktok")
-                                context["attempt"] = True
-                                tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
-                                (
-                                    tt_mentions,
-                                    tt_cursor,
-                                    tt_counts,
-                                    tt_credits,
-                                    tt_http_status,
-                                ) = _unpack_fetched(tt_result, variant)
-                                context["counts"] = tt_counts
-                                context["credits"] = tt_credits
-                                context["http_status"] = tt_http_status
+                                try:
+                                    context["attempt"] = True
+                                    tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
+                                    (
+                                        tt_mentions,
+                                        tt_cursor,
+                                        tt_counts,
+                                        tt_credits,
+                                        tt_http_status,
+                                    ) = _unpack_fetched(tt_result, variant)
+                                    context["counts"] = tt_counts
+                                    context["credits"] = tt_credits
+                                    context["http_status"] = tt_http_status
 
-                                def store_tiktok(
-                                    conn,
-                                    job=job,
-                                    key=key,
-                                    tt_mentions=tt_mentions,
-                                    tt_cursor=tt_cursor,
-                                ):
-                                    return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
+                                    def store_tiktok(
+                                        conn,
+                                        job=job,
+                                        key=key,
+                                        tt_mentions=tt_mentions,
+                                        tt_cursor=tt_cursor,
+                                    ):
+                                        return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
 
-                                _commit_source(
-                                    connect,
-                                    log,
-                                    job,
-                                    context,
-                                    store_tiktok,
-                                    counts=tt_counts,
-                                    credits=tt_credits,
-                                    http_status=tt_http_status,
-                                )
+                                    _commit_source(
+                                        connect,
+                                        log,
+                                        job,
+                                        context,
+                                        store_tiktok,
+                                        counts=tt_counts,
+                                        credits=tt_credits,
+                                        http_status=tt_http_status,
+                                    )
+                                    committed_sources += 1
+                                except SourceFetchError as error:
+                                    _record_source_failure(connect, log, job, "tiktok", error)
+                                    failures.append(_source_failure_note("tiktok", variant, error.detail))
+
                             if collected is not None and collected.blocked_detail:
                                 blocked_detail = collected.blocked_detail
                                 break
@@ -1030,38 +1090,6 @@ def serve(
                     detail="storage_commit_unknown",
                 )
                 fail_job("storage_commit_unknown")
-                continue
-            except SourceFetchError as error:
-                detail = error.detail
-                state = error.state
-                source = context["source"] or "threads"
-                try:
-                    _call(
-                        connect,
-                        lambda conn: record_source_failure(
-                            conn,
-                            job["customer_id"],
-                            job["project_id"],
-                            source,
-                            detail,
-                            state,
-                        ),
-                        log_error=False,
-                    )
-                except Exception as status_error:
-                    _log_status_write_failed(log, job, source, status_error)
-                _log_collection(
-                    log,
-                    job,
-                    source,
-                    "failed",
-                    error.counts,
-                    0,
-                    http_status=error.http_status,
-                    credits=error.credits_charged,
-                    detail=detail,
-                )
-                fail_job(detail)
                 continue
             except Exception as error:
                 if context["committed"]:
@@ -1103,9 +1131,16 @@ def serve(
                     if blocked_detail:
                         _defer(conn, job["id"], blocked_detail)
                         return
+                    if failures and committed_sources == 0:
+                        conn.execute(
+                            "update jobs set status = 'failed', status_detail = %s where id = %s",
+                            ("all_sources_failed:" + "|".join(failures), job["id"]),
+                        )
+                        return
+                    detail = "partial_failures:" + "|".join(failures) if failures else None
                     conn.execute(
-                        "update jobs set status = 'succeeded', status_detail = null where id = %s",
-                        (job["id"],),
+                        "update jobs set status = 'succeeded', status_detail = %s where id = %s",
+                        (detail, job["id"]),
                     )
                     conn.execute(
                         "update project_schedules set last_collected_at = now() where project_id = %s",

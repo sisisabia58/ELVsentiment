@@ -520,3 +520,42 @@ def test_tiktok_empty_zero_credit_is_known_zero_not_unknown():
 def test_tiktok_empty_missing_credit_is_unknown():
     result = _tiktok(({"search_item_list": []}, {"search_item_list": []}))
     assert result["credits_charged"] is None
+
+
+def test_tiktok_first_route_404_falls_through_to_top():
+    import urllib.error
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v1/tiktok/search/keyword" in request.full_url and "cursor=30" not in request.full_url:
+            raise urllib.error.HTTPError(request.full_url, 404, "missing", {}, None)
+        if "/v1/tiktok/search/top" in request.full_url:
+            return _Response(json.dumps({"search_item_list": [{"aweme_id": "tt-top", "desc": "Kopi top"}]}))
+        return _Response(json.dumps({"search_item_list": []}))
+
+    result = fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+
+    assert len(seen) == 3
+    assert any("/v1/tiktok/search/top" in url for url in seen)
+    assert [m["external_id"] for m in result["mentions"]] == ["tt-top"]
+
+
+def test_tiktok_all_routes_404_still_fails_as_source_failure():
+    import urllib.error
+
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        raise urllib.error.HTTPError(request.full_url, 404, "missing", {}, None)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_tiktok_mentions("Kopi", "key", "2026-11-01T00:00:00Z", opener=opener)
+
+    assert caught.value.code == "http_404"
+    assert caught.value.http_status == 404
+    assert len(seen) == 3

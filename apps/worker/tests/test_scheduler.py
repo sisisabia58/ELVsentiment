@@ -1020,6 +1020,7 @@ def test_fetch_error_is_redacted_and_marks_the_job_failed(tmp_path, monkeypatch,
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", token)
     quoted = quote(token, safe="")
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor="cursor-1")
+    world.sources = ["threads"]
 
     def fetch_threads(variant):
         raise _http_error(f"{token} {quoted}", "graph.threads.com", 401)
@@ -1064,7 +1065,7 @@ def test_fetch_error_is_redacted_and_marks_the_job_failed(tmp_path, monkeypatch,
     assert len(failed) == 1
     detail, job_id = failed[0][1]
     assert job_id == "job-1"
-    assert detail == "threads_http_401"
+    assert detail == "all_sources_failed:threads:geprek%20gembus:threads_http_401"
     assert token not in detail
     assert quoted not in detail
     assert "://" not in detail
@@ -1089,6 +1090,7 @@ def test_failed_status_update_is_redacted_and_the_loop_continues(tmp_path, monke
     monkeypatch.setenv("X_BEARER_TOKEN", token)
     quoted = quote(token, safe="")
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["x"]
     message = f"{token} {quoted}"
 
     def connect():
@@ -1374,7 +1376,7 @@ def test_provider_failure_writes_failure_and_fails_with_safe_detail(tmp_path):
     status_params = [params for sql, params in world.calls if "insert into source_status" in sql.lower()]
     assert status_params == [("customer-a", "project-1", "threads", "unavailable", "threads_success_false")]
     failed = [params for sql, params in world.calls if "status = 'failed'" in sql.lower() and "claim_expired" not in sql.lower()]
-    assert failed == [("threads_success_false", "job-1")]
+    assert failed == [("all_sources_failed:threads:geprek%20gembus:threads_success_false", "job-1")]
 
 
 def test_status_write_failure_does_not_replace_provider_detail(tmp_path):
@@ -1407,7 +1409,7 @@ def test_status_write_failure_does_not_replace_provider_detail(tmp_path):
         )
 
     failed = [params for sql, params in world.calls if "status = 'failed'" in sql.lower() and "claim_expired" not in sql.lower()]
-    assert failed == [("threads_http_401", "job-1")]
+    assert failed == [("all_sources_failed:threads:geprek%20gembus:threads_http_401", "job-1")]
 
 
 def test_status_write_failure_on_success_keeps_mentions_and_succeeds_the_job(tmp_path):
@@ -2261,7 +2263,10 @@ def test_commit_unknown_is_isolated_to_one_job(tmp_path):
     assert sum("outcome=success" in line and "saved=1" in line for line in source_lines) == 1
     failed = [params for sql, params in world.calls if "status = 'failed'" in sql and "claim_expired" not in sql]
     assert failed == [("storage_commit_unknown", "job-1")]
-    assert any("status = 'succeeded'" in sql and params == ("job-2",) for sql, params in world.calls)
+    assert any(
+        "status = 'succeeded'" in sql and params == (None, "job-2")
+        for sql, params in world.calls
+    )
 
 
 class _TransactionCommitFail(_WroteConn):
@@ -2390,3 +2395,126 @@ def test_unpack_fetched_carries_keyword_intent_and_route_provenance():
         {"mentions": [{"external_id": "2", "text": "kopi", "intent": "phrase"}]},
         Keyword("kopi", "hashtag"),
     )[0][0]["intent"] == "phrase"
+
+
+def test_barayam_partial_source_failure_continues_sources_and_keywords(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    world = LoopWorld(jobs=[_due_job()], variants=["ayam barayam", "ayam geprek", "sambal"], cursor=None)
+    world.sources = ["threads", "instagram", "tiktok"]
+    calls = []
+    lines = []
+
+    def post(source, variant):
+        return [{
+            "external_id": f"{source}-{variant}",
+            "excerpt": f"{source} {variant}",
+            "url": f"https://example.com/{source}/{variant}",
+            "author": "a",
+            "posted_at": "2026-11-01T00:00:00Z",
+            "variant": variant,
+        }]
+
+    def fetch_threads(variant):
+        calls.append(("threads", variant))
+        return post("threads", variant), None
+
+    def fetch_instagram(variant):
+        calls.append(("instagram", variant))
+        if variant == "ayam barayam":
+            raise ScrapeCreatorsError("http_404", http_status=404)
+        return post("instagram", variant), None
+
+    def fetch_tiktok(variant):
+        calls.append(("tiktok", variant))
+        return post("tiktok", variant), None
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_threads,
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+            fetch_tiktok=fetch_tiktok,
+        )
+
+    assert calls == [
+        ("threads", "ayam barayam"), ("instagram", "ayam barayam"), ("tiktok", "ayam barayam"),
+        ("threads", "ayam geprek"), ("instagram", "ayam geprek"), ("tiktok", "ayam geprek"),
+        ("threads", "sambal"), ("instagram", "sambal"), ("tiktok", "sambal"),
+    ]
+    failed = [line for line in lines if line.startswith("source_collection") and "outcome=failed" in line]
+    assert len(failed) == 1
+    assert "source=instagram" in failed[0]
+    assert "detail=instagram_http_404" in failed[0]
+    successes = [line for line in lines if line.startswith("source_collection") and "outcome=success" in line]
+    assert len(successes) == 8
+
+    updates = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'succeeded'" in sql.lower()
+    ]
+    assert len(updates) == 1
+    detail = updates[0][0]
+    assert detail.startswith("partial_failures:")
+    assert "instagram:ayam%20barayam:instagram_http_404" in detail
+
+    failed_jobs = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'failed'" in sql.lower()
+        and "claim_expired" not in sql.lower()
+    ]
+    assert failed_jobs == []
+    schedule_updates = [
+        params for sql, params in world.calls
+        if "update project_schedules set last_collected_at" in sql.lower()
+    ]
+    assert schedule_updates == [("project-1",)]
+
+
+def test_every_source_failing_fails_the_job_with_a_summary(tmp_path):
+    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+
+    world = LoopWorld(jobs=[_due_job()], variants=["ayam barayam"], cursor=None)
+    world.sources = ["instagram"]
+
+    def fetch_instagram(_variant):
+        raise ScrapeCreatorsError("http_404", http_status=404)
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            lambda *_args, **_kwargs: ([], None),
+            fetch_instagram=fetch_instagram,
+        )
+
+    failed = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'failed'" in sql.lower()
+        and "claim_expired" not in sql.lower()
+    ]
+    assert failed == [(
+        "all_sources_failed:instagram:ayam%20barayam:instagram_http_404",
+        "job-1",
+    )]
+    succeeded = [
+        sql for sql, _params in world.calls
+        if "update jobs set status = 'succeeded'" in sql.lower()
+    ]
+    assert succeeded == []

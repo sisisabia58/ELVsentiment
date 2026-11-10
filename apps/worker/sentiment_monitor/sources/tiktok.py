@@ -82,6 +82,7 @@ def fetch_tiktok_mentions(
     retained_total = 0
     collected: list[dict[str, Any]] = []
     http_status: int | None = None
+    route_errors: list[ScrapeCreatorsError] = []
 
     for route in routes:
         try:
@@ -92,9 +93,14 @@ def fetch_tiktok_mentions(
                 opener=opener,
             )
         except ScrapeCreatorsError as error:
-            raise carry_attempt_context(
-                error, credits, returned, collected, parsed=parsed_total
-            ) from None
+            if credits or returned is not None or parsed_total:
+                raise carry_attempt_context(
+                    error, credits, returned, collected, parsed=parsed_total
+                ) from None
+            if error.credits_charged is not None:
+                credits.append(error.credits_charged)
+            route_errors.append(error)
+            continue
         http_status = getattr(payload, "http_status", None)
         credits.append(credits_from(payload))
         try:
@@ -131,6 +137,14 @@ def fetch_tiktok_mentions(
                 credits_charged=known_credits(credits),
                 counts=counts,
             )
+
+    if returned is None and route_errors:
+        first_error = route_errors[0]
+        if credits or collected or parsed_total:
+            raise carry_attempt_context(
+                first_error, credits, returned, collected, parsed=parsed_total
+            ) from None
+        raise first_error
 
     mentions = dedupe_mentions(collected)
     counts = {
