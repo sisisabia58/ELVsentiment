@@ -1,10 +1,14 @@
+import json
 import os
 import re
+import socket
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 import urllib.error
 from urllib.parse import quote, unquote, urlsplit
+
+import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
@@ -602,12 +606,27 @@ class SourceFetchError(Exception):
 def _is_provider_transport_failure(error: Exception, detail: str) -> bool:
     """True for transport/HTTP failures, not programming errors.
 
+    HTTPX transport errors and provider payload JSON errors do not inherit from
+    OSError. Plain filesystem OSErrors are not provider transport failures.
     Programming errors (TypeError/ValueError/plain RuntimeError, ...) keep the
     neutral ``collection_failed`` detail and are not OSError subclasses, so the
     source handlers re-raise them and the job fails.
     """
-    if isinstance(error, OSError):
+    if isinstance(
+        error,
+        (
+            httpx.HTTPError,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+            TimeoutError,
+            ConnectionError,
+            socket.gaierror,
+            socket.herror,
+        ),
+    ):
         return True
+    if isinstance(error, OSError):
+        return False
     return detail != "collection_failed"
 
 

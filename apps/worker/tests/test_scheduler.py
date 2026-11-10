@@ -2588,3 +2588,230 @@ def test_unexpected_fetch_error_fails_job_instead_of_partial_success(tmp_path, e
     ]
     assert succeeded == []
     assert all("synthetic programming error" not in line for line in lines)
+
+
+def _x_transport_error(kind):
+    import httpx
+
+    request = httpx.Request("GET", "https://api.x.com/2/tweets/search/recent")
+    if kind == "bad_json":
+        try:
+            httpx.Response(200, text="{", request=request).json()
+        except Exception as error:
+            return error
+        raise AssertionError("synthetic malformed JSON did not fail")
+    if kind.startswith("http"):
+        response = httpx.Response(
+            int(kind[4:]), json={"error": "synthetic"}, request=request
+        )
+        try:
+            response.raise_for_status()
+        except Exception as error:
+            return error
+        raise AssertionError("synthetic HTTP error did not fail")
+    return getattr(httpx, kind)("synthetic", request=request)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "ConnectTimeout",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "ConnectError",
+        "ReadError",
+        "bad_json",
+        "http429",
+        "http500",
+    ],
+)
+def test_x_transport_failures_are_recoverable_and_continue_to_threads(tmp_path, kind):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["x", "threads"]
+    calls = []
+    lines = []
+
+    def fetch_x(_variant, _limit, _cursor, _since=None, _since_id=None):
+        calls.append("x")
+        raise _x_transport_error(kind)
+
+    def fetch_threads(variant):
+        calls.append("threads")
+        return [{
+            "external_id": "threads-1",
+            "excerpt": variant,
+            "url": "https://example.com/threads/1",
+            "author": "a",
+            "posted_at": "2026-11-01T00:00:00Z",
+            "variant": variant,
+        }], None
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            fetch_x,
+            fetch_threads,
+            log=lines.append,
+        )
+
+    assert calls == ["x", "threads"]
+    succeeded = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'succeeded'" in sql.lower()
+    ]
+    assert len(succeeded) == 1
+    assert succeeded[0][0].startswith("partial_failures:x:geprek%20gembus:")
+    assert not any(
+        "update jobs set status = 'failed'" in sql.lower()
+        and "claim_expired" not in sql.lower()
+        for sql, _params in world.calls
+    )
+
+
+@pytest.mark.parametrize("error_type", [FileNotFoundError, PermissionError])
+def test_nontransport_oserror_fails_job_without_continuing(tmp_path, error_type):
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["x", "threads"]
+    calls = []
+
+    def fetch_x(_variant, _limit, _cursor, _since=None, _since_id=None):
+        calls.append("x")
+        raise error_type("synthetic local filesystem error")
+
+    def fetch_threads(_variant):
+        calls.append("threads")
+        return [], None
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            fetch_x,
+            fetch_threads,
+        )
+
+    assert calls == ["x"]
+    failed = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'failed'" in sql.lower()
+        and "claim_expired" not in sql.lower()
+    ]
+    assert failed == [("collection_failed", "job-1")]
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        (ConnectionError("synthetic"), True),
+        (TimeoutError("synthetic"), True),
+        (FileNotFoundError("synthetic"), False),
+        (PermissionError("synthetic"), False),
+    ],
+)
+def test_provider_transport_classification_narrows_plain_oserror(error, expected):
+    from sentiment_monitor.scheduler import _is_provider_transport_failure
+
+    assert _is_provider_transport_failure(error, "collection_failed") is expected
+
+
+def test_instagram_paid_context_survives_unexpected_error_and_job_fails(
+    tmp_path, monkeypatch
+):
+    import json
+
+    import sentiment_monitor.sources.instagram as instagram
+
+    original = instagram.normalize_instagram_item
+    calls = {"n": 0}
+
+    def normalize(item, collected_at):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise AttributeError("synthetic parser error")
+        return original(item, collected_at)
+
+    monkeypatch.setattr(instagram, "normalize_instagram_item", normalize)
+
+    class Response:
+        status = 200
+
+        def __init__(self, payload):
+            self.payload = json.dumps(payload)
+
+        def read(self):
+            return self.payload.encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return Response(
+                {
+                    "reels": [{"pk": "one", "caption": "kopi"}],
+                    "credits_charged": 2,
+                }
+            )
+        return Response(
+            {
+                "posts": [{"pk": "two", "caption": "kopi"}],
+                "credits_charged": 3,
+            }
+        )
+
+    def fetch_instagram(variant):
+        return instagram.fetch_instagram_mentions(
+            variant, "synthetic", "2026-11-08T00:00:00Z", opener=opener
+        )
+
+    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
+    world.sources = ["instagram"]
+    lines = []
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            stop,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, True),
+            lambda *_args, **_kwargs: ([], None),
+            lambda *_args, **_kwargs: ([], None),
+            log=lines.append,
+            fetch_instagram=fetch_instagram,
+        )
+
+    failed = [
+        params for sql, params in world.calls
+        if "update jobs set status = 'failed'" in sql.lower()
+        and "claim_expired" not in sql.lower()
+    ]
+    assert failed == [("collection_failed", "job-1")]
+    source_line = next(
+        line for line in lines
+        if line.startswith("source_collection") and "source=instagram" in line
+    )
+    assert "outcome=failed" in source_line
+    assert "returned=2" in source_line
+    assert "parsed=1" in source_line
+    assert "credits_charged=5" in source_line

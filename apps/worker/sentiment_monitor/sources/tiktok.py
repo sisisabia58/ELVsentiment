@@ -114,20 +114,49 @@ def fetch_tiktok_mentions(
                 http_status=http_status,
                 parsed=parsed_total,
             ) from None
-        normalized_items = [
-            normalize_tiktok_item(item, collected_at)
-            for item in raw
-            if isinstance(item, dict)
-        ]
+        except Exception as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
+        try:
+            normalized_items = [
+                normalize_tiktok_item(item, collected_at)
+                for item in raw
+                if isinstance(item, dict)
+            ]
+        except Exception as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
         returned = len(raw) if returned is None else returned + len(raw)
-        parsed_total += len(normalized_items)
-        retained = [
-            {**item, "route_id": route.id}
-            for item in normalized_items
-            if within_overlap(item["posted_at"], collected_at, route)
-        ]
-        retained_total += len(retained)
-        collected.extend(retained)
+        try:
+            parsed_total += len(normalized_items)
+            retained = [
+                {**item, "route_id": route.id}
+                for item in normalized_items
+                if within_overlap(item["posted_at"], collected_at, route)
+            ]
+            retained_total += len(retained)
+            collected.extend(retained)
+        except Exception as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
         if raw and not has_usable_mentions(normalized_items):
             counts = failure_counts(returned, collected)
             counts["parsed"] = parsed_total

@@ -35,13 +35,15 @@ def _extract_instagram_text(media: dict[str, Any]) -> str:
         return caption
     if isinstance(media.get("text"), str):
         return media["text"]
-    edges = (media.get("edge_media_to_caption") or {}).get("edges")
-    if isinstance(edges, list) and edges:
-        first = edges[0]
-        if isinstance(first, dict):
-            node = first.get("node")
-            if isinstance(node, dict) and isinstance(node.get("text"), str):
-                return node["text"]
+    caption_edge = media.get("edge_media_to_caption")
+    if isinstance(caption_edge, dict):
+        edges = caption_edge.get("edges")
+        if isinstance(edges, list) and edges:
+            first = edges[0]
+            if isinstance(first, dict):
+                node = first.get("node")
+                if isinstance(node, dict) and isinstance(node.get("text"), str):
+                    return node["text"]
     return ""
 
 
@@ -164,20 +166,29 @@ def fetch_instagram_mentions(
             raise carry_attempt_context(
                 error, credits, returned, collected, http_status=http_status, parsed=parsed_total
             ) from None
+        except Exception as error:
+            raise carry_attempt_context(
+                error, credits, returned, collected, http_status=http_status, parsed=parsed_total
+            ) from None
         returned = len(raw_items) if returned is None else returned + len(raw_items)
-        normalized_items = [
-            normalize_instagram_item(item, collected_at)
-            for item in raw_items
-            if isinstance(item, dict)
-        ]
-        parsed_total += len(normalized_items)
-        retained_items = [
-            {**item, "route_id": route.id}
-            for item in normalized_items
-            if within_overlap(item["posted_at"], collected_at, route)
-        ]
-        retained_total += len(retained_items)
-        collected.extend(retained_items)
+        try:
+            normalized_items = [
+                normalize_instagram_item(item, collected_at)
+                for item in raw_items
+                if isinstance(item, dict)
+            ]
+            parsed_total += len(normalized_items)
+            retained_items = [
+                {**item, "route_id": route.id}
+                for item in normalized_items
+                if within_overlap(item["posted_at"], collected_at, route)
+            ]
+            retained_total += len(retained_items)
+            collected.extend(retained_items)
+        except Exception as error:
+            raise carry_attempt_context(
+                error, credits, returned, collected, http_status=http_status, parsed=parsed_total
+            ) from None
         if raw_items and not has_usable_mentions(normalized_items):
             counts = failure_counts(returned, collected)
             counts["parsed"] = parsed_total
@@ -244,20 +255,39 @@ def fetch_instagram_mentions(
                 http_status=http_status,
                 parsed=parsed_total,
             ) from None
+        except Exception as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
         returned = len(raw_items) if returned is None else returned + len(raw_items)
-        normalized_items = [
-            normalize_instagram_item(item, collected_at)
-            for item in raw_items
-            if isinstance(item, dict)
-        ]
-        parsed_total += len(normalized_items)
-        retained_items = [
-            {**item, "route_id": page2_route.id}
-            for item in normalized_items
-            if within_overlap(item["posted_at"], collected_at, page2_route)
-        ]
-        retained_total += len(retained_items)
-        collected.extend(retained_items)
+        try:
+            normalized_items = [
+                normalize_instagram_item(item, collected_at)
+                for item in raw_items
+                if isinstance(item, dict)
+            ]
+            parsed_total += len(normalized_items)
+            retained_items = [
+                {**item, "route_id": page2_route.id}
+                for item in normalized_items
+                if within_overlap(item["posted_at"], collected_at, page2_route)
+            ]
+            retained_total += len(retained_items)
+            collected.extend(retained_items)
+        except Exception as error:
+            raise carry_attempt_context(
+                error,
+                credits,
+                returned,
+                collected,
+                http_status=http_status,
+                parsed=parsed_total,
+            ) from None
         if raw_items and not has_usable_mentions(normalized_items):
             counts = failure_counts(returned, collected)
             counts["parsed"] = parsed_total

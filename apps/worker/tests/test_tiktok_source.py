@@ -609,3 +609,58 @@ def test_tiktok_paid_route_failure_then_success_sums_credits_once():
     assert len(seen) == 2
     assert result["credits_charged"] == 5
     assert [m["external_id"] for m in result["mentions"]] == ["tt-1"]
+
+
+def test_tiktok_numeric_text_field_does_not_break_paid_collection():
+    result = _tiktok(
+        (
+            {"search_item_list": [{"aweme_id": "tt-1", "desc": 123}], "credits_charged": 2},
+            {"search_item_list": [], "credits_charged": 0},
+        )
+    )
+
+    assert result["credits_charged"] == 2
+    assert [m["external_id"] for m in result["mentions"]] == ["tt-1"]
+    assert result["mentions"][0]["text"] == "123"
+
+
+def test_tiktok_unexpected_parser_error_after_paid_routes_keeps_context(monkeypatch):
+    import sentiment_monitor.sources.tiktok as tiktok
+
+    original = tiktok.normalize_tiktok_item
+    calls = {"n": 0}
+
+    def normalize(item, collected_at):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise AttributeError("synthetic parser error")
+        return original(item, collected_at)
+
+    monkeypatch.setattr(tiktok, "normalize_tiktok_item", normalize)
+
+    def opener(request, timeout=0):
+        if "/v1/tiktok/search/keyword" in request.full_url:
+            return _Response(
+                json.dumps(
+                    {
+                        "search_item_list": [{"aweme_id": "tt-1", "desc": "kopi"}],
+                        "credits_charged": 2,
+                    }
+                )
+            )
+        return _Response(
+            json.dumps(
+                {
+                    "search_item_list": [{"aweme_id": "tt-2", "desc": "kopi"}],
+                    "credits_charged": 3,
+                }
+            )
+        )
+
+    with pytest.raises(AttributeError) as caught:
+        fetch_tiktok_mentions(
+            "Kopi", "key", "2026-11-01T00:00:00Z", opener=opener
+        )
+
+    assert caught.value.credits_charged == 5
+    assert caught.value.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}

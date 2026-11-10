@@ -673,3 +673,79 @@ def test_instagram_paid_route_failure_then_success_sums_credits_once():
     assert len(seen) == 2
     assert result["credits_charged"] == 5
     assert [m["external_id"] for m in result["mentions"]] == ["ig-h"]
+
+
+def test_instagram_numeric_caption_edge_succeeds_and_keeps_paid_credits():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v2/instagram/reels/search" in request.full_url:
+            return _PaidFailureResponse(
+                json.dumps(
+                    {
+                        "reels": [{"pk": "one", "caption": "kopi"}],
+                        "credits_charged": 2,
+                    }
+                )
+            )
+        return _PaidFailureResponse(
+            json.dumps(
+                {
+                    "posts": [{"pk": "two", "edge_media_to_caption": 123}],
+                    "credits_charged": 3,
+                }
+            )
+        )
+
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+    )
+
+    assert len(seen) == 2
+    assert result["credits_charged"] == 5
+    assert [m["external_id"] for m in result["mentions"]] == ["one", "two"]
+    assert result["mentions"][1]["text"] == ""
+    assert result["counts"] == {"returned": 2, "parsed": 2, "deduplicated": 0}
+
+
+def test_instagram_unexpected_parser_error_after_paid_routes_keeps_context(monkeypatch):
+    import sentiment_monitor.sources.instagram as instagram
+
+    original = instagram.normalize_instagram_item
+    calls = {"n": 0}
+
+    def normalize(item, collected_at):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise AttributeError("synthetic parser error")
+        return original(item, collected_at)
+
+    monkeypatch.setattr(instagram, "normalize_instagram_item", normalize)
+
+    def opener(request, timeout=0):
+        if "/v2/instagram/reels/search" in request.full_url:
+            return _PaidFailureResponse(
+                json.dumps(
+                    {
+                        "reels": [{"pk": "one", "caption": "kopi"}],
+                        "credits_charged": 2,
+                    }
+                )
+            )
+        return _PaidFailureResponse(
+            json.dumps(
+                {
+                    "posts": [{"pk": "two", "caption": "kopi"}],
+                    "credits_charged": 3,
+                }
+            )
+        )
+
+    with pytest.raises(AttributeError) as caught:
+        fetch_instagram_mentions(
+            "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+        )
+
+    assert caught.value.credits_charged == 5
+    assert caught.value.counts == {"returned": 2, "parsed": 1, "deduplicated": 0}

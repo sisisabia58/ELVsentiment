@@ -119,7 +119,7 @@ def has_usable_mentions(mentions: list[dict[str, Any]]) -> bool:
 
 
 def carry_attempt_context(
-    error: ScrapeCreatorsError,
+    error: Exception,
     credits: list[int | None],
     returned: int | None,
     collected: list[dict[str, Any]],
@@ -127,13 +127,15 @@ def carry_attempt_context(
     http_status: int | None = None,
     parsed: int | None = None,
     error_credits_already_counted: bool = False,
-) -> ScrapeCreatorsError:
-    if error.credits_charged is not None and not error_credits_already_counted:
-        credits.append(error.credits_charged)
+) -> Exception:
+    error_credits = getattr(error, "credits_charged", None)
+    if error_credits is not None and not error_credits_already_counted:
+        credits.append(error_credits)
     error.credits_charged = known_credits(credits)
     extra_returned = None
-    if isinstance(error.counts, dict):
-        known_returned = error.counts.get("returned")
+    error_counts = getattr(error, "counts", None)
+    if isinstance(error_counts, dict):
+        known_returned = error_counts.get("returned")
         if type(known_returned) is int and known_returned >= 0:
             extra_returned = known_returned
     if returned is None and extra_returned is None:
@@ -143,7 +145,7 @@ def carry_attempt_context(
     error.counts = failure_counts(total_returned, collected)
     if parsed is not None:
         error.counts["parsed"] = parsed
-    if error.http_status is None and http_status is not None:
+    if getattr(error, "http_status", None) is None and http_status is not None:
         error.http_status = http_status
     return error
 
