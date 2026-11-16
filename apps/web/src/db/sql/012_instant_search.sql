@@ -155,7 +155,7 @@ create table search_credit_ledger (
   provider text not null,
   platform text not null,
   route text not null,
-  credits_charged integer not null default 0 check (credits_charged >= 0),
+  credits_charged integer default 0 check (credits_charged >= 0),
   http_status integer,
   safe_detail text not null default 'ok',
   body_length integer,
