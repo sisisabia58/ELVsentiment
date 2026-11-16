@@ -481,6 +481,73 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
     }
   });
 
+  it("applies migration 012 with seeded routing and the admin-only write gate", async () => {
+    await migrate(db, { sqlDir: SQL_DIR });
+    await enableRoleLogin(db, { appPassword: APP_PASSWORD, workerPassword: WORKER_PASSWORD });
+
+    const app = new Client(loginConfig("app_user", APP_PASSWORD));
+    await app.connect();
+    const worker = new Client(loginConfig("worker_role", WORKER_PASSWORD));
+    await worker.connect();
+    try {
+      const seeded = await app.query<{ platform: string; provider: string }>(
+        "select platform, provider from provider_settings order by platform",
+      );
+      expect(seeded.rows).toHaveLength(10);
+      expect(seeded.rows.find((row) => row.platform === "youtube")?.provider).toBe("scrapeatlas");
+      expect(seeded.rows.find((row) => row.platform === "comments")?.provider).toBe("scrapeatlas");
+
+      const workerRows = await worker.query<{ n: number }>(
+        "select count(*)::int as n from provider_settings",
+      );
+      expect(workerRows.rows[0].n).toBe(10);
+
+      const denied = await app.query(
+        "update provider_settings set provider = 'off' where platform = 'youtube'",
+      );
+      expect(denied.rowCount).toBe(0);
+      await expect(
+        app.query(
+          "insert into provider_settings (platform, provider) values ('myspace', 'scrapeatlas')",
+        ),
+      ).rejects.toThrow();
+
+      await app.query("begin");
+      await app.query("select set_config('app.is_admin', 'on', true)");
+      const updated = await app.query(
+        "update provider_settings set provider = 'off' where platform = 'youtube'",
+      );
+      expect(updated.rowCount).toBe(1);
+      await app.query(
+        `insert into provider_settings_audit
+           (id, platform, old_provider, new_provider, actor_email)
+         values ($1, 'youtube', 'scrapeatlas', 'off', 'owner@example.com')`,
+        [randomUUID()],
+      );
+      await app.query("commit");
+
+      expect(
+        (
+          await app.query<{ provider: string }>(
+            "select provider from provider_settings where platform = 'youtube'",
+          )
+        ).rows[0].provider,
+      ).toBe("off");
+      expect(
+        (await app.query<{ n: number }>("select count(*)::int as n from provider_settings_audit")).rows[0].n,
+      ).toBe(0);
+      await app.query("begin");
+      await app.query("select set_config('app.is_admin', 'on', true)");
+      expect(
+        (await app.query<{ n: number }>("select count(*)::int as n from provider_settings_audit")).rows[0].n,
+      ).toBe(1);
+      await app.query("commit");
+    } finally {
+      await app.end();
+      await worker.end();
+    }
+  });
+
   it("does not match a blank email after a sign-in on the same app_user connection", async () => {
     await migrate(db, { sqlDir: SQL_DIR });
     await enableRoleLogin(db, { appPassword: APP_PASSWORD, workerPassword: WORKER_PASSWORD });

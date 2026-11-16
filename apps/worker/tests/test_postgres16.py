@@ -1186,3 +1186,44 @@ def test_postgres16_association_parent_project_customer_and_source_must_match(pg
     conn.execute("set local role app_user")
     assert conn.execute("select count(*) from mention_keyword_associations").fetchone()[0] == 0
     conn.rollback()
+
+
+def test_postgres16_migration_012_seeds_routing_and_gates_admin_writes(pg16):
+    conn = pg16
+    tables = (
+        "provider_settings",
+        "provider_settings_audit",
+        "instant_searches",
+        "instant_search_sources",
+        "instant_search_results",
+        "instant_search_comments",
+        "instant_search_ai",
+        "instant_search_questions",
+        "search_credit_ledger",
+        "gemini_gate",
+    )
+    for table in tables:
+        assert conn.execute("select to_regclass(%s)", (f"public.{table}",)).fetchone()[0] is not None
+    assert conn.execute("select count(*) from provider_settings").fetchone()[0] == 10
+
+    conn.execute("begin")
+    conn.execute("set local role app_user")
+    assert (
+        conn.execute("select provider from provider_settings where platform = 'youtube'").fetchone()[0]
+        == "scrapeatlas"
+    )
+    denied = conn.execute("update provider_settings set provider = 'off' where platform = 'youtube'")
+    assert denied.rowcount == 0
+    conn.rollback()
+
+    conn.execute("begin")
+    conn.execute("select set_config('app.is_admin', 'on', true)")
+    conn.execute("set local role app_user")
+    allowed = conn.execute("update provider_settings set provider = 'off' where platform = 'youtube'")
+    assert allowed.rowcount == 1
+    conn.rollback()
+
+    conn.execute("begin")
+    conn.execute("set local role worker_role")
+    assert conn.execute("select count(*) from provider_settings").fetchone()[0] == 10
+    conn.rollback()
