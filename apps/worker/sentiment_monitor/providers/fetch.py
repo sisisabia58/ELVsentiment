@@ -122,6 +122,7 @@ def fetch_platform(
     collected_at: str,
     date_window_days: int | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
+    timeout: int | None = None,
     primary: Callable[..., PlatformFetch] | None = None,
     fallback: Callable[..., PlatformFetch] | None = None,
 ) -> PlatformFetch:
@@ -148,12 +149,18 @@ def fetch_platform(
         return PlatformFetch(
             platform, first, [], [], "unavailable", "missing_key", 0, (first,)
         )
+    effective_opener = opener
+    if timeout is not None:
+        def effective_opener(request, **kwargs):
+            kwargs["timeout"] = timeout
+            return opener(request, **kwargs)
+
     common = {
         "platform": platform,
         "keyword": keyword,
         "collected_at": collected_at,
         "date_window_days": date_window_days,
-        "opener": opener,
+        "opener": effective_opener,
     }
     if primary is not None:
         result = primary(api_key=first_key, **common)

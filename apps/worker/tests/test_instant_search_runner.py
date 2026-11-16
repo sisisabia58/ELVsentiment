@@ -1,17 +1,20 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import time
 import uuid
 
 import pytest
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.instant_search import (
+    ROUTE_TIMEOUT_SECONDS,
     claim_instant_search,
     expire_old_searches,
     finish_search,
     insert_comments,
     insert_posts,
     record_call,
+    run_instant_search,
     search_status,
     set_source_state,
 )
@@ -252,3 +255,148 @@ def test_fixture_comments_return_two_synthetic_comments(monkeypatch):
     assert len(result.comments) == 2
     assert result.call is not None
     assert result.call.credits_charged == 0
+
+
+def all_platform_settings():
+    return dict(DEFAULT_SETTINGS)
+
+
+def test_runner_marks_slow_source_unavailable_at_deadline(db):
+    def slow(*args, **kwargs):
+        time.sleep(0.2)
+        return __import__(
+            "sentiment_monitor.providers.scrapecreators_adapter", fromlist=["PlatformFetch"]
+        ).PlatformFetch("reddit", "scrapeatlas", [post("reddit")], [], "answered", "ok", 200)
+
+    job = claim_instant_search(db, "worker-1")
+    started = time.monotonic()
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(), fetcher=slow, deadline_seconds=0.05,
+    )
+    assert time.monotonic() - started < 1.0
+    source = db.execute(
+        "select state, safe_detail from instant_search_sources where search_id=%s and platform='reddit'",
+        (job.id,),
+    )[0]
+    assert source["state"] == "unavailable"
+    assert source["safe_detail"] == "deadline"
+    search = db.execute("select status, finished_at from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] in ("partial", "failed")
+    assert search["finished_at"] is not None
+    assert db.execute("select count(*) as n from instant_search_results where search_id=%s", (job.id,))[0]["n"] == 0
+
+
+def test_runner_keeps_answered_sources_when_another_fails(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    def mixed(platform, *args, **kwargs):
+        if platform == "youtube":
+            return PlatformFetch("youtube", "scrapeatlas", [post()], [], "answered", "ok", 10)
+        return PlatformFetch(platform, "scrapeatlas", [], [], "failed", "http_500", 10)
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(), fetcher=mixed,
+    )
+    assert db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s", (job.id,)
+    )[0]["n"] == 1
+    assert db.execute("select status from instant_searches where id=%s", (job.id,))[0]["status"] == "partial"
+    assert db.execute(
+        "select count(*) as n from instant_search_sources where search_id=%s and state='answered'", (job.id,)
+    )[0]["n"] == 1
+    assert db.execute(
+        "select count(*) as n from instant_search_sources where search_id=%s and state='failed'", (job.id,)
+    )[0]["n"] == 6
+
+
+def test_runner_all_failed_is_failed_and_inserts_no_results(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    def failed(platform, *args, **kwargs):
+        return PlatformFetch(platform, "scrapeatlas", [], [], "failed", "http_500", 10)
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(), fetcher=failed,
+    )
+    assert db.execute("select status from instant_searches where id=%s", (job.id,))[0]["status"] == "failed"
+    assert db.execute("select count(*) as n from instant_search_results where search_id=%s", (job.id,))[0]["n"] == 0
+
+
+def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monkeypatch):
+    monkeypatch.setenv("CARI_PROVIDER_MODE", "fixture")
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc), settings=all_platform_settings(),
+    )
+    search = db.execute("select status, credits_used from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["credits_used"] == 0
+    sources = db.execute(
+        "select state, result_count, credits_charged, safe_detail from instant_search_sources where search_id=%s",
+        (job.id,),
+    )
+    assert len(sources) == 7
+    assert all(row["state"] == "answered" for row in sources)
+    assert all(row["result_count"] > 0 for row in sources)
+    assert all(row["credits_charged"] == 0 for row in sources)
+    ranks = db.execute(
+        "select rank from instant_search_results where search_id=%s order by rank", (job.id,)
+    )
+    assert [row["rank"] for row in ranks] == list(range(1, len(ranks) + 1))
+    ledger = db.execute("select count(*) as n from search_credit_ledger where search_id=%s", (job.id,))[0]["n"]
+    assert ledger == 7
+
+
+def test_runner_applies_date_window_and_keeps_undated_last(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    now = datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc)
+
+    def dated(platform, *args, **kwargs):
+        if platform == "youtube":
+            return PlatformFetch(
+                "youtube",
+                "scrapeatlas",
+                [
+                    replace(post("youtube", "old"), published_at="2026-10-01T00:00:00Z"),
+                    replace(post("youtube", "new"), published_at="2026-11-15T00:00:00Z"),
+                    replace(post("youtube", "undated"), published_at=None),
+                ],
+                [],
+                "answered",
+                "ok",
+                10,
+            )
+        return PlatformFetch(platform, "scrapeatlas", [], [], "answered", "ok", 10)
+
+    job = replace(claim_instant_search(db, "worker-1"), date_window="7d")
+    run_instant_search(
+        db, job, env={}, now=now, settings=all_platform_settings(), fetcher=dated,
+    )
+    rows = db.execute(
+        "select external_id, rank from instant_search_results where search_id=%s order by rank", (job.id,)
+    )
+    assert [row["external_id"] for row in rows] == ["new", "undated"]
+    assert [row["rank"] for row in rows] == [1, 2]
+
+
+def test_runner_passes_the_route_timeout_to_each_fetch(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    seen = []
+
+    def capture(platform, *args, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return PlatformFetch(platform, "scrapeatlas", [], [], "answered", "ok", 10)
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(), fetcher=capture,
+    )
+    assert seen and all(value == ROUTE_TIMEOUT_SECONDS for value in seen)

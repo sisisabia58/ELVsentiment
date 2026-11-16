@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
+from typing import Any, Iterable, Mapping
 import re
+import time
 import uuid
 
+from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
     CanonicalComment,
     CanonicalPost,
     RouteCall,
+    dedupe_posts,
+    detect_language,
+    filter_since,
+    keyword_relevance,
     post_identity,
+    sort_posts,
 )
+from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
+from sentiment_monitor.providers.fetch import fetch_platform
+from sentiment_monitor.providers.settings import load_provider_settings
 
 ROUTE_TIMEOUT_SECONDS = 20
 SEARCH_DEADLINE_SECONDS = 40
@@ -343,3 +355,232 @@ def expire_old_searches(conn: Any, now: Any) -> int:
         (now,),
     )
     return int(getattr(cursor, "rowcount", 0) or 0)
+
+
+_PLATFORM_ORDER = (
+    "threads",
+    "tiktok",
+    "instagram",
+    "youtube",
+    "reddit",
+    "facebook",
+    "linkedin",
+)
+
+_DATE_WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30, "12m": 365}
+
+
+def _cutoff(now: datetime, date_window: str) -> str | None:
+    days = _DATE_WINDOW_DAYS.get(date_window)
+    if days is None:
+        return None
+    return (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _enabled_platforms(settings: Mapping[str, ProviderSetting]) -> list[tuple[str, tuple[str, ...]]]:
+    enabled: list[tuple[str, tuple[str, ...]]] = []
+    for platform in _PLATFORM_ORDER:
+        chain = resolve_chain(platform, settings)
+        if chain:
+            enabled.append((platform, chain))
+    return enabled
+
+
+def _normalize(post: CanonicalPost, job: InstantSearchJob) -> CanonicalPost:
+    text = post.text or ""
+    return replace(
+        post,
+        language=detect_language(text),
+        relevance=keyword_relevance(post, job.query, job.intent),
+    )
+
+
+def _known_credit_sum(calls: Iterable[RouteCall]) -> int | None:
+    known = [call.credits_charged for call in calls if type(call.credits_charged) is int]
+    if not known:
+        return None
+    return sum(known)
+
+
+def _fetch_one(
+    fetcher: Any,
+    platform: str,
+    keyword: Keyword,
+    settings: Mapping[str, ProviderSetting],
+    *,
+    env: Mapping[str, Any],
+    collected_at: str,
+    date_window_days: int | None,
+) -> Any:
+    return fetcher(
+        platform,
+        keyword,
+        settings,
+        env=env,
+        collected_at=collected_at,
+        date_window_days=date_window_days,
+        timeout=ROUTE_TIMEOUT_SECONDS,
+    )
+
+
+def _apply_ranks(conn: Any, job: InstantSearchJob, ordered: list[CanonicalPost]) -> None:
+    _set_customer(conn, job.customer_id)
+    for rank, item in enumerate(ordered, start=1):
+        identity = post_identity(item)
+        if identity is None:
+            continue
+        conn.execute(
+            "update instant_search_results set rank = %s "
+            "where search_id = %s and platform = %s and external_id = %s",
+            (rank, job.id, item.platform, identity[1]),
+        )
+
+
+def _failed_state(conn: Any, job: InstantSearchJob, platform: str, chain: tuple[str, ...]) -> None:
+    set_source_state(
+        conn,
+        job,
+        platform,
+        "failed",
+        provider=chain[0],
+        attempted_providers=chain,
+        safe_detail="other",
+    )
+
+
+def _handle_result(
+    conn: Any,
+    job: InstantSearchJob,
+    platform: str,
+    chain: tuple[str, ...],
+    result: Any,
+    cutoff_iso: str | None,
+    all_posts: list[CanonicalPost],
+) -> None:
+    calls = list(getattr(result, "calls", None) or [])
+    for call in calls:
+        record_call(conn, job, call)
+    state = getattr(result, "state", "unavailable")
+    detail = getattr(result, "safe_detail", "other")
+    attempted = tuple(getattr(result, "attempted_providers", None) or chain)
+    if state == "answered":
+        kept = [_normalize(item, job) for item in filter_since(result.posts or [], cutoff_iso)]
+        kept = dedupe_posts(kept)
+        inserted = insert_posts(conn, job, kept)
+        set_source_state(
+            conn,
+            job,
+            platform,
+            "answered",
+            provider=chain[0],
+            result_count=inserted,
+            latency_ms=getattr(result, "latency_ms", None),
+            credits_charged=_known_credit_sum(calls),
+            attempted_providers=attempted,
+            safe_detail=detail,
+        )
+        all_posts.extend(kept)
+        return
+    if state == "unavailable":
+        set_source_state(
+            conn,
+            job,
+            platform,
+            "unavailable",
+            provider=chain[0],
+            latency_ms=getattr(result, "latency_ms", None),
+            credits_charged=_known_credit_sum(calls),
+            attempted_providers=attempted,
+            safe_detail=detail,
+        )
+        return
+    set_source_state(
+        conn,
+        job,
+        platform,
+        "failed",
+        provider=chain[0],
+        latency_ms=getattr(result, "latency_ms", None),
+        credits_charged=_known_credit_sum(calls),
+        attempted_providers=attempted,
+        safe_detail=detail,
+    )
+
+
+def run_instant_search(
+    conn: Any,
+    job: InstantSearchJob,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    settings: Mapping[str, ProviderSetting] | None = None,
+    fetcher: Any = fetch_platform,
+    comment_fetcher: Any = None,
+    clock: Any = time.monotonic,
+    deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
+) -> None:
+    del comment_fetcher
+    if settings is None:
+        settings = load_provider_settings(conn)
+    start_search(conn, job)
+    now = now.astimezone(timezone.utc)
+    collected_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff_iso = _cutoff(now, job.date_window)
+    date_window_days = _DATE_WINDOW_DAYS.get(job.date_window)
+    sources = _enabled_platforms(settings)
+    for platform, chain in sources:
+        set_source_state(
+            conn, job, platform, "queued", provider=chain[0], attempted_providers=chain
+        )
+
+    executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
+    futures: dict[Any, tuple[str, tuple[str, ...]]] = {}
+    all_posts: list[CanonicalPost] = []
+    try:
+        for platform, chain in sources:
+            future = executor.submit(
+                _fetch_one,
+                fetcher,
+                platform,
+                Keyword(job.query, job.intent),
+                settings,
+                env=env,
+                collected_at=collected_at,
+                date_window_days=date_window_days,
+            )
+            futures[future] = (platform, chain)
+        pending = set(futures)
+        deadline = clock() + deadline_seconds
+        while pending:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            if not done:
+                break
+            for future in done:
+                platform, chain = futures[future]
+                try:
+                    result = future.result()
+                except Exception:
+                    _failed_state(conn, job, platform, chain)
+                    continue
+                _handle_result(conn, job, platform, chain, result, cutoff_iso, all_posts)
+        for future in pending:
+            platform, chain = futures[future]
+            future.cancel()
+            set_source_state(
+                conn,
+                job,
+                platform,
+                "unavailable",
+                provider=chain[0],
+                attempted_providers=chain,
+                safe_detail="deadline",
+            )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
+    _apply_ranks(conn, job, ranked)
+    finish_search(conn, job, "failed")
