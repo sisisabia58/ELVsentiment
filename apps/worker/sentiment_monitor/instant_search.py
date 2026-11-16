@@ -13,6 +13,7 @@ import uuid
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
+    MAX_EXTERNAL_ID_LENGTH,
     CanonicalComment,
     CanonicalPost,
     RouteCall,
@@ -251,6 +252,52 @@ def set_source_state(
     )
 
 
+def _insert_post_row(
+    conn: Any,
+    job: InstantSearchJob,
+    item: CanonicalPost,
+    identity: tuple[str, str],
+) -> Any:
+    return conn.execute(
+        """
+        insert into instant_search_results
+          (id, search_id, customer_id, platform, external_id, author_name,
+           author_handle, url, text, title, published_at, thumbnail_url, views,
+           likes, replies, shares, language, relevance, web_index,
+           source_provider, routes, raw_ref, collected_at)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s)
+        on conflict (search_id, platform, external_id) do nothing
+        returning id
+        """,
+        (
+            str(uuid.uuid4()),
+            job.id,
+            job.customer_id,
+            item.platform,
+            identity[1],
+            item.author_name,
+            item.author_handle,
+            item.url,
+            item.text,
+            item.title,
+            item.published_at,
+            item.thumbnail_url,
+            item.views,
+            item.likes,
+            item.replies,
+            item.shares,
+            item.language,
+            item.relevance,
+            item.web_index,
+            item.source_provider,
+            list(item.routes),
+            item.raw_ref,
+            item.collected_at,
+        ),
+    )
+
+
 def insert_posts(conn: Any, job: InstantSearchJob, posts: Iterable[CanonicalPost]) -> int:
     _set_customer(conn, job.customer_id)
     inserted = 0
@@ -259,44 +306,23 @@ def insert_posts(conn: Any, job: InstantSearchJob, posts: Iterable[CanonicalPost
         identity = post_identity(item)
         if identity is None:
             continue
-        cursor = conn.execute(
-            """
-            insert into instant_search_results
-              (id, search_id, customer_id, platform, external_id, author_name,
-               author_handle, url, text, title, published_at, thumbnail_url, views,
-               likes, replies, shares, language, relevance, web_index,
-               source_provider, routes, raw_ref, collected_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (search_id, platform, external_id) do nothing
-            returning id
-            """,
-            (
-                str(uuid.uuid4()),
-                job.id,
-                job.customer_id,
-                item.platform,
-                identity[1],
-                item.author_name,
-                item.author_handle,
-                item.url,
-                item.text,
-                item.title,
-                item.published_at,
-                item.thumbnail_url,
-                item.views,
-                item.likes,
-                item.replies,
-                item.shares,
-                item.language,
-                item.relevance,
-                item.web_index,
-                item.source_provider,
-                list(item.routes),
-                item.raw_ref,
-                item.collected_at,
-            ),
-        )
+        # An oversized identity is not truncated: truncating would silently
+        # merge two different posts. Drop that record and keep its siblings.
+        if len(identity[1]) > MAX_EXTERNAL_ID_LENGTH:
+            continue
+        try:
+            conn.execute("savepoint result_row")
+        except Exception:
+            # Older/simple test connections may not expose savepoints.
+            cursor = _insert_post_row(conn, job, item, identity)
+            inserted += len(cursor or ())
+            continue
+        try:
+            cursor = _insert_post_row(conn, job, item, identity)
+        except Exception:
+            conn.execute("rollback to savepoint result_row")
+            continue
+        conn.execute("release savepoint result_row")
         inserted += len(cursor or ())
     return inserted
 

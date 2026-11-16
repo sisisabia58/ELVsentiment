@@ -616,3 +616,80 @@ def test_normalisation_exception_on_one_platform_is_isolated(prod_db, monkeypatc
     assert processed == 1
     _assert_isolated_search(prod_db, search_id, calls, youtube_state="failed")
     assert len(calls) == 7
+
+
+def test_oversized_external_id_drops_only_that_post(prod_db):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
+    oversized = (uuid.uuid4().hex * 400)[:10_000]
+
+    def fetch(platform, keyword, settings, **kwargs):
+        posts = [
+            _post(platform, f"{platform}-1"),
+            _post(platform, oversized),
+            _post(platform, f"{platform}-2"),
+        ]
+        return PlatformFetch(platform, "scrapeatlas", posts, [_call(platform, "")], "answered", "ok", 5)
+
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetch,
+        settings={"youtube": DEFAULT_SETTINGS["youtube"]},
+    )
+    assert processed == 1
+    view = prod_db.view(search_id)
+    assert view["ledger"] == 1, view
+    assert len(view["sources"]) == 1, view
+    source = view["sources"][0]
+    assert source["state"] == "answered", view
+    assert source["result_count"] == 2, view
+    assert view["counts"].get("youtube") == 2, view
+    assert source["safe_detail"] in instant_search.SAFE_DETAILS, view
+    assert source["safe_detail"] not in ("storage", "other"), view
+    stored = prod_db.admin.execute(
+        "select external_id from instant_search_results where search_id = %s order by external_id",
+        (search_id,),
+    ).fetchall()
+    assert [row["external_id"] for row in stored] == ["youtube-1", "youtube-2"]
+
+
+def test_one_failing_row_insert_keeps_its_sibling_posts(prod_db, monkeypatch):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
+
+    def fetch(platform, keyword, settings, **kwargs):
+        posts = [
+            _post(platform, f"{platform}-1"),
+            _post(platform, "boom"),
+            _post(platform, f"{platform}-2"),
+        ]
+        return PlatformFetch(platform, "scrapeatlas", posts, [_call(platform, "")], "answered", "ok", 5)
+
+    original = instant_search._insert_post_row
+
+    def flaky_row(conn, job, item, identity):
+        if item.external_id == "boom":
+            raise RuntimeError("synthetic row insert failure")
+        return original(conn, job, item, identity)
+
+    monkeypatch.setattr(instant_search, "_insert_post_row", flaky_row)
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetch,
+        settings={"youtube": DEFAULT_SETTINGS["youtube"]},
+    )
+    assert processed == 1
+    view = prod_db.view(search_id)
+    assert view["ledger"] == 1, view
+    source = view["sources"][0]
+    assert source["state"] == "answered", view
+    assert source["result_count"] == 2, view
+    assert view["counts"].get("youtube") == 2, view
+    assert source["safe_detail"] in instant_search.SAFE_DETAILS, view
+    assert source["safe_detail"] not in ("storage", "other"), view

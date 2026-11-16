@@ -17,6 +17,17 @@ PlatformId = Literal[
 ProviderId = Literal["scrapecreators", "scrapeatlas", "official_x", "off"]
 Relevance = Literal["literal_match", "all_words_match", "no_match"]
 
+# A btree index row is ~2.7 KiB, so a multi-kilobyte external id makes the
+# whole platform insert fail. Keep identities well under that and truncate the
+# free-text fields that are safe to shorten.
+MAX_EXTERNAL_ID_LENGTH = 512
+MAX_TEXT_LENGTH = 20_000
+MAX_TITLE_LENGTH = 1_000
+MAX_AUTHOR_LENGTH = 500
+MAX_URL_LENGTH = 2_048
+MAX_RAW_REF_LENGTH = 2_048
+MAX_HASHTAG_LENGTH = 200
+
 
 @dataclass(frozen=True)
 class CanonicalComment:
@@ -231,23 +242,29 @@ def safe_published_at(value: object) -> str | None:
         return None
 
 
+def _cap_text(value: object, limit: int) -> object:
+    if not isinstance(value, str):
+        return value
+    return value if len(value) <= limit else value[:limit]
+
+
 def sanitize_post(post: CanonicalPost) -> CanonicalPost:
     return replace(
         post,
         external_id=str(_clean_text(post.external_id) or ""),
-        text=str(_clean_text(post.text) or ""),
-        title=_clean_text(post.title),
-        author_name=_clean_text(post.author_name),
-        author_handle=_clean_text(post.author_handle),
-        url=_clean_text(post.url),
-        thumbnail_url=_clean_text(post.thumbnail_url),
+        text=str(_cap_text(_clean_text(post.text) or "", MAX_TEXT_LENGTH)),
+        title=_cap_text(_clean_text(post.title), MAX_TITLE_LENGTH),
+        author_name=_cap_text(_clean_text(post.author_name), MAX_AUTHOR_LENGTH),
+        author_handle=_cap_text(_clean_text(post.author_handle), MAX_AUTHOR_LENGTH),
+        url=_cap_text(_clean_text(post.url), MAX_URL_LENGTH),
+        thumbnail_url=_cap_text(_clean_text(post.thumbnail_url), MAX_URL_LENGTH),
         published_at=safe_published_at(post.published_at),
         views=safe_optional_int(post.views),
         likes=safe_optional_int(post.likes),
         replies=safe_optional_int(post.replies),
         shares=safe_optional_int(post.shares),
-        hashtags=tuple(str(_clean_text(tag)) for tag in post.hashtags),
-        raw_ref=str(_clean_text(post.raw_ref) or ""),
+        hashtags=tuple(str(_cap_text(_clean_text(tag), MAX_HASHTAG_LENGTH)) for tag in post.hashtags),
+        raw_ref=str(_cap_text(_clean_text(post.raw_ref) or "", MAX_RAW_REF_LENGTH)),
         routes=tuple(str(_clean_text(route)) for route in post.routes),
     )
 
@@ -256,13 +273,13 @@ def sanitize_comment(comment: CanonicalComment) -> CanonicalComment:
     return replace(
         comment,
         external_id=str(_clean_text(comment.external_id) or ""),
-        text=str(_clean_text(comment.text) or ""),
-        author_name=_clean_text(comment.author_name),
-        author_handle=_clean_text(comment.author_handle),
+        text=str(_cap_text(_clean_text(comment.text) or "", MAX_TEXT_LENGTH)),
+        author_name=_cap_text(_clean_text(comment.author_name), MAX_AUTHOR_LENGTH),
+        author_handle=_cap_text(_clean_text(comment.author_handle), MAX_AUTHOR_LENGTH),
         published_at=safe_published_at(comment.published_at),
         likes=safe_optional_int(comment.likes),
         replies=safe_optional_int(comment.replies),
-        raw_ref=str(_clean_text(comment.raw_ref) or ""),
+        raw_ref=str(_cap_text(_clean_text(comment.raw_ref) or "", MAX_RAW_REF_LENGTH)),
     )
 
 
