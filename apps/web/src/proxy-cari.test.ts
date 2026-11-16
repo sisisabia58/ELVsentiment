@@ -27,6 +27,9 @@ describe("flag-off Cari routes answer a real 404", () => {
     expect(await status("/cari")).toBe(404);
     expect(await status("/cari/riwayat")).toBe(404);
     expect(await status("/cari/33333333-3333-4333-8333-333333333333")).toBe(404);
+    const response = await proxy(request("/cari/33333333-3333-4333-8333-333333333333"));
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
   });
 
   it("returns 404 for provider settings while the feature is off", async () => {
@@ -83,19 +86,23 @@ describe("provider settings admin gate", () => {
 describe("cari detail id gate", () => {
   const OWN = "33333333-3333-4333-8333-333333333333";
 
-  it("returns a real 404 for a malformed id before any lookup", async () => {
+  it("returns a styled 404 for a malformed id before any lookup", async () => {
     let called = false;
-    const response = await cariIdGate(request("/cari/not-a-uuid"), async () => {
+    const response = await cariIdGate(signedIn("/cari/not-a-uuid"), async () => {
       called = true;
       return true;
     });
     expect(response?.status).toBe(404);
     expect(called).toBe(false);
+    expect(response?.headers.get("content-type") ?? "").not.toContain("text/plain");
+    expect(response?.headers.get("x-middleware-rewrite") ?? "").toContain("/cari-tidak-ditemukan");
   });
 
-  it("returns a real 404 for a uuid that is not this session's search", async () => {
+  it("returns a styled 404 for a uuid that is not this session's search", async () => {
     const response = await cariIdGate(signedIn(`/cari/${OWN}`), async () => false);
     expect(response?.status).toBe(404);
+    expect(response?.headers.get("content-type") ?? "").not.toContain("text/plain");
+    expect(response?.headers.get("x-middleware-rewrite") ?? "").toContain("/cari-tidak-ditemukan");
   });
 
   it("lets the owner's uuid through", async () => {

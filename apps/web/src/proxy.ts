@@ -73,6 +73,19 @@ function notFoundResponse(): NextResponse {
   });
 }
 
+const CARI_NOT_FOUND_PATH = "/cari-tidak-ditemukan";
+
+// Keep the real 404 status but render the app-styled card: rewrite to a small
+// internal page. The flag-off gate above still returns the plain unknown-route
+// response, so the feature is not revealed when it is disabled.
+function cariNotFoundResponse(request: NextRequest): NextResponse {
+  const url = request.nextUrl.clone();
+  url.pathname = CARI_NOT_FOUND_PATH;
+  const response = NextResponse.rewrite(url, { status: 404 });
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+
 // notFound() inside <Suspense> runs after the PPR shell streamed, so the status
 // was 200. The flag is decided here, before any HTML, for a real 404.
 export function cariGate(request: NextRequest): NextResponse | null {
@@ -150,7 +163,7 @@ export async function cariIdGate(
 ): Promise<NextResponse | null> {
   const segment = cariDetailSegment(request.nextUrl.pathname);
   if (!segment) return null;
-  if (!UUID_PATTERN.test(segment)) return notFoundResponse();
+  if (!UUID_PATTERN.test(segment)) return cariNotFoundResponse(request);
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   let owned: boolean | null;
@@ -159,7 +172,7 @@ export async function cariIdGate(
   } catch {
     return null;
   }
-  return owned === false ? notFoundResponse() : null;
+  return owned === false ? cariNotFoundResponse(request) : null;
 }
 
 // Next.js calls proxy(request, event). The event is not a session lookup.
