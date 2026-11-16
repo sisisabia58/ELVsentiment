@@ -6,6 +6,7 @@ from typing import Any, Callable
 import urllib.error
 import urllib.parse
 import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com"
 MAX_ERROR_BODY_CHARS = 8192
@@ -259,7 +260,7 @@ def fetch_scrapecreators_json(
     api_key: str,
     *,
     region: str | None = None,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
 ) -> dict[str, Any]:
     merged_params = dict(params)
     if region is not None:

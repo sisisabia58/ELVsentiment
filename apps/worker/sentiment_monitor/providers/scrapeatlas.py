@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping
 import urllib.error
 import urllib.parse
 import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.providers.canonical import safe_credit
 
@@ -28,6 +29,7 @@ SAFE_DETAILS = frozenset(
         "upstream_challenged",
         "request_limit",
         "timeout",
+        "http_3xx",
         "http_429",
         "http_5xx",
         "malformed_json",
@@ -179,7 +181,7 @@ def fetch_scrapeatlas_json(
     params: Mapping[str, Any],
     api_key: str,
     *,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     timeout: int = 20,
 ) -> ScrapeAtlasJSON:
     query = urllib.parse.urlencode(dict(params))
@@ -205,6 +207,15 @@ def fetch_scrapeatlas_json(
         latency_ms = int((time.monotonic() - started) * 1000)
         body, body_length = _read_http_error_body(error)
         charged, remaining = credits_from_headers(error.headers)
+        if 300 <= error.code < 400:
+            raise ScrapeAtlasError(
+                "http_3xx",
+                http_status=error.code,
+                credits_charged=charged,
+                credits_remaining=remaining,
+                body_length=body_length,
+                latency_ms=latency_ms,
+            ) from None
         if error.code == 404:
             raise ScrapeAtlasError(
                 "not_found",

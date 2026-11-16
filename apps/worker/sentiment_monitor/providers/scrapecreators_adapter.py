@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import time
 from typing import Any, Callable, Mapping
-import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
@@ -116,7 +116,7 @@ def fetch_scrapecreators_platform(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
 ) -> PlatformFetch:
     fetcher = _FETCHERS.get(platform)
     if fetcher is None:

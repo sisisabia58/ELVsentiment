@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 from typing import Any, Callable, Mapping
-import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
@@ -148,7 +148,7 @@ def fetch_comments(
     *,
     settings: Mapping[str, ProviderSetting],
     env: Mapping[str, Any],
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
 ) -> CommentFetch:
     post_id = str(post.external_id or "")
     path = COMMENT_ENDPOINTS.get(platform)

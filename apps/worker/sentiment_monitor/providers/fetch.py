@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable, Mapping
 import os
-import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.capabilities import (
@@ -121,7 +121,7 @@ def fetch_platform(
     env: Mapping[str, Any],
     collected_at: str,
     date_window_days: int | None = None,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     timeout: int | None = None,
     primary: Callable[..., PlatformFetch] | None = None,
     fallback: Callable[..., PlatformFetch] | None = None,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Callable
-import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.relevance import literal_match_status
@@ -177,7 +177,7 @@ def fetch_instagram_mentions(
     collected_at: str,
     *,
     intent: str | None = None,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
 ) -> dict[str, Any]:
     keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
     routes = routes_for("instagram", keyword)

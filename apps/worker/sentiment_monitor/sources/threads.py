@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Callable
-import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from harken.models import Mention
 from harken.sources import REGISTRY
@@ -138,7 +138,7 @@ def fetch_threads_mentions(
     collected_at: str,
     *,
     intent: str | None = None,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
 ) -> dict[str, Any]:
     keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
     route = routes_for("threads", keyword)[0]

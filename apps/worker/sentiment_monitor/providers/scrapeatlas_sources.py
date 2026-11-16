@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import re
 import time
 from typing import Any, Callable, Mapping
-import urllib.request
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
@@ -215,7 +215,7 @@ def fetch_scrapeatlas_threads(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
     return _fetch(
@@ -237,7 +237,7 @@ def fetch_scrapeatlas_tiktok(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
     return _fetch(
@@ -400,7 +400,7 @@ def fetch_scrapeatlas_youtube(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
     return _fetch(
@@ -422,7 +422,7 @@ def fetch_scrapeatlas_reddit(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
     return _fetch(
@@ -444,7 +444,7 @@ def fetch_scrapeatlas_facebook(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
     return _fetch(
@@ -466,7 +466,7 @@ def fetch_scrapeatlas_linkedin(
     *,
     api_key: str,
     collected_at: str,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
     return _fetch(

@@ -55,6 +55,7 @@ SAFE_DETAILS = frozenset(
         "unsupported_provider",
         "unsupported_platform",
         "not_found",
+        "http_3xx",
         "http_429",
         "http_5xx",
         "timeout",
