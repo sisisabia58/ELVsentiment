@@ -537,6 +537,7 @@ def run_instant_search(
     executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
     futures: dict[Any, tuple[str, tuple[str, ...]]] = {}
     all_posts: list[CanonicalPost] = []
+    pending: set[Any] = set()
     try:
         for platform, chain in sources:
             future = executor.submit(
@@ -580,7 +581,15 @@ def run_instant_search(
                 safe_detail="deadline",
             )
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # cancel() cannot stop a task that already started, so bound the wait
+        # for started route threads by the per-route timeout before tearing the
+        # executor down. Late results are discarded: only futures observed in
+        # the loop above contribute to all_posts.
+        for future in pending:
+            future.cancel()
+        if pending:
+            wait(pending, timeout=ROUTE_TIMEOUT_SECONDS)
+        executor.shutdown(wait=True, cancel_futures=True)
 
     ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
     _apply_ranks(conn, job, ranked)

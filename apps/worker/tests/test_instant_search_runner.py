@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import threading
 import time
 import uuid
 
@@ -361,6 +362,47 @@ def test_runner_marks_slow_source_unavailable_at_deadline(db):
     assert search["status"] in ("partial", "failed")
     assert search["finished_at"] is not None
     assert db.execute("select count(*) as n from instant_search_results where search_id=%s", (job.id,))[0]["n"] == 0
+
+
+def test_deadline_path_joins_started_route_threads_with_a_bound(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return PlatformFetch("reddit", "scrapeatlas", [], [], "answered", "ok", 200)
+
+    timer = threading.Timer(0.4, release.set)
+    timer.start()
+    before = {thread.ident for thread in threading.enumerate()}
+    try:
+        job = claim_instant_search(db, "worker-1")
+        began = time.monotonic()
+        run_instant_search(
+            db,
+            job,
+            env={},
+            now=datetime.now(timezone.utc),
+            settings={"reddit": DEFAULT_SETTINGS["reddit"]},
+            fetcher=blocked,
+            deadline_seconds=0.05,
+        )
+        elapsed = time.monotonic() - began
+        assert started.is_set()
+        assert elapsed < 1.5
+        leftovers = [
+            thread
+            for thread in threading.enumerate()
+            if thread.ident not in before and thread.name.startswith("ThreadPoolExecutor")
+        ]
+        assert leftovers == []
+    finally:
+        release.set()
+        timer.cancel()
+        timer.join()
 
 
 def test_runner_keeps_answered_sources_when_another_fails(db):
