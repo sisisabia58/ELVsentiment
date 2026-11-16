@@ -60,9 +60,53 @@ def _extract_threads_author(item: dict[str, Any]) -> str | None:
     return None
 
 
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _optional_text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _threads_thumbnail(item: dict[str, Any]) -> str | None:
+    images = item.get("image_versions2")
+    if isinstance(images, dict):
+        candidates = images.get("candidates")
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                if isinstance(candidate, dict):
+                    url = _optional_text(candidate.get("url"))
+                    if url:
+                        return url
+    videos = item.get("video_versions")
+    if isinstance(videos, list):
+        for video in videos:
+            if isinstance(video, dict):
+                url = _optional_text(video.get("url"))
+                if url:
+                    return url
+    return None
+
+
 def normalize_threads_item(item: dict[str, Any], collected_at: str) -> dict[str, Any]:
     external_id = str(item.get("pk") or item.get("id") or item.get("code") or "")
     author = _extract_threads_author(item)
+    user = item.get("user") if isinstance(item.get("user"), dict) else {}
+    app_info = (
+        item.get("text_post_app_info")
+        if isinstance(item.get("text_post_app_info"), dict)
+        else {}
+    )
     code = item.get("code")
     url = item.get("url") or item.get("permalink")
     if not url and author and code:
@@ -72,10 +116,18 @@ def normalize_threads_item(item: dict[str, Any], collected_at: str) -> dict[str,
         "external_id": external_id,
         "source": "threads",
         "author": author,
+        "author_handle": author,
+        "author_name": _optional_text(user.get("full_name") or user.get("name")),
+        "title": None,
         "text": _extract_threads_text(item),
         "hashtags": hashtag_field_names(item.get("hashtags")),
         "url": url,
         "posted_at": posted_at,
+        "thumbnail_url": _threads_thumbnail(item),
+        "views": _optional_int(item.get("view_count") or item.get("play_count")),
+        "likes": _optional_int(item.get("like_count")),
+        "replies": _optional_int(app_info.get("direct_reply_count")),
+        "shares": _optional_int(app_info.get("repost_count")),
         "collected_at": collected_at,
     }
 

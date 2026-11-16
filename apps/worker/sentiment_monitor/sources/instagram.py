@@ -64,11 +64,37 @@ def _extract_instagram_author(media: dict[str, Any]) -> str | None:
     return None
 
 
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _optional_text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _edge_count(media: dict[str, Any], key: str) -> int | None:
+    edge = media.get(key)
+    if isinstance(edge, dict):
+        return _optional_int(edge.get("count"))
+    return None
+
+
 def normalize_instagram_item(item: dict[str, Any], collected_at: str) -> dict[str, Any]:
     media = item.get("media") if isinstance(item.get("media"), dict) else item
     code = media.get("code") or media.get("shortcode")
     external_id = str(media.get("pk") or media.get("id") or code or "")
     author = _extract_instagram_author(media)
+    user = media.get("user") if isinstance(media.get("user"), dict) else {}
     url = media.get("url") or media.get("permalink")
     if not url and code:
         url = f"https://www.instagram.com/p/{code}/"
@@ -79,10 +105,26 @@ def normalize_instagram_item(item: dict[str, Any], collected_at: str) -> dict[st
         if media.get("taken_at_timestamp") is not None
         else media.get("timestamp")
     )
+    likes = _edge_count(media, "edge_media_preview_like")
+    if likes is None:
+        likes = _optional_int(media.get("like_count"))
+    replies = _edge_count(media, "edge_media_to_parent_comment")
+    if replies is None:
+        replies = _optional_int(media.get("comment_count"))
+    views = media.get("play_count")
+    if views is None:
+        views = media.get("video_view_count")
+    thumbnail = (
+        _optional_text(media.get("display_uri"))
+        or _optional_text(media.get("video_thumbnail_url"))
+    )
     return {
         "external_id": external_id,
         "source": "instagram",
         "author": author,
+        "author_handle": author,
+        "author_name": _optional_text(user.get("full_name") or user.get("name")),
+        "title": None,
         "text": _extract_instagram_text(media),
         "hashtags": [
             *hashtag_field_names(media.get("hashtags")),
@@ -90,6 +132,11 @@ def normalize_instagram_item(item: dict[str, Any], collected_at: str) -> dict[st
         ],
         "url": url,
         "posted_at": unix_to_iso(raw_ts),
+        "thumbnail_url": thumbnail,
+        "views": _optional_int(views),
+        "likes": likes,
+        "replies": replies,
+        "shares": None,
         "collected_at": collected_at,
     }
 
