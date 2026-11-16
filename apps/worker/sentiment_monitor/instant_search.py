@@ -34,6 +34,7 @@ ROUTE_TIMEOUT_SECONDS = 20
 SEARCH_DEADLINE_SECONDS = 40
 MAX_CONCURRENCY = 6
 RUNNING_DEADLINE_GRACE_SECONDS = 60
+MAX_PLATFORM_RESULTS = 100
 
 CLAIM_SQL = """
 select id, customer_id, query_text, keyword_intent, date_window, sort_mode,
@@ -63,6 +64,7 @@ SAFE_DETAILS = frozenset(
         "failed_status",
         "malformed_json",
         "malformed_envelope",
+        "body_too_large",
         "success_false",
         "storage_failed",
         "unknown_error",
@@ -548,7 +550,7 @@ def _handle_result(
     latency = getattr(result, "latency_ms", None)
     if state == "answered":
         kept = [_normalize(item, job) for item in filter_since(result.posts or [], cutoff_iso)]
-        kept = dedupe_posts(kept)
+        kept = sort_posts(dedupe_posts(kept), job.sort_mode)[:MAX_PLATFORM_RESULTS]
         try:
             tx.run(
                 lambda conn: _store_answered(

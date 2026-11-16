@@ -159,3 +159,17 @@ def test_credit_helpers_ignore_missing_or_bad_values():
                  "malformed_envelope", "failed_status", "transport_error"):
         assert safe_atlas_detail(code) == code
     assert safe_atlas_detail("synthetic-secret") == "failed_status"
+
+
+def test_oversized_body_is_a_safe_failure(monkeypatch):
+    from sentiment_monitor.providers import scrapeatlas
+
+    monkeypatch.setattr(scrapeatlas, "MAX_BODY_BYTES", 16)
+
+    def opener(request, timeout=0):
+        return Response({"success": True, "posts": []}, headers={"x-credits-charged": "1"})
+
+    with pytest.raises(ScrapeAtlasError) as caught:
+        fetch_scrapeatlas_json("/v1/reddit/search", {"query": "x"}, "synthetic", opener=opener)
+    assert caught.value.code == "body_too_large"
+    assert caught.value.http_status == 200

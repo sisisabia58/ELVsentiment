@@ -19,6 +19,7 @@ from sentiment_monitor.providers.canonical import safe_credit
 
 SCRAPEATLAS_BASE_URL = "https://api.scrapeatlas.com"
 MAX_ERROR_BODY_CHARS = 65536
+MAX_BODY_BYTES = 10 * 1024 * 1024
 
 SAFE_DETAILS = frozenset(
     {
@@ -34,6 +35,7 @@ SAFE_DETAILS = frozenset(
         "http_5xx",
         "malformed_json",
         "malformed_envelope",
+        "body_too_large",
         "failed_status",
         "transport_error",
     }
@@ -202,7 +204,7 @@ def fetch_scrapeatlas_json(
         with opener(request, timeout=timeout) as response:
             http_status = _response_status(response)
             headers = getattr(response, "headers", None)
-            raw = response.read()
+            raw = response.read(MAX_BODY_BYTES + 1)
     except urllib.error.HTTPError as error:
         latency_ms = int((time.monotonic() - started) * 1000)
         body, body_length = _read_http_error_body(error)
@@ -261,6 +263,15 @@ def fetch_scrapeatlas_json(
     latency_ms = int((time.monotonic() - started) * 1000)
     body_length = _body_length(raw)
     charged, remaining = credits_from_headers(headers)
+    if isinstance(raw, (bytes, str)) and len(raw) > MAX_BODY_BYTES:
+        raise ScrapeAtlasError(
+            "body_too_large",
+            http_status=http_status,
+            credits_charged=charged,
+            credits_remaining=remaining,
+            body_length=body_length,
+            latency_ms=latency_ms,
+        ) from None
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):

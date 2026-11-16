@@ -338,3 +338,32 @@ def test_retention_purge_keeps_the_credit_ledger(prod_db):
     assert ledger[0]["search_id"] is None
     assert ledger[0]["provider"] == "scrapeatlas"
     assert ledger[0]["credits_charged"] == 2
+
+
+def test_platform_results_are_capped_after_dedupe(prod_db):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=40)
+
+    def many(platform, keyword, settings, **kwargs):
+        return PlatformFetch(
+            platform,
+            "scrapeatlas",
+            [_post(platform, f"{platform}-{index}") for index in range(250)],
+            [_call(platform, "")],
+            "answered",
+            "ok",
+            5,
+        )
+
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=many,
+        settings={"youtube": DEFAULT_SETTINGS["youtube"]},
+    )
+    assert processed == 1
+    view = prod_db.view(search_id)
+    assert view["counts"].get("youtube") == instant_search.MAX_PLATFORM_RESULTS
+    assert view["sources"][0]["result_count"] == instant_search.MAX_PLATFORM_RESULTS
