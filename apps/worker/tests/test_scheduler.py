@@ -3051,6 +3051,10 @@ def test_search_cycle_claims_and_runs_one_queued_search(monkeypatch):
         "sentiment_monitor.instant_search.expire_old_searches",
         lambda conn, now: expired.append(now) or 0,
     )
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search._fail_deadline_missed_searches",
+        lambda conn, now: None,
+    )
     processed = run_instant_search_cycle(
         object(), env={}, now=datetime.now(timezone.utc), limits=load_limits(Path("config/limits.json"), {})
     )
@@ -3074,6 +3078,10 @@ def test_search_cycle_never_runs_the_same_claimed_id_twice(monkeypatch):
         lambda *a, **k: calls.append(k.get("job").id if "job" in k else a[1].id),
     )
     monkeypatch.setattr("sentiment_monitor.instant_search.expire_old_searches", lambda conn, now: 0)
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search._fail_deadline_missed_searches",
+        lambda conn, now: None,
+    )
     assert run_instant_search_cycle(
         object(), env={}, now=datetime.now(timezone.utc), limits=load_limits(Path("config/limits.json"), {})
     ) == 1

@@ -599,9 +599,8 @@ def run_instant_search(
 FAIL_DEADLINE_SQL = """
 with expired as (
     update instant_searches
-       set status = 'failed',
-           error_code = 'deadline',
-           finished_at = coalesce(finished_at, %s)
+       set (status, error_code, finished_at) =
+           ('failed', 'deadline', coalesce(finished_at, %s))
      where (status = 'queued' and deadline_at <= %s)
         or (status = 'running' and deadline_at <= %s - interval '60 seconds')
     returning id

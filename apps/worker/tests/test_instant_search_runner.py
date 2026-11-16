@@ -93,8 +93,7 @@ def test_cycle_fails_deadline_missed_rows_before_claiming():
     assert processed == 0
     first_sql = " ".join(conn.statements[0][0].lower().split())
     assert "update instant_searches" in first_sql
-    assert "status = 'failed'" in first_sql
-    assert "error_code = 'deadline'" in first_sql
+    assert "('failed', 'deadline'" in first_sql
     assert "deadline_at" in first_sql
     assert "for update skip locked" not in first_sql
 
