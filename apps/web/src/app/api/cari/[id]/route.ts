@@ -3,8 +3,6 @@ import { readSessionToken } from "@/auth/request-session";
 import { withClient } from "@/db/pg";
 import { loadSearchSnapshot } from "@/monitor/search/load";
 
-export const dynamic = "force-dynamic";
-
 function errorResponse(status: number, error: string): Response {
   return Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });
 }

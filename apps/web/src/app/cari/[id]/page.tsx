@@ -36,11 +36,15 @@ export async function CariDetailPageBody({ id }: { id: string }) {
   );
 }
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+async function Body({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  return <CariDetailPageBody id={id} />;
+}
+
+export default function Page({ params }: { params: Promise<{ id: string }> }) {
   return (
     <Suspense fallback={null}>
-      <CariDetailPageBody id={id} />
+      <Body params={params} />
     </Suspense>
   );
 }
