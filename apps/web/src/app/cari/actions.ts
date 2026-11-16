@@ -1,10 +1,7 @@
-import { customerIdFromSessionToken } from "@/auth/session";
-import { withSessionDeps } from "@/auth/request-session";
 import type { Queryable } from "@/db/migrate";
 import { parseKeyword } from "@/domain/keyword-intent";
 import { validateSearchInput, type SearchFilters } from "@/monitor/search/filters";
 import type { SearchLimits } from "@/monitor/search/limits";
-import { readSearchLimits } from "@/monitor/search/limits";
 import { createInstantSearch } from "@/monitor/search/mutations";
 import { cariSekarangEnabled, type Env } from "@/monitor/search/feature";
 
@@ -40,25 +37,4 @@ export async function startSearchForCustomer(input: {
     input.limits,
   );
   return created.ok ? { ok: true, searchId: created.searchId } : { ok: false, error: created.error };
-}
-
-export async function startSearchAction(input: StartSearchInput): Promise<StartSearchResult> {
-  "use server";
-  return withSessionDeps(async (deps) => {
-    let customerId: string;
-    try {
-      customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
-    } catch {
-      return { ok: false as const, error: "unauthenticated" };
-    }
-    return startSearchForCustomer({
-      db: deps.db,
-      customerId,
-      query: input.query,
-      filters: input.filters,
-      env: process.env,
-      limits: readSearchLimits(),
-      now: new Date(),
-    });
-  });
 }

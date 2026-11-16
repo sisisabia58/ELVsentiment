@@ -13,7 +13,7 @@ import {
   type SearchFilters,
 } from "@/monitor/search/filters";
 import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
-import { startSearchAction } from "@/app/cari/actions";
+import { startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
 import { ProgressPanel } from "./progress-panel";

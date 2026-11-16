@@ -13,12 +13,13 @@ export function useSearchPoll(
   const intervalMs = options.intervalMs ?? 1000;
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [stale, setStale] = useState(false);
-  const finished = FINISHED.has(snapshot.search.status);
-
-  useEffect(() => {
+  const [previousInitial, setPreviousInitial] = useState(initialSnapshot);
+  if (previousInitial !== initialSnapshot) {
+    setPreviousInitial(initialSnapshot);
     setSnapshot(initialSnapshot);
     setStale(false);
-  }, [initialSnapshot]);
+  }
+  const finished = FINISHED.has(snapshot.search.status);
 
   useEffect(() => {
     if (finished) return;

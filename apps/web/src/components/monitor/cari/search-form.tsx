@@ -14,10 +14,7 @@ import {
   SORT_LABEL,
   SORT_MODES,
   validateSearchInput,
-  type DateWindow,
-  type LanguageFilter,
   type SearchFilters,
-  type SortMode,
 } from "@/monitor/search/filters";
 
 export type SearchFormInput = { query: string; filters: SearchFilters };
