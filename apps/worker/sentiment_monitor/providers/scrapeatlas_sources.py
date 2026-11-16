@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+import re
 import time
 from typing import Any, Callable, Mapping
 import urllib.request
@@ -18,6 +19,8 @@ from sentiment_monitor.providers.canonical import (
 )
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
 from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+from sentiment_monitor.sources.instagram import normalize_hashtag
+from sentiment_monitor.sources.scrapecreators import unix_to_iso
 from sentiment_monitor.sources.tiktok import normalize_tiktok_item
 from sentiment_monitor.sources.threads import normalize_threads_item
 
@@ -248,4 +251,234 @@ def fetch_scrapeatlas_tiktok(
         route_id="scrapeatlas.tiktok.keyword",
         extract=_tiktok_items,
         date_window_days=date_window_days,
+    )
+
+
+def _youtube_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for key in ("videos", "shorts"):
+        for item in _list_items(payload, key):
+            channel = item.get("channel") if isinstance(item.get("channel"), dict) else {}
+            title = _optional_text(item.get("title"))
+            text = title or ""
+            items.append(
+                {
+                    "external_id": item.get("id"),
+                    "text": text,
+                    "title": title,
+                    "author_name": channel.get("title"),
+                    "author_handle": channel.get("handle"),
+                    "url": item.get("url"),
+                    "posted_at": item.get("publishedTime"),
+                    "thumbnail_url": item.get("thumbnail"),
+                    "views": item.get("viewCountInt"),
+                    "likes": None,
+                    "replies": None,
+                    "shares": None,
+                    "hashtags": tuple(re.findall(r"#(\w+)", text)),
+                }
+            )
+    return items
+
+
+def _reddit_url(item: Mapping[str, Any]) -> str | None:
+    url = _optional_text(item.get("url"))
+    if url:
+        return url
+    permalink = _optional_text(item.get("permalink"))
+    if not permalink:
+        return None
+    if permalink.startswith("/"):
+        return f"https://www.reddit.com{permalink}"
+    return permalink
+
+
+def _reddit_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in _list_items(payload, "posts"):
+        title = _optional_text(item.get("title"))
+        selftext = _optional_text(item.get("selftext"))
+        text = title or ""
+        if selftext:
+            text = f"{text}\n\n{selftext}" if text else selftext
+        items.append(
+            {
+                "external_id": item.get("id") or item.get("post_id"),
+                "text": text,
+                "title": title,
+                "author_name": item.get("author"),
+                "author_handle": None,
+                "url": _reddit_url(item),
+                "posted_at": item.get("created_at_iso") or item.get("created_at"),
+                "thumbnail_url": item.get("thumbnail"),
+                "views": None,
+                "likes": item.get("score"),
+                "replies": item.get("num_comments"),
+                "shares": None,
+                "hashtags": (),
+            }
+        )
+    return items
+
+
+def _first_image_url(item: Mapping[str, Any]) -> str | None:
+    images = item.get("images")
+    if isinstance(images, list):
+        for image in images:
+            if isinstance(image, dict):
+                url = _optional_text(image.get("url"))
+                if url:
+                    return url
+            elif isinstance(image, str) and image.strip():
+                return image.strip()
+    image = item.get("image")
+    if isinstance(image, str) and image.strip():
+        return image.strip()
+    attachments = item.get("mediaAttachments")
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            if isinstance(attachment, dict):
+                url = _optional_text(attachment.get("url") or attachment.get("thumbnailUrl"))
+                if url:
+                    return url
+    return None
+
+
+def _facebook_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in _list_items(payload, "posts"):
+        author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        published = item.get("publishTime")
+        if published is None:
+            published = item.get("creation_time")
+        items.append(
+            {
+                "external_id": item.get("id"),
+                "text": _optional_text(item.get("text")) or "",
+                "title": None,
+                "author_name": author.get("name"),
+                "author_handle": None,
+                "url": item.get("url") or item.get("permalink"),
+                "posted_at": unix_to_iso(published),
+                "thumbnail_url": _first_image_url(item),
+                "views": item.get("videoViewCount"),
+                "likes": item.get("reactionCount"),
+                "replies": item.get("commentCount"),
+                "shares": None,
+                "hashtags": (),
+            }
+        )
+    return items
+
+
+def _linkedin_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in _list_items(payload, "posts"):
+        author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        items.append(
+            {
+                "external_id": item.get("id") or item.get("urn"),
+                "text": _optional_text(item.get("description")) or "",
+                "title": None,
+                "author_name": author.get("name"),
+                "author_handle": None,
+                "url": item.get("url"),
+                "posted_at": item.get("datePublished"),
+                "thumbnail_url": _first_image_url(item),
+                "views": None,
+                "likes": item.get("likeCount"),
+                "replies": item.get("commentCount"),
+                "shares": None,
+                "hashtags": (),
+            }
+        )
+    return items
+
+
+def fetch_scrapeatlas_youtube(
+    keyword: Keyword,
+    *,
+    api_key: str,
+    collected_at: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    date_window_days: int | None = None,
+) -> PlatformFetch:
+    return _fetch(
+        "youtube",
+        "/v1/youtube/search",
+        {"query": str(keyword), "region": "ID"},
+        api_key,
+        opener=opener,
+        keyword=keyword,
+        collected_at=collected_at,
+        route_id="scrapeatlas.youtube.search",
+        extract=_youtube_items,
+        date_window_days=date_window_days,
+    )
+
+
+def fetch_scrapeatlas_reddit(
+    keyword: Keyword,
+    *,
+    api_key: str,
+    collected_at: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    date_window_days: int | None = None,
+) -> PlatformFetch:
+    return _fetch(
+        "reddit",
+        "/v1/reddit/search",
+        {"query": str(keyword), "sort": "relevance"},
+        api_key,
+        opener=opener,
+        keyword=keyword,
+        collected_at=collected_at,
+        route_id="scrapeatlas.reddit.search",
+        extract=_reddit_items,
+        date_window_days=date_window_days,
+    )
+
+
+def fetch_scrapeatlas_facebook(
+    keyword: Keyword,
+    *,
+    api_key: str,
+    collected_at: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    date_window_days: int | None = None,
+) -> PlatformFetch:
+    return _fetch(
+        "facebook",
+        "/v1/facebook/hashtag",
+        {"hashtag": normalize_hashtag(str(keyword))},
+        api_key,
+        opener=opener,
+        keyword=keyword,
+        collected_at=collected_at,
+        route_id="scrapeatlas.facebook.hashtag",
+        extract=_facebook_items,
+        date_window_days=date_window_days,
+    )
+
+
+def fetch_scrapeatlas_linkedin(
+    keyword: Keyword,
+    *,
+    api_key: str,
+    collected_at: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    date_window_days: int | None = None,
+) -> PlatformFetch:
+    return _fetch(
+        "linkedin",
+        "/v1/linkedin/search/posts",
+        {"query": str(keyword), "date_posted": "last-week"},
+        api_key,
+        opener=opener,
+        keyword=keyword,
+        collected_at=collected_at,
+        route_id="scrapeatlas.linkedin.posts",
+        extract=_linkedin_items,
+        date_window_days=date_window_days,
+        web_index_from_warnings=True,
     )

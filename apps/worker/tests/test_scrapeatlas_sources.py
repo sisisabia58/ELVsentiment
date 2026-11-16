@@ -159,3 +159,136 @@ def test_429_failure_keeps_only_safe_metadata():
     assert result.posts == []
     assert "synthetic-key" not in repr(result)
     assert "prompt" not in repr(result)
+
+
+from sentiment_monitor.providers.canonical import sort_posts
+from sentiment_monitor.providers.scrapeatlas_sources import (
+    fetch_scrapeatlas_facebook,
+    fetch_scrapeatlas_linkedin,
+    fetch_scrapeatlas_reddit,
+    fetch_scrapeatlas_youtube,
+)
+
+
+def test_youtube_keeps_undated_shorts_and_flags_them():
+    def opener(request, timeout=0):
+        return Response(
+            {"success": True, "status": "success", "videos": [
+                {"id": "v1", "title": "Review barayam", "channel": {"title": "Jajan"},
+                 "publishedTime": "2026-11-14T00:00:00Z", "url": "https://youtube/v1",
+                 "viewCountInt": 1000, "thumbnail": "https://img/v1.jpg"},
+            ], "shorts": [
+                {"id": "s1", "title": "barayam #shorts", "channel": {"title": "Jajan"},
+                 "url": "https://youtube/s1", "viewCountInt": 50},
+            ], "coverage": {"warnings": []}},
+            headers={"x-credits-charged": "1"},
+        )
+
+    result = fetch_scrapeatlas_youtube("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=opener, date_window_days=7)
+    assert [post.external_id for post in result.posts] == ["v1", "s1"]
+    assert result.posts[1].published_at is None
+    assert result.posts[1].views == 50
+    assert result.posts[0].routes == ("scrapeatlas.youtube.search",)
+
+
+def test_linkedin_is_flagged_as_web_index_and_costs_two_credits():
+    def opener(request, timeout=0):
+        return Response(
+            {"success": True, "status": "partial",
+             "coverage": {"warnings": ["web_index_selection"]},
+             "posts": [{"id": "l1", "description": "barayam", "author": {"name": "Budi"},
+                        "datePublished": "2026-11-03T00:00:00Z", "url": "https://linkedin/l1"}]},
+            headers={"x-credits-charged": "2"},
+        )
+
+    result = fetch_scrapeatlas_linkedin("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=opener)
+    assert result.posts[0].web_index is True
+    assert result.calls[0].credits_charged == 2
+    assert result.posts[0].relevance == "literal_match"
+
+
+def test_youtube_fixture_keeps_undated_shorts_under_date_filter_and_sorts_last():
+    payload = fixture("youtube.json")
+
+    def opener(request, timeout=0):
+        return Response(payload, headers={"x-credits-charged": "1"})
+
+    result = fetch_scrapeatlas_youtube("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=opener, date_window_days=7)
+    assert result.state == "answered"
+    assert result.posts, "undated shorts must not be dropped"
+    assert all(post.published_at is None for post in result.posts)
+    ordered = sort_posts(result.posts, "newest")
+    assert [post.external_id for post in ordered] == [post.external_id for post in result.posts]
+
+
+def test_reddit_and_facebook_fixtures_map_fields():
+    def reddit_opener(request, timeout=0):
+        assert "sort=relevance" in request.full_url
+        return Response(fixture("reddit.json"), headers={"x-credits-charged": "1"})
+
+    reddit = fetch_scrapeatlas_reddit("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=reddit_opener)
+    assert reddit.state == "answered"
+    assert reddit.posts[0].source_provider == "scrapeatlas"
+    assert reddit.posts[0].external_id
+    assert reddit.posts[0].url and reddit.posts[0].url.startswith("https://")
+    assert reddit.posts[0].likes is not None
+    assert reddit.posts[0].replies is not None
+
+    def facebook_opener(request, timeout=0):
+        assert "hashtag=barayam" in request.full_url
+        return Response(fixture("facebook_hashtag.json"), headers={"x-credits-charged": "1"})
+
+    facebook = fetch_scrapeatlas_facebook("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=facebook_opener)
+    assert facebook.state == "answered"
+    assert facebook.posts[0].likes is not None
+    assert facebook.posts[0].replies is not None
+    assert facebook.posts[0].thumbnail_url.startswith("https://example.invalid/")
+
+
+def test_facebook_hashtag_strips_spaces_and_lowercases():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response({"success": True, "status": "success", "posts": [],
+                         "coverage": {"warnings": []}}, headers={"x-credits-charged": "1"})
+
+    fetch_scrapeatlas_facebook("Ayam Barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=opener)
+    assert "hashtag=ayambarayam" in seen[0]
+
+
+def test_linkedin_fixture_uses_last_week_filter_and_web_index():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        return Response(fixture("linkedin.json"), headers={"x-credits-charged": "2"})
+
+    result = fetch_scrapeatlas_linkedin("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=opener)
+    assert "date_posted=last-week" in seen[0]
+    assert all(post.web_index for post in result.posts)
+    assert result.calls[0].outcome == "partial"
+
+
+def test_youtube_and_reddit_404_are_answered_free():
+    def not_found(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url, 404, "not found", {},
+            io.BytesIO(b'{"success":false,"status":"failed","failure":{"code":"not_found"}}'),
+        )
+
+    youtube = fetch_scrapeatlas_youtube("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=not_found)
+    reddit = fetch_scrapeatlas_reddit("barayam", api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z", opener=not_found)
+    for result in (youtube, reddit):
+        assert result.state == "answered"
+        assert result.posts == []
+        assert result.calls[0].credits_charged == 0
