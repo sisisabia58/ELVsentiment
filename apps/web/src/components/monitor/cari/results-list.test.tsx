@@ -98,6 +98,48 @@ describe("ResultsList", () => {
     expect(screen.getByText("Paling cocok")).toBeTruthy();
   });
 
+  it("replaces a broken thumbnail with an aria-hidden platform placeholder", () => {
+    render(
+      <ResultsList
+        results={[
+          result({
+            id: "r1",
+            platform: "tiktok",
+            externalId: "video-1",
+            thumbnailUrl: "https://example.invalid/thumb/broken.jpg",
+          }),
+        ]}
+        commentsByResult={{}}
+        sortMode="relevance"
+        now={new Date("2026-11-16T10:00:00Z")}
+      />,
+    );
+    fireEvent.error(screen.getByAltText("Pratinjau hasil"));
+    expect(screen.queryByAltText("Pratinjau hasil")).toBeNull();
+    expect(screen.getByTestId("thumb-placeholder").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("shows the placeholder when a result has no thumbnail", () => {
+    render(
+      <ResultsList
+        results={[
+          result({
+            id: "r2",
+            platform: "youtube",
+            externalId: "short-1",
+            title: "Barayam Short",
+            thumbnailUrl: null,
+          }),
+        ]}
+        commentsByResult={{}}
+        sortMode="relevance"
+        now={new Date("2026-11-16T10:00:00Z")}
+      />,
+    );
+    expect(screen.queryByAltText("Pratinjau hasil")).toBeNull();
+    expect(screen.getByTestId("thumb-placeholder")).toBeTruthy();
+  });
+
   it("groups by platform and shows a chip for each non-empty group", () => {
     const threadsPost = result({ id: "t1", platform: "threads", externalId: "th-1" });
     const youtubePost = result({

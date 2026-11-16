@@ -43,6 +43,7 @@ function ResultCard(props: {
   now: Date;
 }) {
   const result = props.result;
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const comments = props.comments.slice(0, 2);
   const remaining = Math.max(0, (result.replies ?? 0) - comments.length);
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
@@ -61,21 +62,32 @@ function ResultCard(props: {
             <span>{result.publishedAt ? formatRelative(result.publishedAt, props.now) : "Tanggal tidak diketahui"}</span>
           </div>
         </div>
-        {result.thumbnailUrl ? (
-          <div className="relative h-[86px] w-[86px] shrink-0 overflow-hidden rounded-lg bg-surface-subtle sm:h-[96px] sm:w-[96px]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={result.thumbnailUrl}
-              alt="Pratinjau hasil"
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-            />
-            <span className="absolute bottom-1 right-1">
-              <PlatformTile platform={result.platform} size={16} />
-            </span>
-          </div>
-        ) : null}
+        <div className="relative h-[86px] w-[86px] shrink-0 overflow-hidden rounded-lg bg-surface-subtle sm:h-[96px] sm:w-[96px]">
+          {result.thumbnailUrl && !thumbnailFailed ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={result.thumbnailUrl}
+                alt="Pratinjau hasil"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="h-full w-full object-cover"
+                onError={() => setThumbnailFailed(true)}
+              />
+              <span className="absolute bottom-1 right-1">
+                <PlatformTile platform={result.platform} size={16} />
+              </span>
+            </>
+          ) : (
+            <div
+              data-testid="thumb-placeholder"
+              aria-hidden="true"
+              className="grid h-full w-full place-items-center"
+            >
+              <PlatformTile platform={result.platform} size={30} />
+            </div>
+          )}
+        </div>
       </div>
       {comments.length > 0 ? (
         <div className="mt-3 rounded-lg border border-border bg-surface-subtle/60">
