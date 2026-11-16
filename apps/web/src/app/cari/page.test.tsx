@@ -15,6 +15,8 @@ vi.mock("next/navigation", () => ({
   },
 }));
 vi.mock("@/monitor/session-page", () => ({ requireWorkspace }));
+vi.mock("@/db/pg", () => ({ withClient: async (fn: (db: unknown) => Promise<unknown>) => fn({}) }));
+vi.mock("@/monitor/search/load", () => ({ loadHistory: async () => [] }));
 vi.mock("@/components/logout-form", () => ({ LogoutForm: () => null }));
 vi.mock("@/components/monitor/bits", () => ({ PageHeader: () => null }));
 vi.mock("@/components/monitor/shell", () => ({ Frame: () => null }));
