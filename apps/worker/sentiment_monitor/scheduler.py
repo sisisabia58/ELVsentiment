@@ -13,7 +13,7 @@ import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
-from sentiment_monitor.instant_search import run_instant_search_cycle
+from sentiment_monitor.instant_search import MAX_INFLIGHT, run_instant_search_poll
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
 from sentiment_monitor.sources.routes import scrapecreators_request_count
@@ -932,22 +932,41 @@ def start_instant_search_worker(
     poll_seconds: float | None = None,
     log=print,
 ):
-    """Run instant search on its own daemon thread and its own connections."""
+    """Run instant search on its own daemon thread and its own connections.
+
+    Claiming is decoupled from job completion: every poll claims up to the free
+    slots in the long-lived pool, so a search created while a slow batch is
+    running is still claimed before its 40 s deadline.
+    """
     interval = poll_seconds if poll_seconds is not None else _instant_search_poll_seconds()
 
     def loop():
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(
+            max_workers=MAX_INFLIGHT, thread_name_prefix="instant-search-job"
+        )
+        in_flight = set()
         # Let the JEV loop claim its first tick first; the worker then polls
         # independently of the 20 s collection sleep.
-        while not stop_event.wait(interval):
-            try:
-                run_instant_search_cycle(
-                    connect,
-                    env=os.environ,
-                    now=datetime.now(timezone.utc),
-                    limits=None,
-                )
-            except Exception:
-                _safe_log(log, lambda: format_log("instant_search_cycle_failed"))
+        try:
+            while not stop_event.wait(interval):
+                in_flight = {future for future in in_flight if not future.done()}
+                try:
+                    run_instant_search_poll(
+                        connect,
+                        env=os.environ,
+                        now=datetime.now(timezone.utc),
+                        limits=None,
+                        submit=executor.submit,
+                        in_flight=in_flight,
+                    )
+                except Exception:
+                    _safe_log(log, lambda: format_log("instant_search_cycle_failed"))
+        finally:
+            for future in in_flight:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
 
     thread = threading.Thread(target=loop, name="instant-search", daemon=True)
     thread.start()

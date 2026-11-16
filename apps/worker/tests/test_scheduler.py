@@ -3105,7 +3105,7 @@ def test_serve_logs_a_safe_instant_search_cycle_failure(tmp_path, monkeypatch):
             time.sleep(0.02)
         raise SystemExit
 
-    monkeypatch.setattr("sentiment_monitor.scheduler.run_instant_search_cycle", explode)
+    monkeypatch.setattr("sentiment_monitor.scheduler.run_instant_search_poll", explode)
     with pytest.raises(SystemExit):
         serve(
             world.connect,

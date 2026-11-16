@@ -267,7 +267,7 @@ def test_instant_search_worker_thread_starts_and_stops(monkeypatch):
         ran.set()
         return 0
 
-    monkeypatch.setattr(scheduler, "run_instant_search_cycle", fake_cycle)
+    monkeypatch.setattr(scheduler, "run_instant_search_poll", fake_cycle)
     stop = threading.Event()
     thread = scheduler.start_instant_search_worker(
         lambda: object(), stop, poll_seconds=0.01, log=lambda line: None
@@ -410,3 +410,49 @@ def test_app_user_cannot_attach_a_child_row_to_another_tenants_search(prod_db):
             """,
             (str(uuid.uuid4()), other_search, prod_db.customer),
         )
+
+
+def test_worker_claims_a_search_that_arrives_while_a_slow_batch_is_running(prod_db, monkeypatch):
+    import threading
+    import time
+
+    prod_db.admin.execute("delete from instant_searches")
+    first = _queue_search(prod_db, "barayam slow", deadline_seconds=30)
+    started: list[str] = []
+    first_started = threading.Event()
+    release = threading.Event()
+
+    def fake_run(connect, job, **kwargs):
+        started.append(job.id)
+        if job.id == first:
+            first_started.set()
+            release.wait(10)
+
+    monkeypatch.setattr(instant_search, "run_instant_search", fake_run)
+    stop = threading.Event()
+    thread = scheduler.start_instant_search_worker(
+        prod_db.connect, stop, poll_seconds=0.1, log=lambda line: None
+    )
+    try:
+        assert first_started.wait(5), started
+        second = _queue_search(prod_db, "barayam tengah", deadline_seconds=30)
+        claimed = None
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            row = prod_db.admin.execute(
+                "select status, started_at, error_code from instant_searches where id = %s",
+                (second,),
+            ).fetchone()
+            if row["started_at"] is not None:
+                claimed = row
+                break
+            time.sleep(0.05)
+        assert claimed is not None, (started, prod_db.admin.execute(
+            "select id, status, started_at, error_code from instant_searches order by created_at"
+        ).fetchall())
+        assert claimed["status"] == "running"
+        assert claimed["error_code"] != "deadline"
+    finally:
+        release.set()
+        stop.set()
+        thread.join(5)

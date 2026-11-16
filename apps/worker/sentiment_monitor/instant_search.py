@@ -33,6 +33,7 @@ from sentiment_monitor.providers.settings import load_provider_settings
 ROUTE_TIMEOUT_SECONDS = 20
 SEARCH_DEADLINE_SECONDS = 40
 MAX_CONCURRENCY = 6
+MAX_INFLIGHT = 4
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
 
@@ -784,4 +785,52 @@ def run_instant_search_cycle(
                 _run_job_safely(connect, job, kwargs)
     finally:
         tx.run(lambda conn: expire_old_searches(conn, now))
+    return len(jobs)
+
+
+def run_instant_search_poll(
+    connect: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    limits: Any,
+    submit: Any,
+    in_flight: set[Any],
+    settings: Mapping[str, ProviderSetting] | None = None,
+    fetcher: Any = fetch_platform,
+    deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
+    max_inflight: int = MAX_INFLIGHT,
+    max_searches: int | None = None,
+) -> int:
+    """Sweep and claim on the poll cadence, without waiting for running jobs.
+
+    The daemon calls this every ``poll_seconds`` and runs each claimed search on
+    a long-lived pool. New arrivals therefore become claimable while an earlier
+    batch is still fetching; ``for update skip locked`` plus the immediate
+    per-claim commit keep multiple workers from double-claiming.
+    """
+    del limits
+    tx = _Transactions(connect)
+    tx.run(lambda conn: _fail_deadline_missed_searches(conn, now))
+    capacity = max(0, int(max_inflight) - len(in_flight))
+    limit = 4 if max_searches is None else max(0, int(max_searches))
+    limit = min(limit, capacity)
+    jobs: list[InstantSearchJob] = []
+    seen: set[str] = set()
+    while len(jobs) < limit:
+        job = tx.run(lambda conn: claim_instant_search(conn, "instant-search-worker"))
+        if job is None or job.id in seen:
+            break
+        seen.add(job.id)
+        jobs.append(job)
+    kwargs = {
+        "env": env,
+        "now": now,
+        "settings": settings,
+        "fetcher": fetcher,
+        "deadline_seconds": deadline_seconds,
+    }
+    for job in jobs:
+        in_flight.add(submit(_run_job_safely, connect, job, kwargs))
+    tx.run(lambda conn: expire_old_searches(conn, now))
     return len(jobs)
