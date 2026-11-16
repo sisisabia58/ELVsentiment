@@ -230,18 +230,17 @@ await insertSearch({
   startedAt: from(completedCreated, 1),
   finishedAt: from(completedCreated, 31),
   stance: "campuran",
-  credits: 12,
+  credits: 6,
   summaryStatus: "skipped",
 });
 
 const completedSources: Array<[string, string, "answered" | "unavailable", number, number | null, string]> = [
-  ["threads", "scrapecreators", "answered", 14, 3200, "ok"],
-  ["tiktok", "scrapecreators", "answered", 11, 4800, "ok"],
-  ["youtube", "scrapeatlas", "answered", 11, 2600, "ok"],
-  ["instagram", "scrapecreators", "answered", 9, 4100, "ok"],
-  ["web", "scrapeatlas", "answered", 8, 5100, "ok"],
-  ["facebook", "scrapeatlas", "answered", 7, 5100, "ok"],
-  ["x", "official_x", "answered", 5, 3400, "ok"],
+  ["threads", "scrapecreators", "answered", 2, 3200, "ok"],
+  ["tiktok", "scrapecreators", "answered", 2, 4800, "ok"],
+  ["youtube", "scrapeatlas", "answered", 2, 2600, "ok"],
+  ["instagram", "scrapecreators", "answered", 1, 4100, "ok"],
+  ["facebook", "scrapeatlas", "answered", 1, 5100, "ok"],
+  ["linkedin", "scrapeatlas", "answered", 0, 3300, "ok"],
   ["reddit", "scrapeatlas", "unavailable", 0, null, "deadline"],
 ];
 for (const [platform, provider, state, count, latency, detail] of completedSources) {
@@ -355,29 +354,6 @@ await insertResult(completedId, {
   replies: 58,
   rank: 7,
 });
-await insertResult(completedId, {
-  platform: "x",
-  externalId: "x-barayam-1",
-  authorName: "Bimo",
-  authorHandle: "bimo_ad",
-  text: "barayam tuh enak tapi hypenya bikin antre gak masuk akal",
-  publishedAt: ago({ days: 2 }),
-  views: 8100,
-  likes: 312,
-  replies: 24,
-  rank: 8,
-});
-await insertResult(completedId, {
-  platform: "web",
-  externalId: "web-barayam-1",
-  authorName: "Portal Kuliner",
-  authorHandle: "portalkuliner.id",
-  text: "Berawal dari satu gerai di Ciledug, Barayam ramai setelah diulas kreator kuliner dan kini membuka cabang di Jabodetabek.",
-  title: "Barayam, ayam goreng bawang putih asal Ciledug yang kini buka belasan cabang",
-  publishedAt: ago({ days: 7 }),
-  rank: 9,
-});
-
 const runningCreated = ago({ seconds: 15 });
 await insertSearch({
   id: runningId,
@@ -387,17 +363,15 @@ await insertSearch({
   startedAt: from(runningCreated, 1),
   finishedAt: null,
   stance: null,
-  credits: 6,
+  credits: 4,
   summaryStatus: "pending",
 });
 const runningSources: Array<["answered" | "searching" | "queued" | "unavailable", string, string, number, number | null, string]> = [
-  ["answered", "threads", "scrapecreators", 14, 3200, "ok"],
-  ["answered", "tiktok", "scrapecreators", 11, 4800, "ok"],
-  ["answered", "youtube", "scrapeatlas", 11, 2600, "ok"],
-  ["answered", "facebook", "scrapeatlas", 7, 5100, "ok"],
+  ["answered", "threads", "scrapecreators", 1, 3200, "ok"],
+  ["answered", "tiktok", "scrapecreators", 1, 4800, "ok"],
+  ["answered", "youtube", "scrapeatlas", 1, 2600, "ok"],
+  ["answered", "facebook", "scrapeatlas", 0, 5100, "ok"],
   ["searching", "instagram", "scrapecreators", 0, null, "searching"],
-  ["searching", "web", "scrapeatlas", 0, null, "searching"],
-  ["queued", "x", "official_x", 0, null, "queued"],
   ["unavailable", "reddit", "scrapeatlas", 0, null, "not_found"],
 ];
 for (const [state, platform, provider, count, latency, detail] of runningSources) {
@@ -451,17 +425,16 @@ await insertSearch({
   startedAt: from(coffeeCreated, 1),
   finishedAt: from(coffeeCreated, 24),
   stance: "positif",
-  credits: 9,
+  credits: 7,
   summaryStatus: "skipped",
 });
 for (const [platform, provider, count] of [
-  ["threads", "scrapecreators", 4],
-  ["tiktok", "scrapecreators", 3],
-  ["instagram", "scrapecreators", 2],
-  ["youtube", "scrapeatlas", 1],
-  ["web", "scrapeatlas", 1],
-  ["facebook", "scrapeatlas", 1],
-  ["x", "official_x", 0],
+  ["threads", "scrapecreators", 1],
+  ["tiktok", "scrapecreators", 1],
+  ["instagram", "scrapecreators", 0],
+  ["youtube", "scrapeatlas", 0],
+  ["facebook", "scrapeatlas", 0],
+  ["linkedin", "scrapeatlas", 0],
   ["reddit", "scrapeatlas", 0],
 ] as const) {
   await insertSource(coffeeId, platform, provider, "answered", count, 2400, "ok");
@@ -506,7 +479,7 @@ await insertSearch({
 for (const [platform, provider, state] of [
   ["threads", "scrapecreators", "unavailable"],
   ["tiktok", "scrapecreators", "unavailable"],
-  ["x", "official_x", "failed"],
+  ["linkedin", "scrapeatlas", "unavailable"],
 ] as const) {
   await insertSource(footballId, platform, provider, state, 0, null, state === "failed" ? "timeout" : "http_5xx");
 }
