@@ -4,12 +4,12 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Clock, MessageSquareText, Search, Sparkles } from "lucide-react";
-import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
 import { DEFAULT_FILTERS, type SearchFilters } from "@/monitor/search/filters";
 import { startSearchAction } from "@/app/cari/actions";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
+import { StanceChip } from "./stance-chip";
 
 export type SearchHistoryRow = {
   id: string;
@@ -28,22 +28,6 @@ const ERROR_COPY: Record<string, string> = {
   invalid_query: "Kata kunci minimal 2 karakter.",
   query_too_long: "Kata kunci maksimal 160 karakter.",
 };
-
-const STANCE_STYLE: Record<string, string> = {
-  positif: "bg-positif-bg text-positif",
-  campuran: "bg-warning-bg text-warning",
-  negatif: "bg-negatif-bg text-negatif",
-  netral: "bg-netral-bg text-netral",
-  faktual: "bg-info-bg text-info",
-};
-
-export function StanceChip(props: { stance: string }) {
-  return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize", STANCE_STYLE[props.stance] ?? STANCE_STYLE.netral)}>
-      {props.stance}
-    </span>
-  );
-}
 
 function RecentSearches(props: { history: SearchHistoryRow[]; now: string }) {
   return (
