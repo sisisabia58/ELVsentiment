@@ -26,6 +26,10 @@ def load_limits(path: Path, env: dict[str, str] | None = None) -> Limits:
         raw = source.get(name)
         return int(raw) if raw not in (None, "") else int(file[key])
 
+    def optional_value(name: str, key: str, default: int) -> int:
+        raw = source.get(name)
+        return int(raw) if raw not in (None, "") else int(file.get(key, default))
+
     limits = Limits(
         x_monthly_global_post_reads=value("X_MONTHLY_GLOBAL_POST_READS", "x_monthly_global_post_reads"),
         x_monthly_per_customer_post_reads=value("X_MONTHLY_PER_CUSTOMER_POST_READS", "x_monthly_per_customer_post_reads"),
@@ -36,7 +40,7 @@ def load_limits(path: Path, env: dict[str, str] | None = None) -> Limits:
         max_jobs_per_tick=value("MAX_JOBS_PER_TICK", "max_jobs_per_tick"),
         worker_poll_seconds=value("WORKER_POLL_SECONDS", "worker_poll_seconds"),
         worker_heartbeat_stale_seconds=value("WORKER_HEARTBEAT_STALE_SECONDS", "worker_heartbeat_stale_seconds"),
-        cari_daily_search_limit=value("CARI_DAILY_SEARCH_LIMIT", "cari_daily_search_limit"),
+        cari_daily_search_limit=optional_value("CARI_DAILY_SEARCH_LIMIT", "cari_daily_search_limit", 20),
     )
     if limits.threads_rolling_24h_reserve > limits.threads_rolling_24h_platform:
         raise ValueError("threads_reserve")
