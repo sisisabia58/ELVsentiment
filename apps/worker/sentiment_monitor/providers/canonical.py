@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
-from datetime import datetime
+from datetime import datetime, timezone
+import math
 import re
 from typing import Iterable, Literal
 import urllib.parse
@@ -128,6 +129,127 @@ def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase")
         if all(_word_pattern(token).search(haystack) for token in tokens):
             return "all_words_match"
     return "no_match"
+
+
+MAX_DB_COUNT = 2**63 - 1
+MAX_CREDIT = 2**31 - 1
+_ASCII_INT = re.compile(r"[0-9]+")
+_SURROGATES = re.compile(r"[\ud800-\udfff]")
+
+
+def safe_optional_int(value: object, *, maximum: int = MAX_DB_COUNT) -> int | None:
+    """Accept an ASCII integer, reject negatives/non-finite values, clamp high."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        number = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not _ASCII_INT.fullmatch(text):
+            return None
+        number = int(text)
+    else:
+        return None
+    if number < 0:
+        return None
+    return min(number, maximum)
+
+
+def safe_credit(value: object) -> int | None:
+    return safe_optional_int(value, maximum=MAX_CREDIT)
+
+
+def _clean_text(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    cleaned = _SURROGATES.sub("", value.replace("\x00", ""))
+    try:
+        cleaned.encode("utf-8")
+    except UnicodeEncodeError:
+        cleaned = cleaned.encode("utf-8", "replace").decode("utf-8")
+    return cleaned
+
+
+def _iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _epoch_iso(value: int | float) -> str | None:
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    if abs(number) >= 1e11:
+        number /= 1000.0
+    try:
+        parsed = datetime.fromtimestamp(number, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return _iso(parsed)
+
+
+def safe_published_at(value: object) -> str | None:
+    """Only keep ISO-8601 or epoch seconds/milliseconds that form real dates."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return _epoch_iso(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if _ASCII_INT.fullmatch(text):
+        try:
+            return _epoch_iso(int(text))
+        except ValueError:
+            return None
+    candidate = text.replace("Z", "+00:00").replace("z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return _iso(parsed)
+
+
+def sanitize_post(post: CanonicalPost) -> CanonicalPost:
+    return replace(
+        post,
+        external_id=str(_clean_text(post.external_id) or ""),
+        text=str(_clean_text(post.text) or ""),
+        title=_clean_text(post.title),
+        author_name=_clean_text(post.author_name),
+        author_handle=_clean_text(post.author_handle),
+        url=_clean_text(post.url),
+        thumbnail_url=_clean_text(post.thumbnail_url),
+        published_at=safe_published_at(post.published_at),
+        views=safe_optional_int(post.views),
+        likes=safe_optional_int(post.likes),
+        replies=safe_optional_int(post.replies),
+        shares=safe_optional_int(post.shares),
+        hashtags=tuple(str(_clean_text(tag)) for tag in post.hashtags),
+        raw_ref=str(_clean_text(post.raw_ref) or ""),
+        routes=tuple(str(_clean_text(route)) for route in post.routes),
+    )
+
+
+def sanitize_comment(comment: CanonicalComment) -> CanonicalComment:
+    return replace(
+        comment,
+        external_id=str(_clean_text(comment.external_id) or ""),
+        text=str(_clean_text(comment.text) or ""),
+        author_name=_clean_text(comment.author_name),
+        author_handle=_clean_text(comment.author_handle),
+        published_at=safe_published_at(comment.published_at),
+        likes=safe_optional_int(comment.likes),
+        replies=safe_optional_int(comment.replies),
+        raw_ref=str(_clean_text(comment.raw_ref) or ""),
+    )
 
 
 def post_identity(post: CanonicalPost) -> tuple[str, str] | None:

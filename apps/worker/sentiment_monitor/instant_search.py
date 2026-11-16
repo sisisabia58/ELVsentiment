@@ -21,6 +21,9 @@ from sentiment_monitor.providers.canonical import (
     filter_since,
     keyword_relevance,
     post_identity,
+    safe_credit,
+    sanitize_comment,
+    sanitize_post,
     sort_posts,
 )
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
@@ -248,6 +251,7 @@ def insert_posts(conn: Any, job: InstantSearchJob, posts: Iterable[CanonicalPost
     _set_customer(conn, job.customer_id)
     inserted = 0
     for item in posts:
+        item = sanitize_post(item)
         identity = post_identity(item)
         if identity is None:
             continue
@@ -302,6 +306,7 @@ def insert_comments(
     _set_customer(conn, job.customer_id)
     inserted = 0
     for item in comments:
+        item = sanitize_comment(item)
         cursor = conn.execute(
             """
             insert into instant_search_comments
@@ -351,7 +356,7 @@ def record_call(conn: Any, job: InstantSearchJob, call: RouteCall) -> None:
             str(call.provider),
             str(call.platform),
             _safe_route(call.route),
-            call.credits_charged if type(call.credits_charged) is int else None,
+            safe_credit(call.credits_charged),
             call.http_status if type(call.http_status) is int else None,
             _safe_detail(call.safe_detail),
             call.body_length if type(call.body_length) is int else None,
@@ -433,6 +438,7 @@ def _enabled_platforms(settings: Mapping[str, ProviderSetting]) -> list[tuple[st
 
 
 def _normalize(post: CanonicalPost, job: InstantSearchJob) -> CanonicalPost:
+    post = sanitize_post(post)
     text = post.text or ""
     return replace(
         post,
@@ -442,7 +448,7 @@ def _normalize(post: CanonicalPost, job: InstantSearchJob) -> CanonicalPost:
 
 
 def _known_credit_sum(calls: Iterable[RouteCall]) -> int | None:
-    known = [call.credits_charged for call in calls if type(call.credits_charged) is int]
+    known = [value for call in calls if (value := safe_credit(call.credits_charged)) is not None]
     if not known:
         return None
     return sum(known)

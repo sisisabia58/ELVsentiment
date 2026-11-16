@@ -14,6 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from sentiment_monitor.providers.canonical import safe_credit
+
 SCRAPEATLAS_BASE_URL = "https://api.scrapeatlas.com"
 MAX_ERROR_BODY_CHARS = 65536
 
@@ -102,10 +104,7 @@ def _header_int(headers: Any, name: str) -> int | None:
     value = _header(headers, name)
     if isinstance(value, bool):
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return safe_credit(value)
 
 
 def credits_from_headers(headers: Any) -> tuple[int | None, int | None]:
