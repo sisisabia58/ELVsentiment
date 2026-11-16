@@ -456,3 +456,54 @@ def test_worker_claims_a_search_that_arrives_while_a_slow_batch_is_running(prod_
         release.set()
         stop.set()
         thread.join(5)
+
+
+def test_oversized_credit_headers_are_unknown_and_do_not_leave_the_search_running(prod_db):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam kredit", deadline_seconds=30)
+    oversized = 2**31 - 1
+
+    def fetch(platform, keyword, settings, **kwargs):
+        calls = [
+            RouteCall(
+                "scrapeatlas",
+                platform,
+                "scrapeatlas.search",
+                "success",
+                200,
+                oversized,
+                10,
+                5,
+                "ok",
+            )
+            for _ in range(2)
+        ]
+        return PlatformFetch(
+            platform,
+            "scrapeatlas",
+            [_post(platform, f"{platform}-1")],
+            calls,
+            "answered",
+            "ok",
+            5,
+        )
+
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetch,
+        settings={"youtube": DEFAULT_SETTINGS["youtube"]},
+    )
+    assert processed == 1
+    view = prod_db.view(search_id)
+    assert view["search"]["status"] in ("succeeded", "partial"), view
+    assert view["search"]["finished_at"] is not None, view
+    assert view["search"]["credits_used"] == 0, view
+    assert view["sources"][0]["state"] == "answered", view
+    assert view["counts"].get("youtube") == 1, view
+    ledger = prod_db.admin.execute(
+        "select credits_charged from search_credit_ledger where search_id = %s", (search_id,)
+    ).fetchall()
+    assert [row["credits_charged"] for row in ledger] == [None, None], ledger

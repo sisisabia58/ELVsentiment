@@ -132,7 +132,7 @@ def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase")
 
 
 MAX_DB_COUNT = 2**63 - 1
-MAX_CREDIT = 2**31 - 1
+MAX_CREDIT = 1_000_000
 _ASCII_INT = re.compile(r"[0-9]+")
 _SURROGATES = re.compile(r"[\ud800-\udfff]")
 
@@ -160,7 +160,15 @@ def safe_optional_int(value: object, *, maximum: int = MAX_DB_COUNT) -> int | No
 
 
 def safe_credit(value: object) -> int | None:
-    return safe_optional_int(value, maximum=MAX_CREDIT)
+    """Credits outside a sane per-call range are unknown, not clamped.
+
+    Clamping an oversized header to a large int would let two calls overflow
+    the summed credit columns and abort storage (leaving the search running).
+    """
+    parsed = safe_optional_int(value, maximum=MAX_CREDIT)
+    if parsed is None or parsed >= MAX_CREDIT:
+        return None
+    return parsed
 
 
 def _clean_text(value: object) -> object:
