@@ -33,6 +33,9 @@ from sentiment_monitor.providers.settings import load_provider_settings
 
 ROUTE_TIMEOUT_SECONDS = 20
 SEARCH_DEADLINE_SECONDS = 40
+# Launching a paid route with less budget than this only pays for a result we
+# will immediately mark unavailable. Leave the whole wave unlaunched instead.
+MIN_LAUNCH_SECONDS = 8.0
 # Seven launch platforms: one search's routes must fit in a single wave.
 MAX_CONCURRENCY = 7
 MAX_INFLIGHT = 8
@@ -685,6 +688,31 @@ def _remaining_seconds(
     return limit
 
 
+def _record_late_calls(connect: Any, job: InstantSearchJob, future: Any) -> None:
+    """Persist a straggler's paid calls after the search already finished.
+
+    The callback runs in the executor thread that completed the future. It uses
+    a fresh transaction and never touches the search or source rows, so the
+    terminal state the user already saw does not change. If the process exits
+    before the straggler returns, its ledger row is lost; that is the one
+    accepted gap.
+    """
+    try:
+        result = future.result()
+    except Exception:
+        return
+    calls = list(getattr(result, "calls", None) or [])
+    if not calls:
+        return
+    try:
+        _Transactions(connect).run(
+            lambda conn: [record_call(conn, job, call) for call in calls]
+        )
+    except Exception:
+        # A late ledger failure must never escape into the worker thread.
+        pass
+
+
 def run_instant_search(
     connect: Any,
     job: InstantSearchJob,
@@ -722,7 +750,7 @@ def run_instant_search(
         # The row's own deadline_at is the budget, not a fresh 40 s from claim
         # time: a search claimed late must still finish by its promised time.
         remaining = _remaining_seconds(job, deadline_seconds, datetime.now(timezone.utc))
-        if remaining <= 0:
+        if remaining < MIN_LAUNCH_SECONDS:
             for platform, chain in sources:
                 tx.run(
                     lambda conn, platform=platform, chain=chain: set_source_state(
@@ -777,6 +805,13 @@ def run_instant_search(
                         _mark_source_failed(tx, job, platform, chain)
             for future in pending:
                 platform, chain = futures[future]
+                # A route that finishes after the deadline was still paid for.
+                # Record its calls once it lands, without changing the state
+                # the search already showed.
+                if tx.factory:
+                    future.add_done_callback(
+                        lambda done, job=job: _record_late_calls(connect, job, done)
+                    )
                 future.cancel()
                 tx.run(
                     lambda conn, platform=platform, chain=chain: set_source_state(

@@ -228,7 +228,7 @@ def test_cycle_runs_three_queued_searches_concurrently(prod_db):
     import time
 
     prod_db.admin.execute("delete from instant_searches")
-    ids = [_queue_search(prod_db, f"barayam {index}", deadline_seconds=8) for index in range(3)]
+    ids = [_queue_search(prod_db, f"barayam {index}", deadline_seconds=20) for index in range(3)]
 
     def slow(platform, keyword, settings, **kwargs):
         time.sleep(1)
@@ -249,7 +249,7 @@ def test_cycle_runs_three_queued_searches_concurrently(prod_db):
         now=datetime.now(timezone.utc),
         limits=None,
         fetcher=slow,
-        deadline_seconds=6,
+        deadline_seconds=20,
         max_searches=4,
     )
     elapsed = time.monotonic() - started
@@ -601,7 +601,7 @@ def test_far_offset_date_on_one_platform_does_not_abort_the_search(prod_db):
     assert len(calls) == 7
 
 
-def test_normalisation_exception_on_one_platform_is_isolated(prod_db, monkeypatch):
+def test_normalisation_exception_on_one_post_keeps_its_siblings(prod_db, monkeypatch):
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
     fetcher, calls = _seven_platform_fetch()
@@ -609,7 +609,7 @@ def test_normalisation_exception_on_one_platform_is_isolated(prod_db, monkeypatc
     original = instant_search._normalize
 
     def exploding_normalize(item, job):
-        if item.platform == "youtube":
+        if item.platform == "youtube" and item.external_id == "youtube-1":
             raise RuntimeError("synthetic normalisation failure")
         return original(item, job)
 
@@ -622,8 +622,22 @@ def test_normalisation_exception_on_one_platform_is_isolated(prod_db, monkeypatc
         fetcher=fetcher,
     )
     assert processed == 1
-    _assert_isolated_search(prod_db, search_id, calls, youtube_state="failed")
-    assert len(calls) == 7
+    view = prod_db.view(search_id)
+    assert view["ledger"] == 7, view
+    states = {row["platform"]: row for row in view["sources"]}
+    assert len(states) == 7, view
+    assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
+    for platform in ("threads", "tiktok", "instagram", "reddit", "facebook", "linkedin"):
+        assert states[platform]["state"] == "answered", view
+        assert states[platform]["result_count"] == 3, view
+        assert view["counts"].get(platform) == 3, view
+    assert states["youtube"]["state"] == "answered", view
+    assert states["youtube"]["result_count"] == 2, view
+    assert view["counts"].get("youtube") == 2, view
+    assert calls == ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"] or (
+        sorted(calls) == sorted(["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"])
+    ), calls
+    assert view["search"]["status"] in ("succeeded", "partial"), view
 
 
 def test_oversized_external_id_drops_only_that_post(prod_db):
@@ -756,6 +770,7 @@ def test_search_finishes_by_its_own_deadline_not_claim_plus_budget(prod_db, monk
     import time
 
     monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 1.0)
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=1.2)
     calls: list[str] = []
@@ -1159,3 +1174,101 @@ def test_far_dates_never_drop_a_platform_or_its_paid_ledger_row(
                 baseline=baseline_sc,
                 label=label,
             )
+
+
+def test_no_fetch_is_launched_with_less_than_the_minimum_budget(prod_db):
+    import time
+
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=5)
+    calls: list[str] = []
+
+    def fetch(platform, keyword, settings, **kwargs):
+        calls.append(platform)
+        time.sleep(10)
+        return _fast_fetch(platform, keyword, settings, **kwargs)
+
+    started = time.monotonic()
+    _poll_once(prod_db, fetch)
+    elapsed = time.monotonic() - started
+    assert calls == []
+    assert elapsed < 2.0, elapsed
+    view = prod_db.view(search_id)
+    assert view["ledger"] == 0, view
+    assert view["search"]["status"] in ("failed", "partial"), view
+    assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
+    for row in view["sources"]:
+        assert (row["state"], row["safe_detail"]) == ("unavailable", "deadline"), view
+
+
+def test_straggler_paid_call_reaches_the_ledger_after_the_deadline(prod_db, monkeypatch):
+    import time
+
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 5.0)
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=1.5)
+    calls: list[str] = []
+
+    def fetch(platform, keyword, settings, **kwargs):
+        calls.append(platform)
+        time.sleep(2.5 if platform == "youtube" else 0.1)
+        return PlatformFetch(
+            platform,
+            "scrapeatlas",
+            [_post(platform, f"{platform}-1")],
+            [_call(platform, "")],
+            "answered",
+            "ok",
+            5,
+        )
+
+    started = time.monotonic()
+    _poll_once(prod_db, fetch, deadline_seconds=40)
+    elapsed = time.monotonic() - started
+    view = prod_db.view(search_id)
+    sources = {row["platform"]: row for row in view["sources"]}
+    assert sources["youtube"]["state"] == "unavailable", view
+    assert sources["youtube"]["safe_detail"] == "deadline", view
+    assert len(calls) == 7, calls
+    assert view["ledger"] == len(calls), view
+    ledger_platforms = prod_db.admin.execute(
+        "select platform, count(*) as n from search_credit_ledger where search_id = %s group by platform",
+        (search_id,),
+    ).fetchall()
+    assert {row["platform"]: row["n"] for row in ledger_platforms}["youtube"] == 1
+    finished_after = prod_db.admin.execute(
+        "select extract(epoch from finished_at - created_at) as s from instant_searches where id = %s",
+        (search_id,),
+    ).fetchone()["s"]
+    assert finished_after is not None and float(finished_after) < 2.5, finished_after
+    assert elapsed < 5.0, elapsed
+
+    again = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetch,
+        settings=dict(DEFAULT_SETTINGS),
+    )
+    assert again == 0
+    assert len(calls) == 7
+
+
+def test_queued_search_past_its_deadline_is_ended_without_a_fetch(prod_db):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=-1)
+    calls: list[str] = []
+
+    def fetch(platform, keyword, settings, **kwargs):
+        calls.append(platform)
+        raise AssertionError("must not fetch a search past its deadline")
+
+    _poll_once(prod_db, fetch)
+    assert calls == []
+    view = prod_db.view(search_id)
+    assert view["search"]["status"] in ("failed", "partial"), view
+    assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
+    for row in view["sources"]:
+        assert (row["state"], row["safe_detail"]) == ("unavailable", "deadline"), view
