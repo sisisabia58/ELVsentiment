@@ -9,7 +9,11 @@ import {
   LayoutDashboard,
   Menu,
   MessageSquareText,
+  Search,
+  Settings,
   TriangleAlert,
+  Wallet,
+  History,
   X,
 } from "lucide-react";
 import { cn } from "cn";
@@ -35,16 +39,34 @@ export function WorkspaceShell(props: {
   initials: string;
   attention: number;
   uncertain: number;
+  searchEnabled?: boolean;
+  admin?: boolean;
   logout?: ReactNode;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const counts = { attention: props.attention, uncertain: props.uncertain };
+  const searchEnabled = props.searchEnabled ?? false;
   const nav = (
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center px-4">
         <Wordmark />
       </div>
+      {searchEnabled ? (
+        <div className="px-3 pb-2">
+          <div className="rounded-lg border border-border bg-surface p-3 shadow-card">
+            <div className="flex items-center justify-between text-[12px]">
+              <span className="flex items-center gap-1.5 font-medium text-foreground">
+                <Wallet className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                Kredit pencarian
+              </span>
+            </div>
+            <p className="mt-1 text-[11.5px] leading-4 text-muted-foreground">
+              1 kredit per pencarian · 1 kredit per pertanyaan
+            </p>
+          </div>
+        </div>
+      ) : null}
       <div className="px-3">
         <details className="group">
           <summary className="flex min-h-[44px] min-w-[44px] max-w-full cursor-pointer list-none items-center gap-2.5 rounded-lg border border-border bg-surface px-2.5 shadow-card">
@@ -75,8 +97,40 @@ export function WorkspaceShell(props: {
           </div>
         </details>
       </div>
-      <nav aria-label="Navigasi utama" className="mt-5 min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4">
-        <p className="px-3 pb-1 text-[11px] font-semibold tracking-wide text-muted-foreground">PANTAU</p>
+      <nav aria-label="Navigasi utama" className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+        {searchEnabled ? (
+          <>
+            <p className="px-3 pb-1 text-[11px] font-semibold tracking-wide text-muted-foreground">CARI</p>
+            {[
+              { href: "/cari", label: "Cari sekarang", icon: Search },
+              { href: "/cari/riwayat", label: "Riwayat pencarian", icon: History },
+            ].map((item) => {
+              const Icon = item.icon;
+              const active = props.active === item.href || (item.href === "/cari" && props.active.startsWith("/cari/") && props.active !== "/cari/riwayat");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setOpen(false)}
+                  className={cn(
+                    "flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium lg:h-10",
+                    active ? "bg-info-bg text-primary" : "text-muted-foreground hover:bg-surface-subtle hover:text-foreground",
+                  )}
+                >
+                  <Icon className={cn("size-[18px]", active ? "text-primary" : "text-muted-foreground")} aria-hidden="true" />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  {item.href === "/cari" ? (
+                    <span aria-hidden="true" className="rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">Baru</span>
+                  ) : null}
+                </Link>
+              );
+            })}
+            <p className="px-3 pb-1 pt-4 text-[11px] font-semibold tracking-wide text-muted-foreground">PANTAU</p>
+          </>
+        ) : (
+          <p className="px-3 pb-1 text-[11px] font-semibold tracking-wide text-muted-foreground">PANTAU</p>
+        )}
         {NAV.map((item, index) => {
           const Icon = item.icon;
           const active = props.active === item.href;
@@ -122,6 +176,15 @@ export function WorkspaceShell(props: {
           </span>
         </div>
         <div className="mt-1 flex flex-col [&_button]:h-11 [&_button]:min-h-11 [&_button]:w-full [&_button]:justify-start [&_button]:px-2">
+          {props.admin ? (
+            <Link
+              href="/pengaturan/provider"
+              className="flex min-h-11 items-center gap-2 rounded-md px-2 text-sm text-foreground hover:bg-surface-subtle"
+            >
+              <Settings className="size-4 text-muted-foreground" aria-hidden="true" />
+              Pengaturan provider
+            </Link>
+          ) : null}
           <Link href="/akun" className="flex min-h-11 items-center rounded-md px-2 text-sm text-foreground hover:bg-surface-subtle">
             Profil
           </Link>
@@ -143,7 +206,13 @@ export function WorkspaceShell(props: {
             <Menu className="size-5" aria-hidden="true" />
           </button>
           <Wordmark />
-          <span className="size-11" />
+          {searchEnabled ? (
+            <span className="rounded-full bg-surface-subtle px-2 py-1 text-[11px] font-medium tabular-nums text-foreground">
+              1 kr / cari
+            </span>
+          ) : (
+            <span className="size-11" />
+          )}
         </header>
         <main id="konten" className="min-w-0 flex-1">
           {props.children}
@@ -173,6 +242,8 @@ export function Frame(props: {
     project: { id: string; name: string; initials: string } | null;
     projects: { id: string; name: string; initials: string }[];
     mentions: { attentionUnread: boolean; bucket: string; confirmed: boolean; corrected: boolean }[];
+    cariEnabled?: boolean;
+    isAdmin?: boolean;
   };
   logout?: ReactNode;
   children: ReactNode;
@@ -192,6 +263,8 @@ export function Frame(props: {
       initials={props.workspace.initials}
       attention={attention}
       uncertain={uncertain}
+      searchEnabled={props.workspace.cariEnabled ?? false}
+      admin={props.workspace.isAdmin ?? false}
       logout={props.logout}
     >
       <div className="mx-auto w-full max-w-[1320px] px-4 pb-28 pt-5 lg:px-8 lg:pt-8">{props.children}</div>

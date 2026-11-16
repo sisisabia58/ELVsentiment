@@ -1,7 +1,9 @@
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
+import { isAdminEmail } from "../auth/admin";
 import type { OwnerCorrection } from "../domain/display";
 import type { KeywordIntent } from "../domain/keyword-intent";
+import { cariSekarangEnabled } from "./search/feature";
 import type { ScheduleLimits } from "../projects/schedules";
 import { buildDashboard, type DashboardModel, type SourceKey } from "./dashboard";
 import { asSources, type SourceCredentials } from "./onboarding-draft";
@@ -70,6 +72,8 @@ export type Workspace = {
   topicCountingApproved: boolean;
   highImpact: boolean;
   credentials: SourceCredentials;
+  cariEnabled?: boolean;
+  isAdmin?: boolean;
 };
 
 function iso(value: string | Date | null | undefined): string | null {
@@ -260,6 +264,8 @@ export async function loadWorkspace(
     );
     const account = user.rows[0];
     const displayName = account?.display_name?.trim() || account?.email || "Pemilik";
+    const cariEnabled = cariSekarangEnabled();
+    const isAdmin = isAdminEmail(account?.email);
     const projectRows = await db.query<{
       id: string;
       brand_name: string;
@@ -324,6 +330,8 @@ export async function loadWorkspace(
         topicCountingApproved: policy.topicCountingApproved,
         highImpact: policy.highImpact,
         credentials,
+        cariEnabled,
+        isAdmin,
       };
     }
     const mentionRows = await db.query<MentionSql>(
@@ -444,6 +452,8 @@ export async function loadWorkspace(
       topicCountingApproved: policy.topicCountingApproved,
       highImpact: policy.highImpact,
       credentials,
+      cariEnabled,
+      isAdmin,
     };
   });
 }

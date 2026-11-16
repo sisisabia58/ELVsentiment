@@ -6,6 +6,57 @@ import { WorkspaceShell } from "./shell";
 
 afterEach(cleanup);
 
+const baseProps = {
+  active: "/cari",
+  projectId: "p1",
+  projectName: "QA Test Brand",
+  projects: [{ id: "p1", name: "QA Test Brand", initials: "QT" }],
+  accountName: "QA Release",
+  accountEmail: "qa@example.com",
+  initials: "QR",
+  attention: 0,
+  uncertain: 0,
+};
+
+describe("cari sekarang navigation", () => {
+  it("shows Cari sekarang and Riwayat pencarian only when enabled", () => {
+    const { rerender } = render(
+      <WorkspaceShell {...baseProps} searchEnabled admin={false}>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    expect(screen.getByText("Cari sekarang")).toBeTruthy();
+    expect(screen.getByText("Riwayat pencarian")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Cari sekarang" }).getAttribute("href")).toBe("/cari");
+    expect(screen.getByRole("link", { name: "Riwayat pencarian" }).getAttribute("href")).toBe("/cari/riwayat");
+    expect(screen.getByText("Kredit pencarian")).toBeTruthy();
+    expect(screen.getByText(/1 kredit per pencarian/)).toBeTruthy();
+
+    rerender(
+      <WorkspaceShell {...baseProps} searchEnabled={false} admin={false}>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    expect(screen.queryByText("Cari sekarang")).toBeNull();
+    expect(screen.queryByText("Riwayat pencarian")).toBeNull();
+  });
+
+  it("shows the provider settings link only for admins", () => {
+    const { rerender } = render(
+      <WorkspaceShell {...baseProps} searchEnabled admin>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    expect(screen.getByRole("link", { name: /Pengaturan provider/ })).toBeTruthy();
+    rerender(
+      <WorkspaceShell {...baseProps} searchEnabled admin={false}>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    expect(screen.queryByRole("link", { name: /Pengaturan provider/ })).toBeNull();
+  });
+});
+
 describe("workspace shell", () => {
   it("gives Profil and Keluar a 44px row in the account menu", () => {
     render(
