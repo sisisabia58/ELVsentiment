@@ -46,6 +46,16 @@ function ProviderRow(props: {
   const [saving, setSaving] = useState(false);
 
   const options = supportedForTarget(row.target);
+  if (options.length === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-surface p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-medium text-foreground">{label}</span>
+          <span className="text-xs text-muted-foreground">Belum tersedia saat peluncuran</span>
+        </div>
+      </div>
+    );
+  }
   const supported = validateProviderChoice(
     row.target,
     provider,
@@ -132,6 +142,7 @@ function ProviderRow(props: {
         <label className="flex items-center gap-2 pt-4 text-xs text-muted-foreground">
           <input
             type="checkbox"
+            className="h-4 w-4 accent-primary"
             aria-label={`Aktifkan cadangan ${label}`}
             checked={fallbackOnFailure}
             onChange={(event) => setFallbackOnFailure(event.target.checked)}

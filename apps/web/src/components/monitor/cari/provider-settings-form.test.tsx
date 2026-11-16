@@ -53,6 +53,21 @@ describe("provider settings form", () => {
     );
   });
 
+  it("renders launch-unavailable platforms as read-only without a save button", () => {
+    render(<ProviderSettingsForm rows={rows()} onSave={vi.fn()} />);
+    expect(screen.getAllByText("Belum tersedia saat peluncuran").length).toBe(2);
+    expect(screen.queryByLabelText("Provider X")).toBeNull();
+    expect(screen.queryByLabelText("Provider Web")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Simpan X" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Simpan Web" })).toBeNull();
+  });
+
+  it("styles the fallback checkbox with the app input styling", () => {
+    render(<ProviderSettingsForm rows={rows()} onSave={vi.fn()} />);
+    const checkbox = screen.getByLabelText("Aktifkan cadangan Threads");
+    expect(checkbox.className).toContain("accent-");
+  });
+
   it("warns about an unsupported stored choice", () => {
     render(
       <ProviderSettingsForm
