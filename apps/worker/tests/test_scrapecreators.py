@@ -149,7 +149,7 @@ class _ReadTimeoutResponse(io.StringIO):
     def __exit__(self, *args):
         return False
 
-    def read(self):
+    def read(self, size=-1):
         raise TimeoutError("synthetic read timeout https://private.example/?q=secret")
 
 
@@ -273,3 +273,27 @@ def test_success_payload_carries_full_body_length_for_parser_failures():
     )
     assert payload.body_length == len('{"unexpected": []}')
     assert not hasattr(payload, "body")
+
+
+def test_oversized_success_body_fails_safely_without_reading_it_all():
+    class OversizedResponse(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    body = b'{"success": true, "mentions": []}' + b" " * (11 * 1024 * 1024)
+
+    def opener(request, timeout=0):
+        return OversizedResponse(body)
+
+    with pytest.raises(ScrapeCreatorsError) as caught:
+        fetch_scrapecreators_json("/v1/threads/search", {"query": "x"}, "synthetic", opener=opener)
+    error = caught.value
+    assert error.code == "body_too_large"
+    assert error.body_length is not None and error.body_length > 10 * 1024 * 1024
+    assert "synthetic" not in str(error)
+    assert "mentions" not in str(error)

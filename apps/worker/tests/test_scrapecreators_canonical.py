@@ -146,3 +146,30 @@ def test_platform_fetch_defaults_match_dispatcher_contract():
     assert fetch.attempted_providers == ()
     assert isinstance(fetch.posts, list)
     assert all(isinstance(item, CanonicalPost) for item in fetch.posts)
+
+
+def test_oversized_scrapecreators_body_becomes_a_safe_failed_fetch():
+    class OversizedResponse(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    body = b'{"posts": []}' + b" " * (11 * 1024 * 1024)
+
+    def opener(request, timeout=0):
+        return OversizedResponse(body)
+
+    result = fetch_scrapecreators_platform(
+        "threads",
+        Keyword("barayam"),
+        api_key="synthetic",
+        collected_at="2026-11-15T00:00:00Z",
+        opener=opener,
+    )
+    assert result.state == "failed"
+    assert result.safe_detail == "body_too_large"
+    assert result.posts == []

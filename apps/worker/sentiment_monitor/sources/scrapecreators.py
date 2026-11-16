@@ -10,6 +10,7 @@ from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com"
 MAX_ERROR_BODY_CHARS = 8192
+MAX_BODY_BYTES = 10 * 1024 * 1024
 
 
 class ScrapeCreatorsError(Exception):
@@ -281,7 +282,7 @@ def fetch_scrapecreators_json(
             # Capture the status before reading so a read failure still knows
             # which response produced it.
             http_status = _response_status(response)
-            raw = response.read()
+            raw = response.read(MAX_BODY_BYTES + 1)
     except urllib.error.HTTPError as error:
         body, body_length = _read_http_error_body(error)
         raise ScrapeCreatorsError(
@@ -294,6 +295,10 @@ def fetch_scrapecreators_json(
         code = "read_timeout" if isinstance(error, TimeoutError) else "transport_error"
         raise ScrapeCreatorsError(code, http_status=http_status) from None
     body_length = _body_length(raw)
+    if isinstance(raw, (bytes, str)) and len(raw) > MAX_BODY_BYTES:
+        raise ScrapeCreatorsError(
+            "body_too_large", http_status=http_status, body_length=body_length
+        ) from None
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
