@@ -78,7 +78,10 @@ def resolve_chain(
     settings: Mapping[str, ProviderSetting],
     mode: ProviderMode = "keyword",
 ) -> tuple[ProviderId, ...]:
-    setting = settings.get(platform)
+    # Comment fetching has one global routing row keyed "comments"; the
+    # platform only decides whether comments are supported there.
+    target = "comments" if mode == "comments" else platform
+    setting = settings.get(target)
     if setting is None or setting.provider == "off":
         return ()
     supported = supported_providers(platform, mode)
