@@ -15,6 +15,7 @@ from sentiment_monitor.instant_search import (
     insert_posts,
     record_call,
     run_instant_search,
+    run_instant_search_cycle,
     search_status,
     set_source_state,
 )
@@ -24,6 +25,7 @@ from sentiment_monitor.providers.fetch import fetch_platform
 from sentiment_monitor.providers.fixtures import fixture_comment_fetch, fixture_platform_fetch
 
 CUSTOMER = "11111111-1111-4111-8111-111111111111"
+SEARCH = "22222222-2222-4222-8222-222222222222"
 
 
 def post(platform: str = "youtube", external_id: str = "vid-1") -> CanonicalPost:
@@ -80,6 +82,80 @@ def test_claim_sql_is_skip_locked_and_rejects_expired_rows():
     assert "status = 'queued'" in sql
     assert "deadline_at > now()" in sql
     assert "for update skip locked" in sql
+
+
+def test_cycle_fails_deadline_missed_rows_before_claiming():
+    conn = RecordingConn(rows=[])
+    processed = run_instant_search_cycle(
+        conn, env={}, now=datetime.now(timezone.utc), limits=None
+    )
+    assert processed == 0
+    first_sql = " ".join(conn.statements[0][0].lower().split())
+    assert "update instant_searches" in first_sql
+    assert "status = 'failed'" in first_sql
+    assert "error_code = 'deadline'" in first_sql
+    assert "deadline_at" in first_sql
+    assert "for update skip locked" not in first_sql
+
+
+def test_cycle_fails_a_queued_search_past_deadline_and_its_pending_sources(db):
+    db.execute(
+        "update instant_searches set deadline_at = now() - interval '5 seconds' where id = %s",
+        (SEARCH,),
+    )
+    db.execute(
+        "insert into instant_search_sources (search_id, customer_id, platform, provider, state) "
+        "values (%s, %s, 'threads', 'scrapecreators', 'queued')",
+        (SEARCH, CUSTOMER),
+    )
+    processed = run_instant_search_cycle(
+        db, env={}, now=datetime.now(timezone.utc), limits=None
+    )
+    assert processed == 0
+    search = db.execute(
+        "select status, error_code, finished_at from instant_searches where id = %s", (SEARCH,)
+    )[0]
+    assert search["status"] == "failed"
+    assert search["error_code"] == "deadline"
+    assert search["finished_at"] is not None
+    source = db.execute(
+        "select state, safe_detail from instant_search_sources "
+        "where search_id = %s and platform = 'threads'",
+        (SEARCH,),
+    )[0]
+    assert source["state"] == "unavailable"
+    assert source["safe_detail"] == "deadline"
+
+
+def test_cycle_does_not_race_a_running_search_within_the_grace_window(db):
+    db.execute(
+        "update instant_searches set status = 'running', started_at = now(), "
+        "deadline_at = now() - interval '10 seconds' where id = %s",
+        (SEARCH,),
+    )
+    processed = run_instant_search_cycle(
+        db, env={}, now=datetime.now(timezone.utc), limits=None
+    )
+    assert processed == 0
+    search = db.execute(
+        "select status, error_code from instant_searches where id = %s", (SEARCH,)
+    )[0]
+    assert search["status"] == "running"
+    assert search["error_code"] is None
+
+
+def test_cycle_fails_a_running_search_well_past_the_grace_window(db):
+    db.execute(
+        "update instant_searches set status = 'running', started_at = now(), "
+        "deadline_at = now() - interval '90 seconds' where id = %s",
+        (SEARCH,),
+    )
+    run_instant_search_cycle(db, env={}, now=datetime.now(timezone.utc), limits=None)
+    search = db.execute(
+        "select status, error_code from instant_searches where id = %s", (SEARCH,)
+    )[0]
+    assert search["status"] == "failed"
+    assert search["error_code"] == "deadline"
 
 
 def test_claim_skips_nonqueued_and_marks_running(db):

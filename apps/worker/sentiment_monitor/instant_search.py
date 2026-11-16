@@ -29,6 +29,7 @@ from sentiment_monitor.providers.settings import load_provider_settings
 ROUTE_TIMEOUT_SECONDS = 20
 SEARCH_DEADLINE_SECONDS = 40
 MAX_CONCURRENCY = 6
+RUNNING_DEADLINE_GRACE_SECONDS = 60
 
 CLAIM_SQL = """
 select id, customer_id, query_text, keyword_intent, date_window, sort_mode,
@@ -586,6 +587,34 @@ def run_instant_search(
     finish_search(conn, job, "failed")
 
 
+FAIL_DEADLINE_SQL = """
+with expired as (
+    update instant_searches
+       set status = 'failed',
+           error_code = 'deadline',
+           finished_at = coalesce(finished_at, %s)
+     where (status = 'queued' and deadline_at <= %s)
+        or (status = 'running' and deadline_at <= %s - interval '60 seconds')
+    returning id
+)
+update instant_search_sources
+   set state = 'unavailable',
+       safe_detail = 'deadline',
+       updated_at = %s
+ where state in ('queued', 'searching')
+   and search_id in (select id from expired)
+"""
+
+
+def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
+    # A queued search past its deadline can never be claimed, and a running
+    # search that missed its deadline by more than the grace window was left by
+    # a crashed runner. Both are finished as failed before the claim loop so the
+    # UI stops polling them forever. The 60 s grace avoids racing an in-flight
+    # runner that is still shutting its route threads down.
+    conn.execute(FAIL_DEADLINE_SQL, (now, now, now, now))
+
+
 def run_instant_search_cycle(
     conn: Any,
     *,
@@ -597,6 +626,7 @@ def run_instant_search_cycle(
     processed = 0
     seen: set[str] = set()
     try:
+        _fail_deadline_missed_searches(conn, now)
         while processed < 2:
             job = claim_instant_search(conn, "instant-search-worker")
             if job is None:
