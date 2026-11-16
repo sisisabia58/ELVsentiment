@@ -1,6 +1,5 @@
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
-import { isAdminEmail } from "../auth/admin";
 import type { OwnerCorrection } from "../domain/display";
 import type { KeywordIntent } from "../domain/keyword-intent";
 import { cariSekarangEnabled } from "./search/feature";
@@ -254,6 +253,7 @@ export async function loadWorkspace(
   requestedProjectId: string | undefined,
   now: Date,
   limits: ScheduleLimits,
+  isAdmin = false,
 ): Promise<Workspace> {
   const policy = readMonitorPolicy();
   const credentials = sourceCredentials();
@@ -265,7 +265,6 @@ export async function loadWorkspace(
     const account = user.rows[0];
     const displayName = account?.display_name?.trim() || account?.email || "Pemilik";
     const cariEnabled = cariSekarangEnabled();
-    const isAdmin = isAdminEmail(account?.email);
     const projectRows = await db.query<{
       id: string;
       brand_name: string;

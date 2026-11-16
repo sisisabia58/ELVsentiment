@@ -1,12 +1,11 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
-import { adminEmailForCustomer, isAdminEmail } from "@/auth/admin";
-import { withSessionDeps } from "@/auth/request-session";
+import { platformAdminForSession, sessionTokenHash } from "@/auth/admin";
+import { readSessionToken, withSessionDeps } from "@/auth/request-session";
 import { LogoutForm } from "@/components/logout-form";
 import { PageHeader } from "@/components/monitor/bits";
 import { ProviderSettingsForm } from "@/components/monitor/cari/provider-settings-form";
 import { Frame } from "@/components/monitor/shell";
-import { withCustomer } from "@/db/migrate";
 import { withClient } from "@/db/pg";
 import { cariSekarangEnabled } from "@/monitor/search/feature";
 import { loadProviderSettingRows } from "@/monitor/search/provider-settings";
@@ -19,12 +18,12 @@ import {
 export async function ProviderPageBody() {
   if (!cariSekarangEnabled()) notFound();
   const { customerId, workspace } = await requireWorkspace(undefined);
+  const token = await readSessionToken();
 
   const data = await withClient(async (db) => {
-    const email = await withCustomer(db, customerId, () =>
-      adminEmailForCustomer(db, customerId),
-    );
-    if (!isAdminEmail(email)) return { authorized: false as const };
+    if (!token) return { authorized: false as const };
+    const admin = await platformAdminForSession(db, customerId, sessionTokenHash(token));
+    if (!admin) return { authorized: false as const };
     return { authorized: true as const, rows: await loadProviderSettingRows(db) };
   });
 

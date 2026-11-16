@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
     now: new Date("2026-11-16T10:00:00Z"),
     workspace: { email: "admin@example.com" },
   })),
-  isAdminEmail: vi.fn(() => true),
+  platformAdmin: vi.fn(async (): Promise<{ userId: string; email: string } | null> => ({
+    userId: "22222222-2222-4222-8222-222222222222",
+    email: "admin@example.com",
+  })),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -27,14 +30,12 @@ vi.mock("@/monitor/search/feature", () => ({
 }));
 vi.mock("@/monitor/session-page", () => ({ requireWorkspace: mocks.requireWorkspace }));
 vi.mock("@/db/pg", () => ({ withClient: async (fn: (db: unknown) => Promise<unknown>) => fn({}) }));
-vi.mock("@/db/migrate", () => ({
-  withCustomer: async (_db: unknown, _customerId: string, fn: () => unknown) => fn(),
-}));
 vi.mock("@/auth/admin", () => ({
-  adminEmailForCustomer: async () => "admin@example.com",
-  isAdminEmail: mocks.isAdminEmail,
+  platformAdminForSession: mocks.platformAdmin,
+  sessionTokenHash: (token: string) => `hash:${token}`,
 }));
 vi.mock("@/auth/request-session", () => ({
+  readSessionToken: async () => "session-token",
   sessionCustomerId: async () => "11111111-1111-4111-8111-111111111111",
   withSessionDeps: (fn: (deps: unknown) => unknown) => fn({}),
 }));
@@ -55,8 +56,11 @@ afterEach(() => {
   cleanup();
   mocks.frame.mockClear();
   mocks.requireWorkspace.mockClear();
-  mocks.isAdminEmail.mockReset();
-  mocks.isAdminEmail.mockReturnValue(true);
+  mocks.platformAdmin.mockReset();
+  mocks.platformAdmin.mockResolvedValue({
+    userId: "22222222-2222-4222-8222-222222222222",
+    email: "admin@example.com",
+  });
   mocks.flag = true;
 });
 
@@ -76,7 +80,7 @@ describe("/pengaturan/provider page", () => {
   });
 
   it("keeps the non-admin message inside the app frame", async () => {
-    mocks.isAdminEmail.mockReturnValue(false);
+    mocks.platformAdmin.mockResolvedValue(null);
     render(await ProviderPageBody());
     expect(screen.getByText(/tidak berwenang/i)).toBeTruthy();
     expect(mocks.frame).toHaveBeenCalledTimes(1);

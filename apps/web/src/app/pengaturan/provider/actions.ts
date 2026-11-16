@@ -1,8 +1,7 @@
 "use server";
 
-import { adminEmailForCustomer, isAdminEmail } from "@/auth/admin";
+import { platformAdminForSession, sessionTokenHash } from "@/auth/admin";
 import { customerIdFromSessionToken, type SessionActionDeps } from "@/auth/session";
-import { withCustomer } from "@/db/migrate";
 import { cariSekarangEnabled } from "@/monitor/search/feature";
 import { saveProviderSetting } from "@/monitor/search/provider-settings";
 
@@ -23,17 +22,21 @@ export async function saveProviderSettingAction(
 ): Promise<ProviderSettingActionResult> {
   if (!cariSekarangEnabled()) return { ok: false, error: "disabled" };
   let customerId: string;
+  let token: string;
   try {
-    customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
+    const read = await deps.readSessionToken();
+    if (!read) return { ok: false, error: "not_admin" };
+    token = read;
+    customerId = await customerIdFromSessionToken(deps.db, token);
   } catch {
     return { ok: false, error: "not_admin" };
   }
-  const email = await withCustomer(deps.db, customerId, () =>
-    adminEmailForCustomer(deps.db, customerId),
-  );
-  if (!isAdminEmail(email)) return { ok: false, error: "not_admin" };
+  const hash = sessionTokenHash(token);
+  const admin = await platformAdminForSession(deps.db, customerId, hash);
+  if (!admin) return { ok: false, error: "not_admin" };
   return saveProviderSetting(deps.db, {
-    actorEmail: email as string,
+    actorEmail: admin.email,
+    sessionTokenHash: hash,
     platform: input.platform,
     provider: input.provider,
     fallbackProvider: input.fallbackProvider,

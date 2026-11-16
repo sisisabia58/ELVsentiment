@@ -47,6 +47,13 @@ const owner = await registerOwner(db, {
   displayName: DISPLAY_NAME,
 });
 
+// Operator-granted admin, not an email allowlist. The screenshot server no
+// longer needs ADMIN_EMAILS.
+await client.query("insert into platform_admins (user_id, note) values ($1, $2)", [
+  owner.userId,
+  "screenshot seed admin",
+]);
+
 function ago(input: { days?: number; hours?: number; minutes?: number; seconds?: number }): string {
   const ms =
     ((input.days ?? 0) * 24 * 60 * 60 +

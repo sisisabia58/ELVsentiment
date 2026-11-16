@@ -1,39 +1,69 @@
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { applyMigration, pgliteQueryable } from "../db/migrate";
-import { adminEmailForCustomer, isAdminEmail } from "./admin";
+import { openSession } from "./accounts";
+import { platformAdminForSession, sessionTokenHash } from "./admin";
 
 const CUSTOMER = "11111111-1111-4111-8111-111111111111";
+const USER = "22222222-2222-4222-8222-222222222222";
 
-describe("admin allowlist", () => {
-  it("accepts listed emails case-insensitively and trims spaces", () => {
-    const env = { ADMIN_EMAILS: " owner@example.com, QA@example.com " };
-    expect(isAdminEmail("owner@example.com", env)).toBe(true);
-    expect(isAdminEmail("qa@example.com", env)).toBe(true);
-    expect(isAdminEmail(" OWNER@example.com ", env)).toBe(true);
+async function seeded(options: { admin?: boolean; email?: string; expires?: string } = {}) {
+  const db = pgliteQueryable(new PGlite());
+  await applyMigration(db);
+  await db.query("insert into customers (id, customer_id, created_at) values ($1, $1, now())", [CUSTOMER]);
+  await db.query(
+    "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, $3, 'hash', now())",
+    [USER, CUSTOMER, options.email ?? "owner@example.com"],
+  );
+  const session = await openSession(db, USER, CUSTOMER);
+  if (options.admin) {
+    await db.query("insert into platform_admins (user_id, note) values ($1, 'test grant')", [USER]);
+  }
+  if (options.expires) {
+    await db.query("update sessions set expires_at = $1 where user_id = $2", [options.expires, USER]);
+  }
+  return { db, token: session.token, userId: USER };
+}
+
+describe("platform admin sessions", () => {
+  it("hashes the session token the same way the database stores it", () => {
+    expect(sessionTokenHash("token-a")).toMatch(/^[0-9a-f]{64}$/);
+    expect(sessionTokenHash("token-a")).toBe(sessionTokenHash("token-a"));
+    expect(sessionTokenHash("token-a")).not.toBe(sessionTokenHash("token-b"));
   });
 
-  it("rejects missing, blank, and unlisted emails", () => {
-    expect(isAdminEmail("owner@example.com", {})).toBe(false);
-    expect(isAdminEmail("owner@example.com", { ADMIN_EMAILS: " " })).toBe(false);
-    expect(isAdminEmail(null, { ADMIN_EMAILS: "owner@example.com" })).toBe(false);
-    expect(isAdminEmail("", { ADMIN_EMAILS: "owner@example.com" })).toBe(false);
-    expect(isAdminEmail("other@example.com", { ADMIN_EMAILS: "owner@example.com" })).toBe(false);
+  it("recognises only a live session whose user was granted platform admin", async () => {
+    const { db, token, userId } = await seeded({ admin: true });
+    expect(await platformAdminForSession(db, CUSTOMER, sessionTokenHash(token))).toEqual({
+      userId,
+      email: "owner@example.com",
+    });
   });
 
-  it("looks up the oldest customer email only for the given customer", async () => {
-    const db = pgliteQueryable(new PGlite());
-    await applyMigration(db);
-    await db.query("insert into customers (id, customer_id, created_at) values ($1, $1, now())", [CUSTOMER]);
-    await db.query(
-      "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'owner@example.com', 'hash', now() - interval '1 day')",
-      ["22222222-2222-4222-8222-222222222222", CUSTOMER],
-    );
-    await db.query(
-      "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'newer@example.com', 'hash', now())",
-      ["33333333-3333-4333-8333-333333333333", CUSTOMER],
-    );
-    expect(await adminEmailForCustomer(db, CUSTOMER)).toBe("owner@example.com");
-    expect(await adminEmailForCustomer(db, "44444444-4444-4444-8444-444444444444")).toBeNull();
+  it("rejects a signed-in user who was never granted", async () => {
+    const { db, token } = await seeded();
+    expect(await platformAdminForSession(db, CUSTOMER, sessionTokenHash(token))).toBeNull();
+  });
+
+  it("rejects an expired admin session", async () => {
+    const { db, token } = await seeded({ admin: true, expires: "2000-01-01T00:00:00Z" });
+    expect(await platformAdminForSession(db, CUSTOMER, sessionTokenHash(token))).toBeNull();
+  });
+
+  it("rejects a token that does not belong to the admin", async () => {
+    const { db } = await seeded({ admin: true });
+    expect(await platformAdminForSession(db, CUSTOMER, sessionTokenHash("not-a-session"))).toBeNull();
+  });
+
+  it("ignores the email entirely, including an ADMIN_EMAILS-looking address", async () => {
+    const other = await seeded({ email: "admin@example.com" });
+    const stored = process.env.ADMIN_EMAILS;
+    process.env.ADMIN_EMAILS = "admin@example.com";
+    try {
+      expect(await platformAdminForSession(other.db, CUSTOMER, sessionTokenHash(other.token))).toBeNull();
+    } finally {
+      if (stored === undefined) delete process.env.ADMIN_EMAILS;
+      else process.env.ADMIN_EMAILS = stored;
+    }
   });
 });

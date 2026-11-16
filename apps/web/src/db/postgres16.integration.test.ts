@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -513,19 +513,23 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
         ),
       ).rejects.toThrow();
 
+      // The old app.is_admin GUC is no longer trusted: app_user can set it
+      // itself, so it must not grant writes.
       await app.query("begin");
       await app.query("select set_config('app.is_admin', 'on', true)");
       const updated = await app.query(
         "update provider_settings set provider = 'off' where platform = 'youtube'",
       );
-      expect(updated.rowCount).toBe(1);
-      await app.query(
-        `insert into provider_settings_audit
-           (id, platform, old_provider, new_provider, actor_email)
-         values ($1, 'youtube', 'scrapeatlas', 'off', 'owner@example.com')`,
-        [randomUUID()],
-      );
-      await app.query("commit");
+      expect(updated.rowCount).toBe(0);
+      await expect(
+        app.query(
+          `insert into provider_settings_audit
+             (id, platform, old_provider, new_provider, actor_email)
+           values ($1, 'youtube', 'scrapeatlas', 'off', 'owner@example.com')`,
+          [randomUUID()],
+        ),
+      ).rejects.toThrow();
+      await app.query("rollback");
 
       expect(
         (
@@ -533,16 +537,106 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
             "select provider from provider_settings where platform = 'youtube'",
           )
         ).rows[0].provider,
-      ).toBe("off");
+      ).toBe("scrapeatlas");
       expect(
         (await app.query<{ n: number }>("select count(*)::int as n from provider_settings_audit")).rows[0].n,
       ).toBe(0);
+    } finally {
+      await app.end();
+      await worker.end();
+    }
+  });
+
+  it("allows provider writes only for a platform-admin session", async () => {
+    await migrate(db, { sqlDir: SQL_DIR });
+    await enableRoleLogin(db, { appPassword: APP_PASSWORD, workerPassword: WORKER_PASSWORD });
+
+    const customerId = randomUUID();
+    const adminUserId = randomUUID();
+    const plainUserId = randomUUID();
+    const adminToken = "synthetic-admin-session-token";
+    const plainToken = "synthetic-plain-session-token";
+    const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+    await db.query("insert into customers (id, customer_id, created_at) values ($1, $1, now())", [customerId]);
+    await db.query(
+      "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'admin@example.com', 'hash', now() - interval '1 day')",
+      [adminUserId, customerId],
+    );
+    await db.query(
+      "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'plain@example.com', 'hash', now())",
+      [plainUserId, customerId],
+    );
+    await db.query(
+      "insert into sessions (id, customer_id, user_id, token_hash, expires_at) values ($1, $2, $3, $4, now() + interval '1 day')",
+      [randomUUID(), customerId, adminUserId, hash(adminToken)],
+    );
+    await db.query(
+      "insert into sessions (id, customer_id, user_id, token_hash, expires_at) values ($1, $2, $3, $4, now() + interval '1 day')",
+      [randomUUID(), customerId, plainUserId, hash(plainToken)],
+    );
+    await db.query("insert into platform_admins (user_id, note) values ($1, 'qa grant')", [adminUserId]);
+
+    const app = new Client(loginConfig("app_user", APP_PASSWORD));
+    await app.connect();
+    const worker = new Client(loginConfig("worker_role", WORKER_PASSWORD));
+    await worker.connect();
+    try {
+      await expect(
+        app.query("insert into platform_admins (user_id) values ($1)", [plainUserId]),
+      ).rejects.toThrow();
+      await expect(app.query("update platform_admins set note = 'nope'")).rejects.toThrow();
+      await expect(app.query("delete from platform_admins")).rejects.toThrow();
+      await expect(worker.query("select count(*) from platform_admins")).rejects.toThrow();
+
+      expect(
+        (await app.query<{ n: number }>("select count(*)::int as n from platform_admins")).rows[0].n,
+      ).toBe(0);
+
       await app.query("begin");
       await app.query("select set_config('app.is_admin', 'on', true)");
+      const guc = await app.query(
+        "update provider_settings set provider = 'off' where platform = 'youtube'",
+      );
+      expect(guc.rowCount).toBe(0);
+      await app.query("rollback");
+
+      await app.query("begin");
+      await app.query("select set_config('app.session_token_hash', $1, true)", [hash(plainToken)]);
+      const nonAdmin = await app.query(
+        "update provider_settings set provider = 'off' where platform = 'youtube'",
+      );
+      expect(nonAdmin.rowCount).toBe(0);
+      await app.query("rollback");
+
+      await app.query("begin");
+      await app.query("select set_config('app.session_token_hash', $1, true)", [hash(adminToken)]);
+      expect(
+        (
+          await app.query<{ user_id: string }>("select user_id from platform_admins")
+        ).rows,
+      ).toEqual([{ user_id: adminUserId }]);
+      const updated = await app.query(
+        "update provider_settings set provider = 'off' where platform = 'youtube'",
+      );
+      expect(updated.rowCount).toBe(1);
+      await app.query(
+        `insert into provider_settings_audit
+           (id, platform, old_provider, new_provider, actor_email)
+         values ($1, 'youtube', 'scrapeatlas', 'off', 'admin@example.com')`,
+        [randomUUID()],
+      );
+      await app.query("commit");
+
       expect(
         (await app.query<{ n: number }>("select count(*)::int as n from provider_settings_audit")).rows[0].n,
-      ).toBe(1);
-      await app.query("commit");
+      ).toBe(0);
+      expect(
+        (
+          await app.query<{ provider: string }>(
+            "select provider from provider_settings where platform = 'youtube'",
+          )
+        ).rows[0].provider,
+      ).toBe("off");
     } finally {
       await app.end();
       await worker.end();

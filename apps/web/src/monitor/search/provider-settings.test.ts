@@ -9,6 +9,7 @@ describe("provider settings", () => {
     await applyMigration(db);
     const result = await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
       platform: "youtube",
       provider: "scrapeatlas",
       fallbackProvider: null,
@@ -26,6 +27,7 @@ describe("provider settings", () => {
     await applyMigration(db);
     const result = await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
       platform: "instagram",
       provider: "scrapeatlas",
       fallbackProvider: null,
@@ -41,6 +43,7 @@ describe("provider settings", () => {
     await applyMigration(db);
     await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
       platform: "threads",
       provider: "scrapecreators",
       fallbackProvider: "scrapeatlas",
@@ -48,6 +51,7 @@ describe("provider settings", () => {
     });
     await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
       platform: "threads",
       provider: "off",
       fallbackProvider: null,
@@ -90,6 +94,7 @@ describe("provider settings", () => {
 
     const rejected = await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
       platform: "youtube",
       provider: "scrapeatlas",
       fallbackProvider: null,
@@ -104,6 +109,7 @@ describe("provider settings", () => {
     expect(
       await saveProviderSetting(db, {
         actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
         platform: "myspace",
         provider: "scrapeatlas",
         fallbackProvider: null,
@@ -113,6 +119,7 @@ describe("provider settings", () => {
     expect(
       await saveProviderSetting(db, {
         actorEmail: "owner@example.com",
+      sessionTokenHash: "synthetic-token-hash",
         platform: "youtube",
         provider: "scrapeatlas",
         fallbackProvider: "scrapecreators",

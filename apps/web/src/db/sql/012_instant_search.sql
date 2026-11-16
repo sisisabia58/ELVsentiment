@@ -32,6 +32,15 @@ create table provider_settings_audit (
   created_at timestamptz not null default now()
 );
 
+-- Operator-granted platform admins. Only the migration role writes this table;
+-- the app may read the row that belongs to its live session. Sign-up has no
+-- email verification, so an email allowlist was not a safe admin identity.
+create table platform_admins (
+  user_id uuid primary key references users (id) on delete cascade,
+  granted_at timestamptz not null default now(),
+  note text
+);
+
 create table instant_searches (
   id uuid primary key,
   customer_id uuid not null references customers (id),
@@ -189,8 +198,37 @@ create table gemini_gate (
   last_request_at timestamptz
 );
 
--- Provider routing: readable by both roles; writes require the per-transaction
--- admin flag set by the server after it has checked the admin allowlist.
+-- Platform admins: app_user may read only the row for its own live session
+-- (set in the same transaction by the server); worker_role has no access.
+grant select on platform_admins to app_user;
+alter table platform_admins enable row level security;
+alter table platform_admins force row level security;
+create policy platform_admins_self_read on platform_admins
+  for select to app_user using (
+    exists (
+      select 1 from sessions s
+      where s.user_id = platform_admins.user_id
+        and s.token_hash = current_setting('app.session_token_hash', true)
+        and s.expires_at > now()
+    )
+  );
+
+-- A non-superuser SQL function: it runs as the caller, so the sessions and
+-- platform_admins RLS policies above still apply. app_user cannot fake this by
+-- setting app.is_admin, and cannot grant itself platform admin.
+create function is_platform_admin() returns boolean
+language sql stable
+as $$
+  select exists (
+    select 1 from sessions s
+    join platform_admins pa on pa.user_id = s.user_id
+    where s.token_hash = current_setting('app.session_token_hash', true)
+      and s.expires_at > now()
+  )
+$$;
+
+-- Provider routing: readable by both roles; writes require the current
+-- session to belong to a platform admin.
 grant select on provider_settings to app_user;
 grant select on provider_settings to worker_role;
 grant insert, update on provider_settings to app_user;
@@ -199,11 +237,11 @@ alter table provider_settings force row level security;
 create policy provider_settings_read on provider_settings
   for select to app_user using (true);
 create policy provider_settings_admin_insert on provider_settings
-  for insert to app_user with check (current_setting('app.is_admin', true) = 'on');
+  for insert to app_user with check (is_platform_admin());
 create policy provider_settings_admin_update on provider_settings
   for update to app_user
-  using (current_setting('app.is_admin', true) = 'on')
-  with check (current_setting('app.is_admin', true) = 'on');
+  using (is_platform_admin())
+  with check (is_platform_admin());
 create policy provider_settings_worker_read on provider_settings
   for select to worker_role using (true);
 
@@ -212,9 +250,9 @@ grant select on provider_settings_audit to worker_role;
 alter table provider_settings_audit enable row level security;
 alter table provider_settings_audit force row level security;
 create policy provider_settings_audit_admin_read on provider_settings_audit
-  for select to app_user using (current_setting('app.is_admin', true) = 'on');
+  for select to app_user using (is_platform_admin());
 create policy provider_settings_audit_admin_insert on provider_settings_audit
-  for insert to app_user with check (current_setting('app.is_admin', true) = 'on');
+  for insert to app_user with check (is_platform_admin());
 create policy provider_settings_audit_worker_read on provider_settings_audit
   for select to worker_role using (true);
 

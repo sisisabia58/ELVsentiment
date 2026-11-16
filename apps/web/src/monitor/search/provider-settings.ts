@@ -13,6 +13,7 @@ export type ProviderSettingRow = ProviderSetting & { target: SettingTarget };
 
 export type SaveProviderSettingInput = {
   actorEmail: string;
+  sessionTokenHash: string;
   platform: string;
   provider: string;
   fallbackProvider: string | null;
@@ -92,7 +93,9 @@ export async function saveProviderSetting(
 
   await db.exec("begin");
   try {
-    await db.query("select set_config('app.is_admin', 'on', true)");
+    await db.query("select set_config('app.session_token_hash', $1, true)", [
+      input.sessionTokenHash,
+    ]);
     const current = await db.query<{
       provider: string;
       fallback_provider: string | null;
