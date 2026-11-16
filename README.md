@@ -47,7 +47,7 @@ Names only; set real values in Railway. Do not commit values.
 - `CARI_PROVIDER_MODE` — live by default. Fixture data is used only when this is explicitly `fixture`.
 - `CARI_AI_PROVIDER` — which AI provider the later AI milestones use; defaults to `demo`.
 - `SCRAPEATLAS_API_KEY` — ScrapeAtlas provider credential for the launch sources.
-- Platform admin is **not** an env var. After the real owner has signed up, the operator grants it once with SQL: `insert into platform_admins (user_id) select id from users where email = 'owner@example.com';` Only a live session for a row in `platform_admins` can write `/pengaturan/provider`. Revoke with `delete from platform_admins where user_id = (select id from users where email = 'owner@example.com');`.
+- Platform admin is **not** an env var. After the real owner has signed up, the operator grants it once with SQL: `insert into platform_admins (user_id) select id from users where email = 'owner@example.com';` Run that as the migration/table-owner role (`MIGRATION_DATABASE_URL`), not as `app_user`. Only a live session for a row in `platform_admins` can write `/pengaturan/provider`. Revoke with `delete from platform_admins where user_id = (select id from users where email = 'owner@example.com');`.
 - `CARI_DAILY_SEARCH_LIMIT` — optional per-customer daily instant-search cap (web and worker, default 20).
 
 The web service pre-deploy command is `node src/db/migrate-cli.mjs`.

@@ -44,15 +44,20 @@ function dbUrl(dbname: string): string {
 }
 
 // Password logins go over TCP: local sockets may use peer auth, which ignores passwords.
-function loginConfig(user: string, password: string) {
+function loginConfig(user: string, password: string, database: string = DB_NAME) {
   const { host, port } = parseAdminUrl();
   return {
     host: host || "127.0.0.1",
     port: Number(port || 5432),
-    database: DB_NAME,
+    database,
     user,
     password,
   };
+}
+
+function loginUrl(database: string, user: string, password: string): string {
+  const { host, port } = loginConfig(user, password, database);
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
 }
 
 async function connect(url: string): Promise<Client> {
@@ -694,6 +699,95 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
       ).toBe(1);
     } finally {
       await app.end();
+    }
+  });
+
+  it("applies migration 012 as a non-superuser owner and lets that owner grant platform admin", async () => {
+    const OWNER_DB = "sm_owner_migrate";
+    const OWNER = "sm_migration_owner";
+    const OWNER_PASSWORD = "synthetic-migration-owner-password";
+    const ownerAdmin = await connect(dbUrl(parseAdminUrl().database || "postgres"));
+    try {
+      await ownerAdmin.query(`drop database if exists ${OWNER_DB}`);
+      await ownerAdmin.query(`drop role if exists ${OWNER}`);
+      await ownerAdmin.query(
+        `create role ${OWNER} login nosuperuser nobypassrls createrole password '${OWNER_PASSWORD}'`,
+      );
+      await ownerAdmin.query(`create database ${OWNER_DB} owner ${OWNER}`);
+
+      const ownerUrl = loginUrl(OWNER_DB, OWNER, OWNER_PASSWORD);
+      const files = readdirSync(SQL_DIR)
+        .filter((name) => name.endsWith(".sql"))
+        .sort();
+      for (const name of files) {
+        execFileSync("psql", [ownerUrl, "-v", "ON_ERROR_STOP=1", "-q", "-f", path.join(SQL_DIR, name)], {
+          stdio: "pipe",
+        });
+      }
+
+      const customerId = randomUUID();
+      const adminUserId = randomUUID();
+      const plainUserId = randomUUID();
+      const adminOnOwner = await connect(dbUrl(OWNER_DB));
+      try {
+        await adminOnOwner.query("insert into customers (id, customer_id, created_at) values ($1, $1, now())", [
+          customerId,
+        ]);
+        await adminOnOwner.query(
+          "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'owner@example.com', 'hash', now())",
+          [adminUserId, customerId],
+        );
+        await adminOnOwner.query(
+          "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'plain@example.com', 'hash', now())",
+          [plainUserId, customerId],
+        );
+      } finally {
+        await adminOnOwner.end();
+      }
+
+      // The README's documented grant is run by the migration/table owner.
+      const owner = new Client({ connectionString: ownerUrl });
+      await owner.connect();
+      try {
+        const grant = await owner.query(
+          "insert into platform_admins (user_id) select id from users where email = 'owner@example.com'",
+        );
+        expect(grant.rowCount).toBe(1);
+        expect(
+          (await owner.query<{ n: number }>("select count(*)::int as n from platform_admins")).rows[0].n,
+        ).toBe(1);
+      } finally {
+        await owner.end();
+      }
+
+      await ownerAdmin.query(`alter role app_user login password '${APP_PASSWORD}'`);
+      const app = new Client(loginConfig("app_user", APP_PASSWORD, OWNER_DB));
+      await app.connect();
+      try {
+        await expect(
+          app.query("insert into platform_admins (user_id) values ($1)", [plainUserId]),
+        ).rejects.toThrow();
+        await expect(app.query("update platform_admins set note = 'nope'")).rejects.toThrow();
+        await expect(app.query("delete from platform_admins")).rejects.toThrow();
+
+        await app.query("begin");
+        await app.query("select set_config('app.is_admin', 'on', true)");
+        const guc = await app.query(
+          "update provider_settings set provider = 'off' where platform = 'youtube'",
+        );
+        expect(guc.rowCount).toBe(0);
+        await app.query("rollback");
+      } finally {
+        await app.end();
+      }
+    } finally {
+      await ownerAdmin.query(
+        "select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()",
+        [OWNER_DB],
+      );
+      await ownerAdmin.query(`drop database if exists ${OWNER_DB}`);
+      await ownerAdmin.query(`drop role if exists ${OWNER}`);
+      await ownerAdmin.end();
     }
   });
 

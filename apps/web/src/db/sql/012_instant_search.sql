@@ -19,6 +19,22 @@ create table provider_settings (
     (fallback_on_failure = false or fallback_provider is not null)
 );
 
+-- Seed before this table gets RLS: the migration owner (a non-BYPASSRLS
+-- role in production) cannot insert once FORCE RLS is enabled.
+insert into provider_settings (platform, provider, fallback_provider, fallback_on_failure)
+values
+  ('threads', 'scrapecreators', 'scrapeatlas', false),
+  ('tiktok', 'scrapecreators', 'scrapeatlas', false),
+  ('instagram', 'scrapecreators', null, false),
+  ('youtube', 'scrapeatlas', null, false),
+  ('reddit', 'scrapeatlas', null, false),
+  ('facebook', 'scrapeatlas', null, false),
+  ('linkedin', 'scrapeatlas', null, false),
+  ('x', 'official_x', null, false),
+  ('web', 'off', null, false),
+  ('comments', 'scrapeatlas', null, false)
+on conflict (platform) do nothing;
+
 create table provider_settings_audit (
   id uuid primary key,
   platform text not null,
@@ -201,8 +217,10 @@ create table gemini_gate (
 -- Platform admins: app_user may read only the row for its own live session
 -- (set in the same transaction by the server); worker_role has no access.
 grant select on platform_admins to app_user;
+-- No FORCE here: the migration/operator role must be able to insert the grant
+-- row (and the screenshot seeder runs as that role). app_user stays limited by
+-- its SELECT-only grant plus the self-read policy below.
 alter table platform_admins enable row level security;
-alter table platform_admins force row level security;
 create policy platform_admins_self_read on platform_admins
   for select to app_user using (
     exists (
@@ -210,6 +228,16 @@ create policy platform_admins_self_read on platform_admins
       where s.user_id = platform_admins.user_id
         and s.token_hash = current_setting('app.session_token_hash', true)
         and s.expires_at > now()
+    )
+  );
+-- The documented operator grant resolves the admin's email. users is FORCE
+-- RLS for tenants, so allow exactly the table owner (the migration role) to
+-- read it; app_user and worker_role still see only their policy rows.
+create policy users_migration_owner_read on users
+  for select to public using (
+    current_user = (
+      select pg_get_userbyid(c.relowner) from pg_class c
+       where c.oid = 'public.users'::regclass
     )
   );
 
@@ -315,17 +343,3 @@ create index instant_search_comments_result_likes_idx
   on instant_search_comments (result_id, likes desc);
 create index search_credit_ledger_search_idx
   on search_credit_ledger (search_id);
-
-insert into provider_settings (platform, provider, fallback_provider, fallback_on_failure)
-values
-  ('threads', 'scrapecreators', 'scrapeatlas', false),
-  ('tiktok', 'scrapecreators', 'scrapeatlas', false),
-  ('instagram', 'scrapecreators', null, false),
-  ('youtube', 'scrapeatlas', null, false),
-  ('reddit', 'scrapeatlas', null, false),
-  ('facebook', 'scrapeatlas', null, false),
-  ('linkedin', 'scrapeatlas', null, false),
-  ('x', 'official_x', null, false),
-  ('web', 'off', null, false),
-  ('comments', 'scrapeatlas', null, false)
-on conflict (platform) do nothing;
