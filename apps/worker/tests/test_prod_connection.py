@@ -277,3 +277,30 @@ def test_instant_search_worker_thread_starts_and_stops(monkeypatch):
     thread.join(2)
     assert not thread.is_alive()
     assert calls
+
+
+def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
+    import time
+
+    monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 0.5)
+
+    def hung(platform, keyword, settings, **kwargs):
+        if platform == "youtube":
+            time.sleep(3)
+        return _fast_fetch(platform, keyword, settings, **kwargs)
+
+    started = time.monotonic()
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=hung,
+        deadline_seconds=0.2,
+    )
+    elapsed = time.monotonic() - started
+    assert processed == 1
+    assert elapsed < 0.2 + 0.5 + 0.5, elapsed
+    view = prod_db.view(prod_db.search)
+    assert view["search"]["status"] in ("partial", "failed"), view
+    assert "youtube" not in view["counts"], view
