@@ -1,6 +1,6 @@
 import type { Queryable } from "../db/migrate";
 
-type AdminEnv = { ADMIN_EMAILS?: string };
+type AdminEnv = { ADMIN_EMAILS?: string; [key: string]: string | undefined };
 
 export function isAdminEmail(
   email: string | null | undefined,

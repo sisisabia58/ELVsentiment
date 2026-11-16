@@ -100,6 +100,13 @@ export function supportedProviders(
   return CAPABILITIES[mode][platform as SearchPlatform] ?? [];
 }
 
+export function supportedForTarget(target: string): ProviderId[] {
+  // Comment fetching is one global row; ScrapeAtlas is the only comments
+  // provider in the matrix.
+  if (target === "comments") return ["scrapeatlas"];
+  return supportedProviders(target);
+}
+
 export function validateProviderChoice(
   platform: string,
   provider: string,
@@ -107,7 +114,7 @@ export function validateProviderChoice(
   fallbackOnFailure: boolean,
 ): boolean {
   if (provider === "off") return fallbackOnFailure === false;
-  const supported = supportedProviders(platform);
+  const supported = supportedForTarget(platform);
   if (!supported.includes(provider as ProviderId)) return false;
   if (fallbackOnFailure && fallbackProvider === null) return false;
   if (fallbackProvider !== null && !supported.includes(fallbackProvider as ProviderId)) return false;
