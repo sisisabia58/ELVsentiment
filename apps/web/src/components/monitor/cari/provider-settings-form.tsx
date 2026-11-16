@@ -142,7 +142,7 @@ function ProviderRow(props: {
         <label className="flex items-center gap-2 pt-4 text-xs text-muted-foreground">
           <input
             type="checkbox"
-            className="h-4 w-4 accent-primary"
+            className="size-4 min-h-0 min-w-0 flex-none rounded border-border accent-primary"
             aria-label={`Aktifkan cadangan ${label}`}
             checked={fallbackOnFailure}
             onChange={(event) => setFallbackOnFailure(event.target.checked)}

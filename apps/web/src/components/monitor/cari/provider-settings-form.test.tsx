@@ -62,10 +62,14 @@ describe("provider settings form", () => {
     expect(screen.queryByRole("button", { name: "Simpan Web" })).toBeNull();
   });
 
-  it("styles the fallback checkbox with the app input styling", () => {
+  it("renders the fallback checkbox at the small control size", () => {
     render(<ProviderSettingsForm rows={rows()} onSave={vi.fn()} />);
     const checkbox = screen.getByLabelText("Aktifkan cadangan Threads");
-    expect(checkbox.className).toContain("accent-");
+    expect(checkbox.className).toContain("size-4");
+    expect(checkbox.className).toContain("min-h-0");
+    expect(checkbox.className).toContain("min-w-0");
+    expect(checkbox.className).toContain("flex-none");
+    expect(checkbox.className).toContain("accent-primary");
   });
 
   it("warns about an unsupported stored choice", () => {
