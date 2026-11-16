@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 
+from sentiment_monitor.intent import Keyword
 from sentiment_monitor.instant_search import (
     claim_instant_search,
     expire_old_searches,
@@ -15,6 +16,9 @@ from sentiment_monitor.instant_search import (
     set_source_state,
 )
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
+from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
+from sentiment_monitor.providers.fetch import fetch_platform
+from sentiment_monitor.providers.fixtures import fixture_comment_fetch, fixture_platform_fetch
 
 CUSTOMER = "11111111-1111-4111-8111-111111111111"
 
@@ -188,3 +192,63 @@ def test_expire_old_searches_deletes_expired_and_cascades(db):
     left_sources = db.execute("select count(*) as n from instant_search_sources where search_id=%s", (expired,))[0]["n"]
     assert left == 1
     assert left_sources == 0
+
+
+def test_fixture_mode_returns_deterministic_posts_without_network(monkeypatch):
+    monkeypatch.setenv("CARI_PROVIDER_MODE", "fixture")
+    result = fetch_platform(
+        "youtube", Keyword("barayam"), {}, env={},
+        collected_at="2026-11-15T00:00:00Z", date_window_days=7,
+    )
+    assert result.provider == "fixture"
+    assert result.state == "answered"
+    assert result.posts[0].platform == "youtube"
+    assert result.posts[0].external_id.startswith("fixture-youtube-")
+    assert result.calls[0].credits_charged == 0
+    repeated = fetch_platform(
+        "youtube", Keyword("barayam"), {}, env={},
+        collected_at="2026-11-15T00:00:00Z", date_window_days=7,
+    )
+    assert [item.external_id for item in repeated.posts] == [item.external_id for item in result.posts]
+
+
+def test_fixture_mode_is_explicit_and_never_implicit(monkeypatch):
+    monkeypatch.delenv("CARI_PROVIDER_MODE", raising=False)
+    result = fetch_platform(
+        "youtube", Keyword("barayam"), DEFAULT_SETTINGS, env={},
+        collected_at="2026-11-15T00:00:00Z", date_window_days=7,
+    )
+    assert result.provider != "fixture"
+    assert result.state == "unavailable"
+    assert result.safe_detail == "missing_key"
+
+
+def test_fixture_posts_cover_platforms_and_undated_youtube(monkeypatch):
+    monkeypatch.setenv("CARI_PROVIDER_MODE", "fixture")
+    for platform in ("threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"):
+        result = fixture_platform_fetch(
+            platform, Keyword("barayam"), collected_at="2026-11-15T00:00:00Z", date_window_days=7
+        )
+        assert result.platform == platform
+        assert 2 <= len(result.posts) <= 3
+        assert all(item.external_id.startswith(f"fixture-{platform}-") for item in result.posts)
+        assert all(item.routes for item in result.posts)
+        assert result.calls and all(call.credits_charged == 0 for call in result.calls)
+    youtube = fixture_platform_fetch(
+        "youtube", Keyword("barayam"), collected_at="2026-11-15T00:00:00Z", date_window_days=7
+    )
+    assert any(item.published_at is None for item in youtube.posts)
+    assert any(item.thumbnail_url for item in youtube.posts)
+    assert any(item.likes for item in youtube.posts)
+
+
+def test_fixture_comments_return_two_synthetic_comments(monkeypatch):
+    monkeypatch.setenv("CARI_PROVIDER_MODE", "fixture")
+    fetched = fixture_platform_fetch(
+        "youtube", Keyword("barayam"), collected_at="2026-11-15T00:00:00Z", date_window_days=7
+    )
+    result = fixture_comment_fetch("youtube", fetched.posts[0])
+    assert result.state == "answered"
+    assert len(result.comments) == 2
+    assert result.call is not None
+    assert result.call.credits_charged == 0

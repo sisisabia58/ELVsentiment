@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any, Callable, Mapping
+import os
 import urllib.request
 
 from sentiment_monitor.intent import Keyword
@@ -124,6 +125,18 @@ def fetch_platform(
     primary: Callable[..., PlatformFetch] | None = None,
     fallback: Callable[..., PlatformFetch] | None = None,
 ) -> PlatformFetch:
+    mode = env.get("CARI_PROVIDER_MODE") if isinstance(env, Mapping) else None
+    if not isinstance(mode, str) or not mode:
+        mode = os.environ.get("CARI_PROVIDER_MODE", "live")
+    if mode == "fixture":
+        from sentiment_monitor.providers.fixtures import fixture_platform_fetch
+
+        return fixture_platform_fetch(
+            platform,
+            keyword,
+            collected_at=collected_at,
+            date_window_days=date_window_days,
+        )
     chain = resolve_chain(platform, settings)
     if not chain:
         return PlatformFetch(
