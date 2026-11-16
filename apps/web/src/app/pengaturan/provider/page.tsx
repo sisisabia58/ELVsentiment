@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { adminEmailForCustomer, isAdminEmail } from "@/auth/admin";
 import { sessionCustomerId, withSessionDeps } from "@/auth/request-session";
@@ -10,7 +11,7 @@ import {
   type ProviderSettingActionInput,
 } from "./actions";
 
-export default async function Page() {
+async function Body() {
   const customerId = await sessionCustomerId();
   if (!customerId) redirect("/masuk");
 
@@ -48,5 +49,13 @@ export default async function Page() {
       </div>
       <ProviderSettingsForm rows={data.rows} onSave={save} />
     </main>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <Body />
+    </Suspense>
   );
 }

@@ -4,6 +4,7 @@ import {
   DEFAULT_PROVIDER_SETTINGS,
   resolveProviderChain,
   SEARCH_PLATFORMS,
+  type SettingTarget,
   supportedProviders,
   validateProviderChoice,
 } from "./platforms";
@@ -16,6 +17,13 @@ describe("search provider matrix", () => {
     expect(DEFAULT_PROVIDER_SETTINGS.comments.provider).toBe("scrapeatlas");
     expect(DEFAULT_PROVIDER_SETTINGS.web.provider).toBe("off");
     expect(defaults.threads.fallback_on_failure).toBe(false);
+    for (const [target, values] of Object.entries(defaults)) {
+      expect(DEFAULT_PROVIDER_SETTINGS[target as SettingTarget]).toEqual({
+        provider: values.provider,
+        fallbackProvider: values.fallback_provider,
+        fallbackOnFailure: values.fallback_on_failure,
+      });
+    }
     expect(SEARCH_PLATFORMS).toEqual([
       "threads",
       "tiktok",

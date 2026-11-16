@@ -1,5 +1,3 @@
-import rawDefaults from "../../../../../config/cari-providers.json";
-
 export type SearchPlatform =
   | "threads"
   | "tiktok"
@@ -80,18 +78,21 @@ export const CAPABILITIES: Record<ProviderMode, Partial<Record<SearchPlatform, P
   comments: COMMENTS_CAPABILITIES,
 };
 
-type RawSetting = { provider: string; fallback_provider: string | null; fallback_on_failure: boolean };
-
-export const DEFAULT_PROVIDER_SETTINGS: Record<SettingTarget, ProviderSetting> = Object.fromEntries(
-  Object.entries(rawDefaults as Record<string, RawSetting>).map(([target, values]) => [
-    target,
-    {
-      provider: values.provider as ProviderId,
-      fallbackProvider: values.fallback_provider as ProviderId | null,
-      fallbackOnFailure: values.fallback_on_failure,
-    },
-  ]),
-) as Record<SettingTarget, ProviderSetting>;
+// Mirrors config/cari-providers.json, which the Python worker reads and the
+// tests compare against. Next cannot bundle a file outside apps/web, so the
+// defaults live here as a literal.
+export const DEFAULT_PROVIDER_SETTINGS: Record<SettingTarget, ProviderSetting> = {
+  threads: { provider: "scrapecreators", fallbackProvider: "scrapeatlas", fallbackOnFailure: false },
+  tiktok: { provider: "scrapecreators", fallbackProvider: "scrapeatlas", fallbackOnFailure: false },
+  instagram: { provider: "scrapecreators", fallbackProvider: null, fallbackOnFailure: false },
+  youtube: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+  reddit: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+  facebook: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+  linkedin: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+  x: { provider: "official_x", fallbackProvider: null, fallbackOnFailure: false },
+  web: { provider: "off", fallbackProvider: null, fallbackOnFailure: false },
+  comments: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+};
 
 export function supportedProviders(
   platform: string,
