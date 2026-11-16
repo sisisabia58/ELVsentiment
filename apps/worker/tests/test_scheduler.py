@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -3096,11 +3097,19 @@ def test_serve_logs_a_safe_instant_search_cycle_failure(tmp_path, monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError("synthetic-key prompt body")
 
+    def stop_after_instant_search_log(_seconds):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if any(line.startswith("instant_search_cycle_failed") for line in lines):
+                break
+            time.sleep(0.02)
+        raise SystemExit
+
     monkeypatch.setattr("sentiment_monitor.scheduler.run_instant_search_cycle", explode)
     with pytest.raises(SystemExit):
         serve(
             world.connect,
-            sleep,
+            stop_after_instant_search_log,
             load_limits(Path("config/limits.json"), {}),
             "worker-1",
             _policy_root(tmp_path, False),
@@ -3109,6 +3118,6 @@ def test_serve_logs_a_safe_instant_search_cycle_failure(tmp_path, monkeypatch):
             log=lines.append,
             monotonic=monotonic,
         )
-    assert lines[0] == "instant_search_cycle_failed"
+    assert any(line.startswith("instant_search_cycle_failed") for line in lines)
     assert "synthetic-key" not in "\n".join(lines)
     assert "prompt" not in "\n".join(lines)

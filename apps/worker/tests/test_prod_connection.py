@@ -150,3 +150,130 @@ def test_production_wrapper_counts_expired_searches(prod_db):
         lambda conn: instant_search.expire_old_searches(conn, datetime.now(timezone.utc)),
     )
     assert deleted == 1
+
+
+def _queue_search(prod_db, query: str, deadline_seconds: int = 40) -> str:
+    search_id = str(uuid.uuid4())
+    prod_db.admin.execute(
+        """
+        insert into instant_searches
+          (id, customer_id, query_text, keyword_intent, date_window, sort_mode,
+           language_filter, status, created_at, deadline_at, retention_expires_at)
+        values (%s, %s, %s, 'phrase', 'all', 'relevance', 'all', 'queued',
+                now(), now() + make_interval(secs => %s), now() + interval '30 days')
+        """,
+        (search_id, prod_db.customer, query, deadline_seconds),
+    )
+    return search_id
+
+
+def _fast_fetch(platform, keyword, settings, **kwargs):
+    return PlatformFetch(
+        platform,
+        "scrapeatlas",
+        [_post(platform, f"{platform}-1")],
+        [_call(platform, "")],
+        "answered",
+        "ok",
+        5,
+    )
+
+
+def test_cycle_commits_running_progress_while_a_slow_fetch_is_in_flight(prod_db, monkeypatch):
+    import threading
+    import time
+
+    def slow(platform, keyword, settings, **kwargs):
+        time.sleep(3 if platform == "tiktok" else 0.05)
+        return _fast_fetch(platform, keyword, settings, **kwargs)
+
+    observed = []
+    result = {}
+
+    def run():
+        result["processed"] = instant_search.run_instant_search_cycle(
+            prod_db.connect,
+            env={},
+            now=datetime.now(timezone.utc),
+            limits=None,
+            fetcher=slow,
+        )
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.05)
+        view = prod_db.view(prod_db.search)
+        observed.append((view["search"]["status"], sorted({row["state"] for row in view["sources"]})))
+    thread.join(10)
+    assert result["processed"] == 1
+    assert any(
+        status == "running" or "answered" in states for status, states in observed
+    ), observed
+    view = prod_db.view(prod_db.search)
+    assert view["search"]["status"] == "succeeded"
+    assert view["search"]["started_at"] < view["search"]["finished_at"]
+
+
+def test_cycle_runs_three_queued_searches_concurrently(prod_db):
+    import time
+
+    prod_db.admin.execute("delete from instant_searches")
+    ids = [_queue_search(prod_db, f"barayam {index}", deadline_seconds=8) for index in range(3)]
+
+    def slow(platform, keyword, settings, **kwargs):
+        time.sleep(1)
+        return PlatformFetch(
+            platform,
+            "scrapeatlas",
+            [_post(platform, f"{platform}-{keyword}")],
+            [_call(platform, "")],
+            "answered",
+            "ok",
+            5,
+        )
+
+    started = time.monotonic()
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=slow,
+        deadline_seconds=6,
+        max_searches=4,
+    )
+    elapsed = time.monotonic() - started
+    assert processed == 3
+    assert elapsed < 5, elapsed
+    for search_id in ids:
+        view = prod_db.view(search_id)
+        assert view["search"]["status"] in ("succeeded", "partial"), view
+        assert view["search"]["started_at"] is not None
+        assert view["search"]["error_code"] != "deadline"
+
+
+def test_instant_search_worker_thread_starts_and_stops(monkeypatch):
+    import threading
+
+    from sentiment_monitor import scheduler
+
+    ran = threading.Event()
+    calls = []
+
+    def fake_cycle(connect, **kwargs):
+        calls.append(connect)
+        ran.set()
+        return 0
+
+    monkeypatch.setattr(scheduler, "run_instant_search_cycle", fake_cycle)
+    stop = threading.Event()
+    thread = scheduler.start_instant_search_worker(
+        lambda: object(), stop, poll_seconds=0.01, log=lambda line: None
+    )
+    assert ran.wait(2)
+    stop.set()
+    thread.join(2)
+    assert not thread.is_alive()
+    assert calls

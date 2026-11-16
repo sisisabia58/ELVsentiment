@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
@@ -90,6 +91,48 @@ def _safe_route(value: Any) -> str:
     if isinstance(value, str) and _ROUTE_PATTERN.fullmatch(value):
         return value
     return "other"
+
+
+class _Transactions:
+    """Run each unit of work in its own short transaction.
+
+    The production worker passes a ``connect`` factory; older unit tests pass
+    one live connection. Both shapes are supported so the store stays usable
+    from scripts and tests without weakening the production commit boundaries.
+    """
+
+    def __init__(self, connect: Any) -> None:
+        self.connect = connect
+        self.factory = callable(connect)
+        self.shared = None if self.factory else connect
+
+    @contextmanager
+    def begin(self):
+        if not self.factory:
+            yield self.shared
+            commit = getattr(self.shared, "commit", None)
+            if callable(commit):
+                commit()
+            return
+        conn = self.connect()
+        try:
+            yield conn
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def run(self, fn: Any) -> Any:
+        with self.begin() as conn:
+            return fn(conn)
 
 
 @dataclass(frozen=True)
@@ -451,8 +494,35 @@ def _failed_state(conn: Any, job: InstantSearchJob, platform: str, chain: tuple[
     )
 
 
-def _handle_result(
+def _store_answered(
     conn: Any,
+    job: InstantSearchJob,
+    platform: str,
+    chain: tuple[str, ...],
+    kept: list[CanonicalPost],
+    result: Any,
+    calls: list[RouteCall],
+    detail: str,
+    attempted: tuple[str, ...],
+) -> int:
+    inserted = insert_posts(conn, job, kept)
+    set_source_state(
+        conn,
+        job,
+        platform,
+        "answered",
+        provider=chain[0],
+        result_count=inserted,
+        latency_ms=getattr(result, "latency_ms", None),
+        credits_charged=_known_credit_sum(calls),
+        attempted_providers=attempted,
+        safe_detail=detail,
+    )
+    return inserted
+
+
+def _handle_result(
+    tx: _Transactions,
     job: InstantSearchJob,
     platform: str,
     chain: tuple[str, ...],
@@ -461,57 +531,72 @@ def _handle_result(
     all_posts: list[CanonicalPost],
 ) -> None:
     calls = list(getattr(result, "calls", None) or [])
-    for call in calls:
-        record_call(conn, job, call)
+    # Paid calls are durable before any post is stored, so a later storage
+    # error can never lose the ledger or cause the search to spend again.
+    tx.run(lambda conn: [record_call(conn, job, call) for call in calls])
     state = getattr(result, "state", "unavailable")
     detail = getattr(result, "safe_detail", "other")
     attempted = tuple(getattr(result, "attempted_providers", None) or chain)
+    credits = _known_credit_sum(calls)
+    latency = getattr(result, "latency_ms", None)
     if state == "answered":
         kept = [_normalize(item, job) for item in filter_since(result.posts or [], cutoff_iso)]
         kept = dedupe_posts(kept)
-        inserted = insert_posts(conn, job, kept)
-        set_source_state(
-            conn,
-            job,
-            platform,
-            "answered",
-            provider=chain[0],
-            result_count=inserted,
-            latency_ms=getattr(result, "latency_ms", None),
-            credits_charged=_known_credit_sum(calls),
-            attempted_providers=attempted,
-            safe_detail=detail,
-        )
+        try:
+            tx.run(
+                lambda conn: _store_answered(
+                    conn, job, platform, chain, kept, result, calls, detail, attempted
+                )
+            )
+        except Exception:
+            tx.run(
+                lambda conn: set_source_state(
+                    conn,
+                    job,
+                    platform,
+                    "failed",
+                    provider=chain[0],
+                    latency_ms=latency,
+                    credits_charged=credits,
+                    attempted_providers=attempted,
+                    safe_detail="storage",
+                )
+            )
+            return
         all_posts.extend(kept)
         return
     if state == "unavailable":
-        set_source_state(
+        tx.run(
+            lambda conn: set_source_state(
+                conn,
+                job,
+                platform,
+                "unavailable",
+                provider=chain[0],
+                latency_ms=latency,
+                credits_charged=credits,
+                attempted_providers=attempted,
+                safe_detail=detail,
+            )
+        )
+        return
+    tx.run(
+        lambda conn: set_source_state(
             conn,
             job,
             platform,
-            "unavailable",
+            "failed",
             provider=chain[0],
-            latency_ms=getattr(result, "latency_ms", None),
-            credits_charged=_known_credit_sum(calls),
+            latency_ms=latency,
+            credits_charged=credits,
             attempted_providers=attempted,
             safe_detail=detail,
         )
-        return
-    set_source_state(
-        conn,
-        job,
-        platform,
-        "failed",
-        provider=chain[0],
-        latency_ms=getattr(result, "latency_ms", None),
-        credits_charged=_known_credit_sum(calls),
-        attempted_providers=attempted,
-        safe_detail=detail,
     )
 
 
 def run_instant_search(
-    conn: Any,
+    connect: Any,
     job: InstantSearchJob,
     *,
     env: Mapping[str, Any],
@@ -523,17 +608,20 @@ def run_instant_search(
     deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
 ) -> None:
     del comment_fetcher
+    tx = _Transactions(connect)
     if settings is None:
-        settings = load_provider_settings(conn)
-    start_search(conn, job)
+        settings = tx.run(load_provider_settings)
+    tx.run(lambda conn: start_search(conn, job))
     now = now.astimezone(timezone.utc)
     collected_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     cutoff_iso = _cutoff(now, job.date_window)
     date_window_days = _DATE_WINDOW_DAYS.get(job.date_window)
     sources = _enabled_platforms(settings)
     for platform, chain in sources:
-        set_source_state(
-            conn, job, platform, "queued", provider=chain[0], attempted_providers=chain
+        tx.run(
+            lambda conn, platform=platform, chain=chain: set_source_state(
+                conn, job, platform, "queued", provider=chain[0], attempted_providers=chain
+            )
         )
 
     executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
@@ -542,6 +630,11 @@ def run_instant_search(
     pending: set[Any] = set()
     try:
         for platform, chain in sources:
+            tx.run(
+                lambda conn, platform=platform, chain=chain: set_source_state(
+                    conn, job, platform, "searching", provider=chain[0], attempted_providers=chain
+                )
+            )
             future = executor.submit(
                 _fetch_one,
                 fetcher,
@@ -567,35 +660,36 @@ def run_instant_search(
                 try:
                     result = future.result()
                 except Exception:
-                    _failed_state(conn, job, platform, chain)
+                    tx.run(lambda conn, platform=platform, chain=chain: _failed_state(conn, job, platform, chain))
                     continue
-                _handle_result(conn, job, platform, chain, result, cutoff_iso, all_posts)
+                _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
         for future in pending:
             platform, chain = futures[future]
             future.cancel()
-            set_source_state(
-                conn,
-                job,
-                platform,
-                "unavailable",
-                provider=chain[0],
-                attempted_providers=chain,
-                safe_detail="deadline",
+            tx.run(
+                lambda conn, platform=platform, chain=chain: set_source_state(
+                    conn,
+                    job,
+                    platform,
+                    "unavailable",
+                    provider=chain[0],
+                    attempted_providers=chain,
+                    safe_detail="deadline",
+                )
             )
     finally:
-        # cancel() cannot stop a task that already started, so bound the wait
-        # for started route threads by the per-route timeout before tearing the
-        # executor down. Late results are discarded: only futures observed in
-        # the loop above contribute to all_posts.
+        # cancel() cannot stop a task that already started. Wait only for the
+        # per-route bound, then stop waiting entirely: late results are
+        # discarded and must not hold the worker thread hostage.
         for future in pending:
             future.cancel()
         if pending:
             wait(pending, timeout=ROUTE_TIMEOUT_SECONDS)
-        executor.shutdown(wait=True, cancel_futures=True)
+        executor.shutdown(wait=False, cancel_futures=True)
 
     ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
-    _apply_ranks(conn, job, ranked)
-    finish_search(conn, job, "failed")
+    tx.run(lambda conn: _apply_ranks(conn, job, ranked))
+    tx.run(lambda conn: finish_search(conn, job, "failed"))
 
 
 FAIL_DEADLINE_SQL = """
@@ -625,27 +719,60 @@ def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
     conn.execute(FAIL_DEADLINE_SQL, (now, now, now, now))
 
 
+def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, Any]) -> None:
+    try:
+        run_instant_search(connect, job, **kwargs)
+    except Exception:
+        # A started search must never fall back to 'queued' and repeat paid
+        # calls. Best effort: finish it as failed on its own connection.
+        try:
+            _Transactions(connect).run(
+                lambda conn: finish_search(conn, job, "failed", error_code="storage_failed")
+            )
+        except Exception:
+            pass
+
+
 def run_instant_search_cycle(
-    conn: Any,
+    connect: Any,
     *,
     env: Mapping[str, Any],
     now: datetime,
     limits: Any,
+    settings: Mapping[str, ProviderSetting] | None = None,
+    fetcher: Any = fetch_platform,
+    deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
+    max_searches: int | None = None,
+    max_concurrency: int = 4,
 ) -> int:
     del limits
-    processed = 0
+    tx = _Transactions(connect)
+    tx.run(lambda conn: _fail_deadline_missed_searches(conn, now))
+    limit = 4 if max_searches is None else max(0, int(max_searches))
+    jobs: list[InstantSearchJob] = []
     seen: set[str] = set()
+    while len(jobs) < limit:
+        job = tx.run(lambda conn: claim_instant_search(conn, "instant-search-worker"))
+        if job is None or job.id in seen:
+            break
+        seen.add(job.id)
+        jobs.append(job)
+    kwargs = {
+        "env": env,
+        "now": now,
+        "settings": settings,
+        "fetcher": fetcher,
+        "deadline_seconds": deadline_seconds,
+    }
     try:
-        _fail_deadline_missed_searches(conn, now)
-        while processed < 2:
-            job = claim_instant_search(conn, "instant-search-worker")
-            if job is None:
-                break
-            if job.id in seen:
-                break
-            seen.add(job.id)
-            run_instant_search(conn, job, env=env, now=now)
-            processed += 1
+        if tx.factory and len(jobs) > 1 and max_concurrency > 1:
+            with ThreadPoolExecutor(max_workers=min(max_concurrency, len(jobs))) as pool:
+                futures = [pool.submit(_run_job_safely, connect, job, kwargs) for job in jobs]
+                for future in futures:
+                    future.result()
+        else:
+            for job in jobs:
+                _run_job_safely(connect, job, kwargs)
     finally:
-        expire_old_searches(conn, now)
-    return processed
+        tx.run(lambda conn: expire_old_searches(conn, now))
+    return len(jobs)

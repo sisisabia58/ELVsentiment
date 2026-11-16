@@ -2,6 +2,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
@@ -912,6 +913,47 @@ def admit_threads_queries(conn, limits) -> tuple[bool, str | None]:
     return True, None
 
 
+DEFAULT_INSTANT_SEARCH_POLL_SECONDS = 2.0
+
+
+def _instant_search_poll_seconds() -> float:
+    raw = os.environ.get("CARI_INSTANT_SEARCH_POLL_SECONDS", "")
+    try:
+        value = float(raw) if raw else DEFAULT_INSTANT_SEARCH_POLL_SECONDS
+    except ValueError:
+        value = DEFAULT_INSTANT_SEARCH_POLL_SECONDS
+    return value if value > 0 else DEFAULT_INSTANT_SEARCH_POLL_SECONDS
+
+
+def start_instant_search_worker(
+    connect,
+    stop_event,
+    *,
+    poll_seconds: float | None = None,
+    log=print,
+):
+    """Run instant search on its own daemon thread and its own connections."""
+    interval = poll_seconds if poll_seconds is not None else _instant_search_poll_seconds()
+
+    def loop():
+        # Let the JEV loop claim its first tick first; the worker then polls
+        # independently of the 20 s collection sleep.
+        while not stop_event.wait(interval):
+            try:
+                run_instant_search_cycle(
+                    connect,
+                    env=os.environ,
+                    now=datetime.now(timezone.utc),
+                    limits=None,
+                )
+            except Exception:
+                _safe_log(log, lambda: format_log("instant_search_cycle_failed"))
+
+    thread = threading.Thread(target=loop, name="instant-search", daemon=True)
+    thread.start()
+    return thread
+
+
 def serve(
     connect,
     sleep,
@@ -930,386 +972,382 @@ def serve(
         monotonic = time.monotonic
     interval = _heartbeat_log_seconds(heartbeat_log_seconds)
     last_logged = None
-    while True:
-        def claim(conn):
-            release_expired_claims(conn, limits.worker_heartbeat_stale_seconds)
-            record_heartbeat(conn, worker_id)
-            enqueue_due_schedules(conn, limits)
-            jobs = claim_due_jobs(conn, worker_id, limits.max_jobs_per_tick)
+    stop_event = threading.Event()
+    instant_thread = start_instant_search_worker(connect, stop_event, log=log)
+    try:
+        while True:
+            def claim(conn):
+                release_expired_claims(conn, limits.worker_heartbeat_stale_seconds)
+                record_heartbeat(conn, worker_id)
+                enqueue_due_schedules(conn, limits)
+                jobs = claim_due_jobs(conn, worker_id, limits.max_jobs_per_tick)
+                for job in jobs:
+                    job["variants"] = load_active_variants(conn, job["project_id"])
+                    job["sources"] = load_enabled_sources(conn, job["project_id"])
+                return gate(root), jobs
+
+            gate_code, jobs = _call(connect, claim)
             for job in jobs:
-                job["variants"] = load_active_variants(conn, job["project_id"])
-                job["sources"] = load_enabled_sources(conn, job["project_id"])
-            return gate(root), jobs
+                context = _job_context(job)
+                failures: list[str] = []
+                committed_sources = 0
 
-        gate_code, jobs = _call(connect, claim)
-        for job in jobs:
-            context = _job_context(job)
-            failures: list[str] = []
-            committed_sources = 0
+                def fail_job(detail, job=job):
+                    try:
+                        _call(connect, lambda conn: _fail(conn, job["id"], detail))
+                    except Exception as update_error:
+                        _log_exception(update_error)
 
-            def fail_job(detail, job=job):
+                blocked_detail = None
+                deferred = False
                 try:
-                    _call(connect, lambda conn: _fail(conn, job["id"], detail))
-                except Exception as update_error:
-                    _log_exception(update_error)
-
-            blocked_detail = None
-            deferred = False
-            try:
-                decision = decide_job(gate_code)
-                if decision is not None:
-                    _call(
-                        connect,
-                        lambda conn, job=job, detail=decision[1]: _defer(conn, job["id"], detail),
-                    )
-                    deferred = True
-                else:
-                    selected = [item for item in (job.get("sources") or list(ALL_SOURCES)) if item in ALL_SOURCES]
-                    allowed = sources_allowed(root, os.environ)
-                    sources = [item for item in selected if item in allowed]
-                    if not sources:
+                    decision = decide_job(gate_code)
+                    if decision is not None:
                         _call(
                             connect,
-                            lambda conn, job=job: _defer(conn, job["id"], "sources_unavailable"),
+                            lambda conn, job=job, detail=decision[1]: _defer(conn, job["id"], detail),
                         )
                         deferred = True
                     else:
-                        plan_keywords = [
-                            Keyword(str(item), getattr(item, "intent", "phrase"))
-                            for item in job["variants"]
-                        ]
-                        routes = scrapecreators_request_count(plan_keywords, sources)
-                        _safe_log(
-                            log,
-                            lambda: format_log(
-                                f"collection_plan job_id={job['id']} project_id={job['project_id']} "
-                                f"keywords={len(plan_keywords)} routes={routes}"
-                            ),
-                        )
-                        for variant in job["variants"]:
-                            key = f"{job['customer_id']}:{job['project_id']}:{variant}"
-                            collected = None
-                            if "x" in sources:
-                                _reset_source_attempt(context, "x")
-                                def read_state(conn, key=key):
-                                    return PostgresStore(conn).source_state(key, "x") or {}
+                        selected = [item for item in (job.get("sources") or list(ALL_SOURCES)) if item in ALL_SOURCES]
+                        allowed = sources_allowed(root, os.environ)
+                        sources = [item for item in selected if item in allowed]
+                        if not sources:
+                            _call(
+                                connect,
+                                lambda conn, job=job: _defer(conn, job["id"], "sources_unavailable"),
+                            )
+                            deferred = True
+                        else:
+                            plan_keywords = [
+                                Keyword(str(item), getattr(item, "intent", "phrase"))
+                                for item in job["variants"]
+                            ]
+                            routes = scrapecreators_request_count(plan_keywords, sources)
+                            _safe_log(
+                                log,
+                                lambda: format_log(
+                                    f"collection_plan job_id={job['id']} project_id={job['project_id']} "
+                                    f"keywords={len(plan_keywords)} routes={routes}"
+                                ),
+                            )
+                            for variant in job["variants"]:
+                                key = f"{job['customer_id']}:{job['project_id']}:{variant}"
+                                collected = None
+                                if "x" in sources:
+                                    _reset_source_attempt(context, "x")
+                                    def read_state(conn, key=key):
+                                        return PostgresStore(conn).source_state(key, "x") or {}
 
-                                state = _call(connect, read_state) or {}
-                                floor_id = numeric_since_id(state.get("incremental_cursor"))
-                                floor_since = state.get("incremental_since")
+                                    state = _call(connect, read_state) or {}
+                                    floor_id = numeric_since_id(state.get("incremental_cursor"))
+                                    floor_since = state.get("incremental_since")
 
-                                def admit_first(conn, job=job):
-                                    return admit_x_read(conn, job["customer_id"], 10, limits)
+                                    def admit_first(conn, job=job):
+                                        return admit_x_read(conn, job["customer_id"], 10, limits)
 
-                                admission = _call(connect, admit_first)
-                                if not isinstance(admission, int):
-                                    blocked_detail = admission.detail
+                                    admission = _call(connect, admit_first)
+                                    if not isinstance(admission, int):
+                                        blocked_detail = admission.detail
+                                        break
+
+                                    def fetch_page(cursor, since, since_id, limit, variant=variant):
+                                        return _guarded_fetch(
+                                            "x",
+                                            lambda: fetch_x(variant, limit, cursor, since, since_id),
+                                        )
+
+                                    def admit_page(job=job):
+                                        return _call(
+                                            connect,
+                                            lambda conn, job=job: admit_x_read(conn, job["customer_id"], 10, limits),
+                                        )
+
+                                    try:
+                                        context["attempt"] = True
+                                        collected = collect_newer_x(
+                                            fetch_page,
+                                            admit_page,
+                                            floor_id=floor_id,
+                                            floor_since=floor_since,
+                                            first_limit=admission,
+                                        )
+                                        x_mentions = list(collected.mentions)
+                                        x_counts = {
+                                            "returned": len(x_mentions),
+                                            "parsed": len(x_mentions),
+                                            "deduplicated": 0,
+                                        }
+                                        context["counts"] = x_counts
+                                        context["credits"] = None
+                                        context["http_status"] = None
+
+                                        def store_x(
+                                            conn,
+                                            job=job,
+                                            mentions=x_mentions,
+                                            key=key,
+                                            floor=collected.floor_id,
+                                            marker_since=collected.floor_since,
+                                        ):
+                                            return store_source(conn, job, mentions, key, "x", floor, marker_since)
+
+                                        _commit_source(
+                                            connect,
+                                            log,
+                                            job,
+                                            context,
+                                            store_x,
+                                            counts=x_counts,
+                                            credits=None,
+                                            http_status=None,
+                                        )
+                                        committed_sources += 1
+                                    except SourceFetchError as error:
+                                        if not error.recoverable:
+                                            raise
+                                        _record_source_failure(connect, log, job, "x", error)
+                                        failures.append(_source_failure_note("x", variant, error.detail))
+
+                                if "threads" in sources and fetch_threads is not None:
+                                    _reset_source_attempt(context, "threads")
+                                    try:
+                                        context["attempt"] = True
+                                        threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
+                                        _log_route_events(
+                                            log,
+                                            job,
+                                            "threads",
+                                            _route_events_from(threads_result),
+                                        )
+                                        (
+                                            threads_mentions,
+                                            threads_cursor,
+                                            threads_counts,
+                                            threads_credits,
+                                            threads_http_status,
+                                        ) = _unpack_fetched(threads_result, variant)
+                                        context["counts"] = threads_counts
+                                        context["credits"] = threads_credits
+                                        context["http_status"] = threads_http_status
+
+                                        def store_threads(
+                                            conn,
+                                            job=job,
+                                            key=key,
+                                            threads_mentions=threads_mentions,
+                                            threads_cursor=threads_cursor,
+                                        ):
+                                            return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
+
+                                        _commit_source(
+                                            connect,
+                                            log,
+                                            job,
+                                            context,
+                                            store_threads,
+                                            counts=threads_counts,
+                                            credits=threads_credits,
+                                            http_status=threads_http_status,
+                                        )
+                                        committed_sources += 1
+                                    except SourceFetchError as error:
+                                        if not error.recoverable:
+                                            raise
+                                        _record_source_failure(connect, log, job, "threads", error)
+                                        failures.append(_source_failure_note("threads", variant, error.detail))
+
+                                if "instagram" in sources and fetch_instagram is not None:
+                                    _reset_source_attempt(context, "instagram")
+                                    try:
+                                        context["attempt"] = True
+                                        ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
+                                        _log_route_events(
+                                            log,
+                                            job,
+                                            "instagram",
+                                            _route_events_from(ig_result),
+                                        )
+                                        (
+                                            ig_mentions,
+                                            ig_cursor,
+                                            ig_counts,
+                                            ig_credits,
+                                            ig_http_status,
+                                        ) = _unpack_fetched(ig_result, variant)
+                                        context["counts"] = ig_counts
+                                        context["credits"] = ig_credits
+                                        context["http_status"] = ig_http_status
+
+                                        def store_instagram(
+                                            conn,
+                                            job=job,
+                                            key=key,
+                                            ig_mentions=ig_mentions,
+                                            ig_cursor=ig_cursor,
+                                        ):
+                                            return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
+
+                                        _commit_source(
+                                            connect,
+                                            log,
+                                            job,
+                                            context,
+                                            store_instagram,
+                                            counts=ig_counts,
+                                            credits=ig_credits,
+                                            http_status=ig_http_status,
+                                        )
+                                        committed_sources += 1
+                                    except SourceFetchError as error:
+                                        if not error.recoverable:
+                                            raise
+                                        _record_source_failure(connect, log, job, "instagram", error)
+                                        failures.append(_source_failure_note("instagram", variant, error.detail))
+
+                                if "tiktok" in sources and fetch_tiktok is not None:
+                                    _reset_source_attempt(context, "tiktok")
+                                    try:
+                                        context["attempt"] = True
+                                        tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
+                                        _log_route_events(
+                                            log,
+                                            job,
+                                            "tiktok",
+                                            _route_events_from(tt_result),
+                                        )
+                                        (
+                                            tt_mentions,
+                                            tt_cursor,
+                                            tt_counts,
+                                            tt_credits,
+                                            tt_http_status,
+                                        ) = _unpack_fetched(tt_result, variant)
+                                        context["counts"] = tt_counts
+                                        context["credits"] = tt_credits
+                                        context["http_status"] = tt_http_status
+
+                                        def store_tiktok(
+                                            conn,
+                                            job=job,
+                                            key=key,
+                                            tt_mentions=tt_mentions,
+                                            tt_cursor=tt_cursor,
+                                        ):
+                                            return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
+
+                                        _commit_source(
+                                            connect,
+                                            log,
+                                            job,
+                                            context,
+                                            store_tiktok,
+                                            counts=tt_counts,
+                                            credits=tt_credits,
+                                            http_status=tt_http_status,
+                                        )
+                                        committed_sources += 1
+                                    except SourceFetchError as error:
+                                        if not error.recoverable:
+                                            raise
+                                        _record_source_failure(connect, log, job, "tiktok", error)
+                                        failures.append(_source_failure_note("tiktok", variant, error.detail))
+
+                                if collected is not None and collected.blocked_detail:
+                                    blocked_detail = collected.blocked_detail
                                     break
-
-                                def fetch_page(cursor, since, since_id, limit, variant=variant):
-                                    return _guarded_fetch(
-                                        "x",
-                                        lambda: fetch_x(variant, limit, cursor, since, since_id),
-                                    )
-
-                                def admit_page(job=job):
-                                    return _call(
-                                        connect,
-                                        lambda conn, job=job: admit_x_read(conn, job["customer_id"], 10, limits),
-                                    )
-
-                                try:
-                                    context["attempt"] = True
-                                    collected = collect_newer_x(
-                                        fetch_page,
-                                        admit_page,
-                                        floor_id=floor_id,
-                                        floor_since=floor_since,
-                                        first_limit=admission,
-                                    )
-                                    x_mentions = list(collected.mentions)
-                                    x_counts = {
-                                        "returned": len(x_mentions),
-                                        "parsed": len(x_mentions),
-                                        "deduplicated": 0,
-                                    }
-                                    context["counts"] = x_counts
-                                    context["credits"] = None
-                                    context["http_status"] = None
-
-                                    def store_x(
-                                        conn,
-                                        job=job,
-                                        mentions=x_mentions,
-                                        key=key,
-                                        floor=collected.floor_id,
-                                        marker_since=collected.floor_since,
-                                    ):
-                                        return store_source(conn, job, mentions, key, "x", floor, marker_since)
-
-                                    _commit_source(
-                                        connect,
-                                        log,
-                                        job,
-                                        context,
-                                        store_x,
-                                        counts=x_counts,
-                                        credits=None,
-                                        http_status=None,
-                                    )
-                                    committed_sources += 1
-                                except SourceFetchError as error:
-                                    if not error.recoverable:
-                                        raise
-                                    _record_source_failure(connect, log, job, "x", error)
-                                    failures.append(_source_failure_note("x", variant, error.detail))
-
-                            if "threads" in sources and fetch_threads is not None:
-                                _reset_source_attempt(context, "threads")
-                                try:
-                                    context["attempt"] = True
-                                    threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
-                                    _log_route_events(
-                                        log,
-                                        job,
-                                        "threads",
-                                        _route_events_from(threads_result),
-                                    )
-                                    (
-                                        threads_mentions,
-                                        threads_cursor,
-                                        threads_counts,
-                                        threads_credits,
-                                        threads_http_status,
-                                    ) = _unpack_fetched(threads_result, variant)
-                                    context["counts"] = threads_counts
-                                    context["credits"] = threads_credits
-                                    context["http_status"] = threads_http_status
-
-                                    def store_threads(
-                                        conn,
-                                        job=job,
-                                        key=key,
-                                        threads_mentions=threads_mentions,
-                                        threads_cursor=threads_cursor,
-                                    ):
-                                        return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
-
-                                    _commit_source(
-                                        connect,
-                                        log,
-                                        job,
-                                        context,
-                                        store_threads,
-                                        counts=threads_counts,
-                                        credits=threads_credits,
-                                        http_status=threads_http_status,
-                                    )
-                                    committed_sources += 1
-                                except SourceFetchError as error:
-                                    if not error.recoverable:
-                                        raise
-                                    _record_source_failure(connect, log, job, "threads", error)
-                                    failures.append(_source_failure_note("threads", variant, error.detail))
-
-                            if "instagram" in sources and fetch_instagram is not None:
-                                _reset_source_attempt(context, "instagram")
-                                try:
-                                    context["attempt"] = True
-                                    ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
-                                    _log_route_events(
-                                        log,
-                                        job,
-                                        "instagram",
-                                        _route_events_from(ig_result),
-                                    )
-                                    (
-                                        ig_mentions,
-                                        ig_cursor,
-                                        ig_counts,
-                                        ig_credits,
-                                        ig_http_status,
-                                    ) = _unpack_fetched(ig_result, variant)
-                                    context["counts"] = ig_counts
-                                    context["credits"] = ig_credits
-                                    context["http_status"] = ig_http_status
-
-                                    def store_instagram(
-                                        conn,
-                                        job=job,
-                                        key=key,
-                                        ig_mentions=ig_mentions,
-                                        ig_cursor=ig_cursor,
-                                    ):
-                                        return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
-
-                                    _commit_source(
-                                        connect,
-                                        log,
-                                        job,
-                                        context,
-                                        store_instagram,
-                                        counts=ig_counts,
-                                        credits=ig_credits,
-                                        http_status=ig_http_status,
-                                    )
-                                    committed_sources += 1
-                                except SourceFetchError as error:
-                                    if not error.recoverable:
-                                        raise
-                                    _record_source_failure(connect, log, job, "instagram", error)
-                                    failures.append(_source_failure_note("instagram", variant, error.detail))
-
-                            if "tiktok" in sources and fetch_tiktok is not None:
-                                _reset_source_attempt(context, "tiktok")
-                                try:
-                                    context["attempt"] = True
-                                    tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
-                                    _log_route_events(
-                                        log,
-                                        job,
-                                        "tiktok",
-                                        _route_events_from(tt_result),
-                                    )
-                                    (
-                                        tt_mentions,
-                                        tt_cursor,
-                                        tt_counts,
-                                        tt_credits,
-                                        tt_http_status,
-                                    ) = _unpack_fetched(tt_result, variant)
-                                    context["counts"] = tt_counts
-                                    context["credits"] = tt_credits
-                                    context["http_status"] = tt_http_status
-
-                                    def store_tiktok(
-                                        conn,
-                                        job=job,
-                                        key=key,
-                                        tt_mentions=tt_mentions,
-                                        tt_cursor=tt_cursor,
-                                    ):
-                                        return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
-
-                                    _commit_source(
-                                        connect,
-                                        log,
-                                        job,
-                                        context,
-                                        store_tiktok,
-                                        counts=tt_counts,
-                                        credits=tt_credits,
-                                        http_status=tt_http_status,
-                                    )
-                                    committed_sources += 1
-                                except SourceFetchError as error:
-                                    if not error.recoverable:
-                                        raise
-                                    _record_source_failure(connect, log, job, "tiktok", error)
-                                    failures.append(_source_failure_note("tiktok", variant, error.detail))
-
-                            if collected is not None and collected.blocked_detail:
-                                blocked_detail = collected.blocked_detail
-                                break
-            except _CommitFailed:
-                source = context["source"] or "threads"
-                _log_collection(
-                    log,
-                    job,
-                    source,
-                    "storage_commit_unknown",
-                    context["counts"],
-                    "-",
-                    http_status=context["http_status"],
-                    credits=context["credits"],
-                    detail="storage_commit_unknown",
-                )
-                fail_job("storage_commit_unknown")
-                continue
-            except SourceFetchError as error:
-                # Non-recoverable (programming) errors re-raised by a source
-                # handler fail the whole job, matching the pre-continue behaviour.
-                _record_source_failure(
-                    connect, log, job, context["source"] or "threads", error
-                )
-                fail_job(error.detail)
-                continue
-            except Exception as error:
-                if context["committed"]:
-                    if not context["reported"]:
-                        _log_collection(
-                            log,
-                            job,
-                            context["source"],
-                            "success",
-                            context["counts"],
-                            context["saved"] if context["saved"] is not None else "-",
-                            http_status=context["http_status"],
-                            credits=context["credits"],
-                        )
-                        context["reported"] = True
-                    _log_cleanup_failed(log, job, context["source"], error)
-                else:
-                    if context["attempt"]:
-                        _log_collection(
-                            log,
-                            job,
-                            context["source"],
-                            "storage_failed",
-                            context["counts"],
-                            0,
-                            http_status=context["http_status"],
-                            credits=context["credits"],
-                            detail="storage_failed",
-                        )
-                    else:
-                        _log_exception(error)
-                    fail_job("storage_failed")
+                except _CommitFailed:
+                    source = context["source"] or "threads"
+                    _log_collection(
+                        log,
+                        job,
+                        source,
+                        "storage_commit_unknown",
+                        context["counts"],
+                        "-",
+                        http_status=context["http_status"],
+                        credits=context["credits"],
+                        detail="storage_commit_unknown",
+                    )
+                    fail_job("storage_commit_unknown")
                     continue
-
-            if deferred:
-                continue
-            if job["variants"]:
-                def finish_job(conn, job=job, blocked_detail=blocked_detail):
-                    if blocked_detail:
-                        _defer(conn, job["id"], blocked_detail)
-                        return
-                    if failures and committed_sources == 0:
-                        conn.execute(
-                            "update jobs set status = 'failed', status_detail = %s where id = %s",
-                            ("all_sources_failed:" + "|".join(failures), job["id"]),
-                        )
-                        return
-                    detail = "partial_failures:" + "|".join(failures) if failures else None
-                    conn.execute(
-                        "update jobs set status = 'succeeded', status_detail = %s where id = %s",
-                        (detail, job["id"]),
+                except SourceFetchError as error:
+                    # Non-recoverable (programming) errors re-raised by a source
+                    # handler fail the whole job, matching the pre-continue behaviour.
+                    _record_source_failure(
+                        connect, log, job, context["source"] or "threads", error
                     )
-                    conn.execute(
-                        "update project_schedules set last_collected_at = now() where project_id = %s",
-                        (job["project_id"],),
-                    )
-
-                try:
-                    _call(connect, finish_job)
+                    fail_job(error.detail)
+                    continue
                 except Exception as error:
-                    _log_job_finalize_failed(log, job, error)
-                    fail_job("storage_failed")
-        try:
-            _call(
-                connect,
-                lambda conn: run_instant_search_cycle(
-                    conn, env=os.environ, now=datetime.now(timezone.utc), limits=limits
-                ),
-                log_error=False,
-            )
-        except Exception:
-            _safe_log(log, lambda: format_log("instant_search_cycle_failed"))
-        now = monotonic()
-        if last_logged is None or now - last_logged >= interval:
-            _safe_log(log, lambda: format_log(f"worker heartbeat id={worker_id}"))
-            last_logged = now
-        sleep(limits.worker_poll_seconds)
+                    if context["committed"]:
+                        if not context["reported"]:
+                            _log_collection(
+                                log,
+                                job,
+                                context["source"],
+                                "success",
+                                context["counts"],
+                                context["saved"] if context["saved"] is not None else "-",
+                                http_status=context["http_status"],
+                                credits=context["credits"],
+                            )
+                            context["reported"] = True
+                        _log_cleanup_failed(log, job, context["source"], error)
+                    else:
+                        if context["attempt"]:
+                            _log_collection(
+                                log,
+                                job,
+                                context["source"],
+                                "storage_failed",
+                                context["counts"],
+                                0,
+                                http_status=context["http_status"],
+                                credits=context["credits"],
+                                detail="storage_failed",
+                            )
+                        else:
+                            _log_exception(error)
+                        fail_job("storage_failed")
+                        continue
+
+                if deferred:
+                    continue
+                if job["variants"]:
+                    def finish_job(conn, job=job, blocked_detail=blocked_detail):
+                        if blocked_detail:
+                            _defer(conn, job["id"], blocked_detail)
+                            return
+                        if failures and committed_sources == 0:
+                            conn.execute(
+                                "update jobs set status = 'failed', status_detail = %s where id = %s",
+                                ("all_sources_failed:" + "|".join(failures), job["id"]),
+                            )
+                            return
+                        detail = "partial_failures:" + "|".join(failures) if failures else None
+                        conn.execute(
+                            "update jobs set status = 'succeeded', status_detail = %s where id = %s",
+                            (detail, job["id"]),
+                        )
+                        conn.execute(
+                            "update project_schedules set last_collected_at = now() where project_id = %s",
+                            (job["project_id"],),
+                        )
+
+                    try:
+                        _call(connect, finish_job)
+                    except Exception as error:
+                        _log_job_finalize_failed(log, job, error)
+                        fail_job("storage_failed")
+            now = monotonic()
+            if last_logged is None or now - last_logged >= interval:
+                _safe_log(log, lambda: format_log(f"worker heartbeat id={worker_id}"))
+                last_logged = now
+            sleep(limits.worker_poll_seconds)
+    finally:
+        stop_event.set()
+        instant_thread.join(timeout=5)
 
 
 class CursorRowAdapter:
