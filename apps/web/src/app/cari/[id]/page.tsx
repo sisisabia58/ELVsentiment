@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { connection } from "next/server";
 import { LogoutForm } from "@/components/logout-form";
 import { EmptyState } from "@/components/monitor/bits";
 import { SearchDetail } from "@/components/monitor/cari/search-screen";
@@ -11,6 +12,7 @@ import { loadSearchSnapshot } from "@/monitor/search/load";
 import { requireWorkspace } from "@/monitor/session-page";
 
 export async function CariDetailPageBody({ id }: { id: string }) {
+  await connection();
   if (!cariSekarangEnabled()) notFound();
   const { customerId, workspace } = await requireWorkspace(undefined);
   const snapshot = await withClient((db) => loadSearchSnapshot(db, customerId, id));

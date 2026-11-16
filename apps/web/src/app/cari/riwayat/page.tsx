@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { connection } from "next/server";
 import { LogoutForm } from "@/components/logout-form";
 import { HistoryList } from "@/components/monitor/cari/history-list";
 import { PageHeader } from "@/components/monitor/bits";
@@ -10,6 +11,7 @@ import { loadHistory } from "@/monitor/search/load";
 import { requireWorkspace } from "@/monitor/session-page";
 
 export async function RiwayatPageBody() {
+  await connection();
   if (!cariSekarangEnabled()) notFound();
   const { customerId, workspace, now } = await requireWorkspace(undefined);
   const rows = await withClient((db) => loadHistory(db, customerId));

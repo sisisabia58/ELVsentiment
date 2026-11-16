@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { requireWorkspace, loadSearchSnapshot } = vi.hoisted(() => ({
+const state = vi.hoisted(() => ({
+  order: [] as string[],
+  flag: false,
   requireWorkspace: vi.fn(async () => ({
     customerId: "11111111-1111-4111-8111-111111111111",
     now: new Date("2026-11-16T10:00:00Z"),
@@ -10,14 +12,28 @@ const { requireWorkspace, loadSearchSnapshot } = vi.hoisted(() => ({
   loadSearchSnapshot: vi.fn(async () => null as unknown),
 }));
 
+vi.mock("next/server", () => ({
+  connection: async () => {
+    state.order.push("connection");
+  },
+}));
 vi.mock("next/navigation", () => ({
   notFound: () => {
+    state.order.push("notFound");
     throw new Error("NEXT_NOT_FOUND");
   },
 }));
-vi.mock("@/monitor/session-page", () => ({ requireWorkspace }));
+vi.mock("@/monitor/search/feature", () => ({
+  cariSekarangEnabled: () => {
+    state.order.push("flag");
+    return state.flag;
+  },
+  cariProviderMode: () => "live",
+  cariAiProvider: () => "demo",
+}));
+vi.mock("@/monitor/session-page", () => ({ requireWorkspace: state.requireWorkspace }));
 vi.mock("@/db/pg", () => ({ withClient: async (fn: (db: unknown) => Promise<unknown>) => fn({}) }));
-vi.mock("@/monitor/search/load", () => ({ loadSearchSnapshot }));
+vi.mock("@/monitor/search/load", () => ({ loadSearchSnapshot: state.loadSearchSnapshot }));
 vi.mock("@/components/logout-form", () => ({ LogoutForm: () => null }));
 vi.mock("@/components/monitor/bits", () => ({ EmptyState: () => null }));
 vi.mock("@/components/monitor/shell", () => ({ Frame: () => null }));
@@ -26,21 +42,23 @@ vi.mock("@/components/monitor/cari/search-screen", () => ({ SearchDetail: () => 
 import { CariDetailPageBody } from "./page";
 
 afterEach(() => {
-  vi.unstubAllEnvs();
-  requireWorkspace.mockClear();
-  loadSearchSnapshot.mockClear();
+  state.order = [];
+  state.flag = false;
+  state.requireWorkspace.mockClear();
+  state.loadSearchSnapshot.mockClear();
 });
 
 describe("/cari/[id] route", () => {
-  it("is not found while the feature flag is off", async () => {
-    vi.stubEnv("CARI_SEKARANG_ENABLED", "0");
+  it("awaits connection before checking the flag, even though params are dynamic", async () => {
+    state.flag = false;
     await expect(CariDetailPageBody({ id: "search-1" })).rejects.toThrow("NEXT_NOT_FOUND");
-    expect(loadSearchSnapshot).not.toHaveBeenCalled();
+    expect(state.order).toEqual(["connection", "flag", "notFound"]);
+    expect(state.loadSearchSnapshot).not.toHaveBeenCalled();
   });
 
   it("renders the empty state for a foreign or unknown id without leaking data", async () => {
-    vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+    state.flag = true;
     await expect(CariDetailPageBody({ id: "foreign" })).resolves.toBeTruthy();
-    expect(loadSearchSnapshot).toHaveBeenCalledWith(expect.anything(), expect.any(String), "foreign");
+    expect(state.loadSearchSnapshot).toHaveBeenCalledWith(expect.anything(), expect.any(String), "foreign");
   });
 });
