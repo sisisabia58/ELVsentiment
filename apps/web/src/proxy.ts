@@ -35,6 +35,7 @@ export async function redirectHome(request: NextRequest, lookup: SessionLookup =
 const PROTECTED_PREFIXES = [
   "/dasbor",
   "/cari",
+  "/cari-tidak-ditemukan",
   "/sebutan",
   "/perlu-perhatian",
   "/belum-yakin",
@@ -87,12 +88,26 @@ function cariNotFoundResponse(request: NextRequest): NextResponse {
   return response;
 }
 
+// A direct visit to the internal card route (signed in, flag on) must still
+// answer 404, not a 200 page. Rewriting to itself keeps the status; Proxy is
+// not re-run for a rewrite, so this cannot loop.
+export function cariInternalNotFoundGate(request: NextRequest): NextResponse | null {
+  if (request.nextUrl.pathname !== CARI_NOT_FOUND_PATH) return null;
+  return cariNotFoundResponse(request);
+}
+
 // notFound() inside <Suspense> runs after the PPR shell streamed, so the status
 // was 200. The flag is decided here, before any HTML, for a real 404.
 export function cariGate(request: NextRequest): NextResponse | null {
   if (cariSekarangEnabled()) return null;
   const pathname = request.nextUrl.pathname;
-  if (!isCariPath(pathname) && pathname !== "/pengaturan/provider") return null;
+  if (
+    !isCariPath(pathname) &&
+    pathname !== "/pengaturan/provider" &&
+    pathname !== CARI_NOT_FOUND_PATH
+  ) {
+    return null;
+  }
   return notFoundResponse();
 }
 
@@ -185,6 +200,8 @@ export async function proxy(request: NextRequest) {
   // anonymous malformed id cannot learn the expected format.
   const signedOut = await redirectSignedOut(request);
   if (signedOut.headers.get("location")) return signedOut;
+  const internal = cariInternalNotFoundGate(request);
+  if (internal) return internal;
   const missing = await cariIdGate(request);
   if (missing) return missing;
   const provider = await providerAdminGate(request);
@@ -197,6 +214,7 @@ export const config = {
     "/",
     "/cari",
     "/cari/:path*",
+    "/cari-tidak-ditemukan",
     "/pengaturan/provider",
     "/dasbor",
     "/dasbor/:path*",

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cariIdGate, config, providerAdminGate, proxy } from "./proxy";
+import { cariIdGate, cariInternalNotFoundGate, config, providerAdminGate, proxy } from "./proxy";
 
 function request(path: string): NextRequest {
   return new NextRequest(`http://127.0.0.1:43123${path}`);
@@ -53,7 +53,17 @@ describe("flag-off Cari routes answer a real 404", () => {
   it("matches the routes that carry the gate", () => {
     expect(config.matcher).toContain("/cari");
     expect(config.matcher).toContain("/cari/:path*");
+    expect(config.matcher).toContain("/cari-tidak-ditemukan");
     expect(config.matcher).toContain("/pengaturan/provider");
+  });
+
+  it("returns the plain unknown-route 404 for a direct hit on the internal card route", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "0");
+    const response = await proxy(request("/cari-tidak-ditemukan"));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
   });
 });
 
@@ -149,5 +159,20 @@ describe("anonymous Cari routes redirect before the id gate", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("content-type")).toContain("text/plain");
+  });
+
+  it("sends a direct hit on the internal card route to /masuk", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+    const response = await proxy(request("/cari-tidak-ditemukan"));
+    expect(response.status).toBe(307);
+    expect(new URL(response.headers.get("location") ?? "").pathname).toBe("/masuk");
+  });
+
+  it("serves the styled 404 for a signed-in direct hit on the internal card route", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+    const response = await cariInternalNotFoundGate(request("/cari-tidak-ditemukan"));
+    expect(response?.status).toBe(404);
+    expect(response?.headers.get("content-type") ?? "").not.toContain("text/plain");
+    expect(response?.headers.get("x-middleware-rewrite") ?? "").toContain("/cari-tidak-ditemukan");
   });
 });
