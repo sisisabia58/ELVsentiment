@@ -99,6 +99,16 @@ describe("GET /api/cari/[id]", () => {
     expect(JSON.stringify(await reverse.json())).not.toContain("barayam");
   });
 
+  it.each(["not-a-uuid", "' or 1=1--", "a".repeat(5000)])(
+    "returns 404 instead of 500 for the malformed id %s",
+    async (id) => {
+      hoisted.token = ownerToken;
+      const response = await call(id);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "not_found" });
+    },
+  );
+
   it("returns 401 for an unknown session token", async () => {
     hoisted.token = "synthetic-unknown-token";
     const response = await call(SEARCH);

@@ -33,7 +33,12 @@ vi.mock("@/monitor/search/feature", () => ({
 }));
 vi.mock("@/monitor/session-page", () => ({ requireWorkspace: state.requireWorkspace }));
 vi.mock("@/db/pg", () => ({ withClient: async (fn: (db: unknown) => Promise<unknown>) => fn({}) }));
-vi.mock("@/monitor/search/load", () => ({ loadSearchSnapshot: state.loadSearchSnapshot }));
+vi.mock("@/monitor/search/load", () => ({
+  isUuid: (value: unknown) =>
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value),
+  loadSearchSnapshot: state.loadSearchSnapshot,
+}));
 vi.mock("@/components/logout-form", () => ({ LogoutForm: () => null }));
 vi.mock("@/components/monitor/bits", () => ({ EmptyState: () => null }));
 vi.mock("@/components/monitor/shell", () => ({ Frame: () => null }));
@@ -56,9 +61,18 @@ describe("/cari/[id] route", () => {
     expect(state.loadSearchSnapshot).not.toHaveBeenCalled();
   });
 
+  it("is a not-found for a malformed id before any query runs", async () => {
+    state.flag = true;
+    await expect(CariDetailPageBody({ id: "not-a-uuid" })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(state.loadSearchSnapshot).not.toHaveBeenCalled();
+    await expect(CariDetailPageBody({ id: "' or 1=1--" })).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(CariDetailPageBody({ id: "a".repeat(5000) })).rejects.toThrow("NEXT_NOT_FOUND");
+  });
+
   it("renders the empty state for a foreign or unknown id without leaking data", async () => {
     state.flag = true;
-    await expect(CariDetailPageBody({ id: "foreign" })).resolves.toBeTruthy();
-    expect(state.loadSearchSnapshot).toHaveBeenCalledWith(expect.anything(), expect.any(String), "foreign");
+    const id = "44444444-4444-4444-8444-444444444444";
+    await expect(CariDetailPageBody({ id })).resolves.toBeTruthy();
+    expect(state.loadSearchSnapshot).toHaveBeenCalledWith(expect.anything(), expect.any(String), id);
   });
 });

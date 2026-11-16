@@ -8,12 +8,13 @@ import { SearchDetail } from "@/components/monitor/cari/search-screen";
 import { Frame } from "@/components/monitor/shell";
 import { withClient } from "@/db/pg";
 import { cariSekarangEnabled } from "@/monitor/search/feature";
-import { loadSearchSnapshot } from "@/monitor/search/load";
+import { isUuid, loadSearchSnapshot } from "@/monitor/search/load";
 import { requireWorkspace } from "@/monitor/session-page";
 
 export async function CariDetailPageBody({ id }: { id: string }) {
   await connection();
   if (!cariSekarangEnabled()) notFound();
+  if (!isUuid(id)) notFound();
   const { customerId, workspace } = await requireWorkspace(undefined);
   const snapshot = await withClient((db) => loadSearchSnapshot(db, customerId, id));
   if (!snapshot) {

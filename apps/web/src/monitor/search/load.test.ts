@@ -116,6 +116,9 @@ describe("loadSearchSnapshot", () => {
     expect(snapshot?.results.map((row) => row.externalId)).toEqual(["dated", "undated"]);
     expect(await loadSearchSnapshot(db, OTHER_CUSTOMER, SEARCH)).toBeNull();
     expect(await loadSearchSnapshot(db, CUSTOMER, "66666666-6666-4666-8666-666666666666")).toBeNull();
+    expect(await loadSearchSnapshot(db, CUSTOMER, "not-a-uuid")).toBeNull();
+    expect(await loadSearchSnapshot(db, CUSTOMER, "' or 1=1--")).toBeNull();
+    expect(await loadSearchSnapshot(db, CUSTOMER, "a".repeat(5000))).toBeNull();
   });
 
   it("returns progress totals and credits", async () => {

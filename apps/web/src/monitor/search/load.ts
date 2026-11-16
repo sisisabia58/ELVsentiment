@@ -138,11 +138,19 @@ function int(value: number | string | null | undefined): number {
   return Number(value ?? 0) || 0;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
 export async function loadSearchSnapshot(
   db: Queryable,
   customerId: string,
   searchId: string,
 ): Promise<SearchSnapshot | null> {
+  // Postgres rejects a non-UUID literal before RLS can answer "not found".
+  if (!isUuid(searchId)) return null;
   return withCustomer(db, customerId, async () => {
     const searchRows = await db.query<{
       id: string;
