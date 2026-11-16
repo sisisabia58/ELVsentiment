@@ -220,9 +220,15 @@ def safe_published_at(value: object) -> str | None:
     candidate = text.replace("Z", "+00:00").replace("z", "+00:00")
     try:
         parsed = datetime.fromisoformat(candidate)
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
         return None
-    return _iso(parsed)
+    # fromisoformat accepts offsets that overflow UTC (year 9999 with -14:00,
+    # year 1 with +14:00). A bad date must make the post undated, not abort the
+    # whole platform's search.
+    try:
+        return _iso(parsed)
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def sanitize_post(post: CanonicalPost) -> CanonicalPost:

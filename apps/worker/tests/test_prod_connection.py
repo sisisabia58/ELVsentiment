@@ -507,3 +507,112 @@ def test_oversized_credit_headers_are_unknown_and_do_not_leave_the_search_runnin
         "select credits_charged from search_credit_ledger where search_id = %s", (search_id,)
     ).fetchall()
     assert [row["credits_charged"] for row in ledger] == [None, None], ledger
+
+
+def _seven_platform_fetch(*, poison_date: str | None = None, delay: float = 0.0):
+    from dataclasses import replace
+    import time
+
+    calls: list[str] = []
+
+    def fetch(platform, keyword, settings, **kwargs):
+        calls.append(platform)
+        if delay:
+            time.sleep(delay)
+        posts = [_post(platform, f"{platform}-{index}") for index in range(3)]
+        if platform == "youtube" and poison_date is not None:
+            posts[0] = replace(posts[0], published_at=poison_date)
+        return PlatformFetch(
+            platform,
+            "scrapeatlas",
+            posts,
+            [_call(platform, "")],
+            "answered",
+            "ok",
+            5,
+        )
+
+    return fetch, calls
+
+
+def _assert_isolated_search(prod_db, search_id: str, calls: list[str], *, youtube_state: str):
+    view = prod_db.view(search_id)
+    assert view["ledger"] == 7, view
+    assert calls == ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"] or (
+        sorted(calls) == sorted(["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"])
+    ), calls
+    states = {row["platform"]: row for row in view["sources"]}
+    assert len(states) == 7, view
+    assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
+    for platform in ("threads", "tiktok", "instagram", "reddit", "facebook", "linkedin"):
+        assert states[platform]["state"] == "answered", view
+        assert states[platform]["result_count"] == 3, view
+        assert view["counts"].get(platform) == 3, view
+    youtube = states["youtube"]
+    if youtube_state == "answered":
+        assert youtube["state"] == "answered", view
+        assert youtube["result_count"] == 3, view
+        assert view["counts"].get("youtube") == 3, view
+        assert prod_db.admin.execute(
+            "select count(*) as n from instant_search_results "
+            "where search_id = %s and platform = 'youtube' and published_at is null",
+            (search_id,),
+        ).fetchone()["n"] == 1
+    else:
+        assert youtube["state"] == "failed", view
+        assert youtube["safe_detail"] == "storage_failed", view
+        assert view["counts"].get("youtube", 0) == 0, view
+    assert view["search"]["status"] in ("succeeded", "partial"), view
+    assert view["search"]["error_code"] != "storage_failed", view
+
+
+def test_far_offset_date_on_one_platform_does_not_abort_the_search(prod_db):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
+    fetcher, calls = _seven_platform_fetch(poison_date="9999-12-31T23:59:59-14:00")
+
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetcher,
+    )
+    assert processed == 1
+    _assert_isolated_search(prod_db, search_id, calls, youtube_state="answered")
+    assert len(calls) == 7
+
+    again = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetcher,
+    )
+    assert again == 0
+    assert len(calls) == 7
+
+
+def test_normalisation_exception_on_one_platform_is_isolated(prod_db, monkeypatch):
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
+    fetcher, calls = _seven_platform_fetch()
+
+    original = instant_search._normalize
+
+    def exploding_normalize(item, job):
+        if item.platform == "youtube":
+            raise RuntimeError("synthetic normalisation failure")
+        return original(item, job)
+
+    monkeypatch.setattr(instant_search, "_normalize", exploding_normalize)
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        fetcher=fetcher,
+    )
+    assert processed == 1
+    _assert_isolated_search(prod_db, search_id, calls, youtube_state="failed")
+    assert len(calls) == 7

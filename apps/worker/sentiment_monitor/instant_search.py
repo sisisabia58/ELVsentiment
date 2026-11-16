@@ -531,6 +531,35 @@ def _store_answered(
     return inserted
 
 
+def _mark_source_failed(
+    tx: _Transactions,
+    job: InstantSearchJob,
+    platform: str,
+    chain: tuple[str, ...],
+    *,
+    latency: Any = None,
+    credits: int | None = None,
+    attempted: tuple[str, ...] | None = None,
+) -> None:
+    try:
+        tx.run(
+            lambda conn: set_source_state(
+                conn,
+                job,
+                platform,
+                "failed",
+                provider=chain[0],
+                latency_ms=latency,
+                credits_charged=credits,
+                attempted_providers=attempted or chain,
+                safe_detail="storage_failed",
+            )
+        )
+    except Exception:
+        # The isolation path must not raise again and abort the other sources.
+        pass
+
+
 def _handle_result(
     tx: _Transactions,
     job: InstantSearchJob,
@@ -541,47 +570,49 @@ def _handle_result(
     all_posts: list[CanonicalPost],
 ) -> None:
     calls = list(getattr(result, "calls", None) or [])
-    # Paid calls are durable before any post is stored, so a later storage
-    # error can never lose the ledger or cause the search to spend again.
+    # Paid calls are durable before any post is stored, so a later normalisation
+    # or storage error can never lose the ledger or cause a paid re-run.
     tx.run(lambda conn: [record_call(conn, job, call) for call in calls])
     state = getattr(result, "state", "unavailable")
     detail = getattr(result, "safe_detail", "other")
     attempted = tuple(getattr(result, "attempted_providers", None) or chain)
     credits = _known_credit_sum(calls)
     latency = getattr(result, "latency_ms", None)
-    if state == "answered":
-        kept = [_normalize(item, job) for item in filter_since(result.posts or [], cutoff_iso)]
-        kept = sort_posts(dedupe_posts(kept), job.sort_mode)[:MAX_PLATFORM_RESULTS]
-        try:
+    # Normalisation, filtering, sorting and insertion all stay inside this
+    # per-platform guard. One poisoned record or one bad row can only fail its
+    # own source; the other platforms keep their results and ledger rows.
+    try:
+        if state == "answered":
+            kept = [_normalize(item, job) for item in filter_since(result.posts or [], cutoff_iso)]
+            kept = sort_posts(dedupe_posts(kept), job.sort_mode)[:MAX_PLATFORM_RESULTS]
             tx.run(
                 lambda conn: _store_answered(
                     conn, job, platform, chain, kept, result, calls, detail, attempted
                 )
             )
-        except Exception:
+            all_posts.extend(kept)
+            return
+        if state == "unavailable":
             tx.run(
                 lambda conn: set_source_state(
                     conn,
                     job,
                     platform,
-                    "failed",
+                    "unavailable",
                     provider=chain[0],
                     latency_ms=latency,
                     credits_charged=credits,
                     attempted_providers=attempted,
-                    safe_detail="storage",
+                    safe_detail=detail,
                 )
             )
             return
-        all_posts.extend(kept)
-        return
-    if state == "unavailable":
         tx.run(
             lambda conn: set_source_state(
                 conn,
                 job,
                 platform,
-                "unavailable",
+                "failed",
                 provider=chain[0],
                 latency_ms=latency,
                 credits_charged=credits,
@@ -589,20 +620,16 @@ def _handle_result(
                 safe_detail=detail,
             )
         )
-        return
-    tx.run(
-        lambda conn: set_source_state(
-            conn,
+    except Exception:
+        _mark_source_failed(
+            tx,
             job,
             platform,
-            "failed",
-            provider=chain[0],
-            latency_ms=latency,
-            credits_charged=credits,
-            attempted_providers=attempted,
-            safe_detail=detail,
+            chain,
+            latency=latency,
+            credits=credits,
+            attempted=attempted,
         )
-    )
 
 
 def run_instant_search(
@@ -672,7 +699,12 @@ def run_instant_search(
                 except Exception:
                     tx.run(lambda conn, platform=platform, chain=chain: _failed_state(conn, job, platform, chain))
                     continue
-                _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
+                try:
+                    _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
+                except Exception:
+                    # Belt and braces: _handle_result isolates itself, but one
+                    # platform must never abort the remaining done futures.
+                    _mark_source_failed(tx, job, platform, chain)
         for future in pending:
             platform, chain = futures[future]
             future.cancel()
@@ -729,12 +761,26 @@ def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
     conn.execute(FAIL_DEADLINE_SQL, (now, now, now, now))
 
 
+def _fail_unfinished_sources(conn: Any, job: InstantSearchJob) -> None:
+    _set_customer(conn, job.customer_id)
+    conn.execute(
+        "update instant_search_sources set state = 'failed', safe_detail = 'storage_failed', "
+        "updated_at = now() where search_id = %s and state in ('queued', 'searching')",
+        (job.id,),
+    )
+
+
 def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, Any]) -> None:
     try:
         run_instant_search(connect, job, **kwargs)
     except Exception:
         # A started search must never fall back to 'queued' and repeat paid
-        # calls. Best effort: finish it as failed on its own connection.
+        # calls, and no source may stay 'searching' forever. Best effort: mark
+        # the stragglers terminal, then finish the search as failed.
+        try:
+            _Transactions(connect).run(lambda conn: _fail_unfinished_sources(conn, job))
+        except Exception:
+            pass
         try:
             _Transactions(connect).run(
                 lambda conn: finish_search(conn, job, "failed", error_code="storage_failed")

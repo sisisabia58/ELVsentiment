@@ -1,8 +1,11 @@
+import pytest
+
 from sentiment_monitor.providers.canonical import (
     CanonicalPost,
     detect_language,
     keyword_relevance,
     post_identity,
+    safe_published_at,
 )
 
 
@@ -117,3 +120,25 @@ def test_dedupe_drops_blank_identity_without_colliding():
 def test_engagement_score_weights_views_and_actions():
     assert engagement_score(post(views=10, likes=2, replies=3, shares=4)) == 10 + 6 + 6 + 8
     assert engagement_score(post(views=None, likes=None, replies=None, shares=None)) == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "9999-12-31T23:59:59-14:00",
+        "0001-01-01T00:00:00+14:00",
+        10**20,
+        -(10**20),
+        float("inf"),
+        float("-inf"),
+        "999999999999999999999",
+        "-999999999999999999999",
+    ],
+)
+def test_extreme_dates_become_undated_instead_of_raising(value):
+    assert safe_published_at(value) is None
+
+
+def test_ordinary_iso_dates_still_normalise_to_utc():
+    assert safe_published_at("2026-11-15T00:00:00Z") == "2026-11-15T00:00:00Z"
+    assert safe_published_at("2026-11-15T07:00:00+07:00") == "2026-11-15T00:00:00Z"
