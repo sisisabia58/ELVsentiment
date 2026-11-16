@@ -97,10 +97,9 @@ function filterSummary(filters: SearchSnapshot["search"]["filters"]): string {
 function useNow(initialIso: string | undefined): Date {
   const [now, setNow] = useState(() => new Date(initialIso ?? 0));
   useEffect(() => {
-    if (!initialIso) setNow(new Date());
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
-  }, [initialIso]);
+  }, []);
   return now;
 }
 
