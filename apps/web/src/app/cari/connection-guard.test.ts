@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 
 const here = import.meta.dirname;
 
-const pages = ["page.tsx", "riwayat/page.tsx", "[id]/page.tsx"] as const;
+const pages = [
+  "page.tsx",
+  "riwayat/page.tsx",
+  "[id]/page.tsx",
+  "../pengaturan/provider/page.tsx",
+] as const;
 
 describe("cari pages opt into per-request rendering", () => {
   for (const relative of pages) {

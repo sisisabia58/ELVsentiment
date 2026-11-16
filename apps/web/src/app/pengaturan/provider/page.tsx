@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { connection } from "next/server";
 import { platformAdminForSession, sessionTokenHash } from "@/auth/admin";
 import { readSessionToken, withSessionDeps } from "@/auth/request-session";
 import { LogoutForm } from "@/components/logout-form";
@@ -16,6 +17,7 @@ import {
 } from "./actions";
 
 export async function ProviderPageBody() {
+  await connection();
   if (!cariSekarangEnabled()) notFound();
   const { customerId, workspace } = await requireWorkspace(undefined);
   const token = await readSessionToken();

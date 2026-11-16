@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   flag: true,
+  order: [] as string[],
   frame: vi.fn((props: { children?: ReactNode }) => props.children),
   requireWorkspace: vi.fn(async () => ({
     customerId: "11111111-1111-4111-8111-111111111111",
@@ -17,16 +18,25 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("next/server", () => ({
+  connection: async () => {
+    mocks.order.push("connection");
+  },
+}));
 vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("REDIRECT");
   },
   notFound: () => {
+    mocks.order.push("notFound");
     throw new Error("NEXT_NOT_FOUND");
   },
 }));
 vi.mock("@/monitor/search/feature", () => ({
-  cariSekarangEnabled: () => mocks.flag,
+  cariSekarangEnabled: () => {
+    mocks.order.push("flag");
+    return mocks.flag;
+  },
 }));
 vi.mock("@/monitor/session-page", () => ({ requireWorkspace: mocks.requireWorkspace }));
 vi.mock("@/db/pg", () => ({ withClient: async (fn: (db: unknown) => Promise<unknown>) => fn({}) }));
@@ -54,6 +64,7 @@ import { ProviderPageBody } from "./page";
 
 afterEach(() => {
   cleanup();
+  mocks.order = [];
   mocks.frame.mockClear();
   mocks.requireWorkspace.mockClear();
   mocks.platformAdmin.mockReset();
@@ -72,9 +83,10 @@ describe("/pengaturan/provider page", () => {
     expect(mocks.frame.mock.calls[0][0]).toMatchObject({ active: "/pengaturan/provider" });
   });
 
-  it("is a real not-found while the feature flag is off", async () => {
+  it("awaits connection before the flag, so a flag-off build is not a static 404", async () => {
     mocks.flag = false;
     await expect(ProviderPageBody()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.order).toEqual(["connection", "flag", "notFound"]);
     expect(mocks.requireWorkspace).not.toHaveBeenCalled();
     expect(mocks.frame).not.toHaveBeenCalled();
   });
