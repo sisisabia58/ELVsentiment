@@ -304,3 +304,37 @@ def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
     view = prod_db.view(prod_db.search)
     assert view["search"]["status"] in ("partial", "failed"), view
     assert "youtube" not in view["counts"], view
+
+
+def test_retention_purge_keeps_the_credit_ledger(prod_db):
+    expired = _queue_search(prod_db, "barayam lama", deadline_seconds=-100)
+    prod_db.admin.execute(
+        "update instant_searches set status = 'succeeded', retention_expires_at = now() - interval '1 minute' where id = %s",
+        (expired,),
+    )
+    prod_db.admin.execute(
+        """
+        insert into search_credit_ledger
+          (id, search_id, customer_id, provider, platform, route, credits_charged,
+           http_status, safe_detail, body_length, latency_ms)
+        values (%s, %s, %s, 'scrapeatlas', 'youtube', 'scrapeatlas.youtube.search', 2,
+                200, 'ok', 40, 12)
+        """,
+        (str(uuid.uuid4()), expired, prod_db.customer),
+    )
+    deleted = scheduler._call(
+        prod_db.connect,
+        lambda conn: instant_search.expire_old_searches(conn, datetime.now(timezone.utc)),
+    )
+    assert deleted == 1
+    searches = prod_db.admin.execute(
+        "select count(*) as n from instant_searches where id = %s", (expired,)
+    ).fetchone()["n"]
+    ledger = prod_db.admin.execute(
+        "select search_id, customer_id, provider, credits_charged from search_credit_ledger"
+    ).fetchall()
+    assert searches == 0
+    assert len(ledger) == 1, ledger
+    assert ledger[0]["search_id"] is None
+    assert ledger[0]["provider"] == "scrapeatlas"
+    assert ledger[0]["credits_charged"] == 2

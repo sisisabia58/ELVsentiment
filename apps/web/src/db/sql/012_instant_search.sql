@@ -150,7 +150,7 @@ create table instant_search_questions (
 
 create table search_credit_ledger (
   id uuid primary key,
-  search_id uuid references instant_searches (id) on delete cascade,
+  search_id uuid references instant_searches (id) on delete set null,
   customer_id uuid not null references customers (id),
   provider text not null,
   platform text not null,
