@@ -5,11 +5,21 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Clock, MessageSquareText, Search, Sparkles } from "lucide-react";
 import { formatRelative } from "@/monitor/format";
-import { DEFAULT_FILTERS, type SearchFilters } from "@/monitor/search/filters";
+import {
+  DATE_LABEL,
+  DEFAULT_FILTERS,
+  LANGUAGE_LABEL,
+  SORT_LABEL,
+  type SearchFilters,
+} from "@/monitor/search/filters";
+import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
 import { startSearchAction } from "@/app/cari/actions";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
+import { ProgressPanel } from "./progress-panel";
+import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
+import { useSearchPoll } from "./use-search-poll";
 
 export type SearchHistoryRow = {
   id: string;
@@ -60,6 +70,78 @@ function RecentSearches(props: { history: SearchHistoryRow[]; now: string }) {
         </ul>
       )}
     </section>
+  );
+}
+
+function filterSummary(filters: SearchSnapshot["search"]["filters"]): string {
+  const parts = [DATE_LABEL[filters.dateWindow], SORT_LABEL[filters.sort]];
+  if (filters.language !== "all") parts.push(LANGUAGE_LABEL[filters.language]);
+  return parts.join(" · ");
+}
+
+function receiptElapsed(snapshot: SearchSnapshot): number {
+  const start = snapshot.search.startedAt ?? snapshot.search.createdAt;
+  const end = snapshot.search.finishedAt ?? new Date().toISOString();
+  const seconds = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
+  return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+}
+
+function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComment[]> {
+  const grouped: Record<string, SnapshotComment[]> = {};
+  for (const comment of snapshot.comments) {
+    grouped[comment.resultId] = [...(grouped[comment.resultId] ?? []), comment];
+  }
+  return grouped;
+}
+
+export function SearchDetail(props: { initialSnapshot: SearchSnapshot }) {
+  const { snapshot, stale } = useSearchPoll(
+    props.initialSnapshot.search.id,
+    props.initialSnapshot,
+  );
+  const search = snapshot.search;
+  const running = search.status === "queued" || search.status === "running";
+  const done = snapshot.totals.done;
+  const total = snapshot.totals.sources;
+  return (
+    <div className="mt-5">
+      <section className="rounded-[14px] border border-border bg-surface shadow-card">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-5 pt-4 font-mono text-[13px]">
+          <span className="font-semibold text-primary">$</span>
+          <span>cari &quot;{search.query}&quot;</span>
+          <span className="text-muted-foreground">{filterSummary(search.filters)}</span>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
+          <p className="font-mono text-[12.5px] text-muted-foreground">
+            {running
+              ? `Sedang berjalan · ${done} dari ${total} sumber selesai · ${snapshot.totals.results} hasil sejauh ini`
+              : `${done} dari ${total} sumber menjawab · ${snapshot.totals.results} hasil · ${receiptElapsed(snapshot)} dtk · 1 kredit`}
+          </p>
+          <span className="rounded-full bg-surface-subtle px-2 py-0.5 font-sans text-[11.5px] font-medium text-foreground">
+            1 kredit
+          </span>
+        </div>
+      </section>
+      {stale ? (
+        <p className="mt-2 text-[12px] text-muted-foreground" role="status">
+          Koneksi terputus. Menampilkan hasil terakhir.
+        </p>
+      ) : null}
+      {running ? (
+        <div className="mt-5">
+          <ProgressPanel snapshot={snapshot} />
+        </div>
+      ) : null}
+      {snapshot.results.length > 0 ? (
+        <div className="mt-5">
+          <ResultsList
+            results={snapshot.results}
+            commentsByResult={commentsByResult(snapshot)}
+            sortMode={search.filters.sort}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

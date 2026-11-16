@@ -16,6 +16,11 @@ export function useSearchPoll(
   const finished = FINISHED.has(snapshot.search.status);
 
   useEffect(() => {
+    setSnapshot(initialSnapshot);
+    setStale(false);
+  }, [initialSnapshot]);
+
+  useEffect(() => {
     if (finished) return;
     let cancelled = false;
     let inFlight = false;
