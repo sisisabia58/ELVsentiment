@@ -50,7 +50,6 @@ function snapshot(overrides: Partial<SearchSnapshot> = {}): SearchSnapshot {
       status: "running",
       summaryStatus: "pending",
       overallStance: null,
-      credits: 1,
       errorCode: null,
       createdAt: "2026-11-16T10:00:00Z",
       startedAt: "2026-11-16T10:00:00Z",
@@ -59,28 +58,22 @@ function snapshot(overrides: Partial<SearchSnapshot> = {}): SearchSnapshot {
     sources: [
       {
         platform: "threads",
-        provider: "scrapeatlas",
         state: "answered",
         resultCount: 1,
         latencyMs: 3200,
-        creditsCharged: null,
-        attemptedProviders: ["scrapeatlas"],
         safeDetail: "ok",
         updatedAt: "2026-11-16T10:00:03Z",
       },
       {
         platform: "youtube",
-        provider: "scrapeatlas",
         state: "unavailable",
         resultCount: 0,
         latencyMs: null,
-        creditsCharged: null,
-        attemptedProviders: ["scrapeatlas"],
         safeDetail: "deadline",
         updatedAt: "2026-11-16T10:00:10Z",
       },
     ],
-    totals: { sources: 8, done: 4, results: 43, credits: 1 },
+    totals: { sources: 8, done: 4, results: 43 },
     results: [post()],
     comments: [],
     ai: null,
@@ -98,7 +91,7 @@ function finishedSnapshot(): SearchSnapshot {
       status: "succeeded",
       finishedAt: "2026-11-16T10:00:31Z",
     },
-    totals: { sources: 8, done: 7, results: 65, credits: 1 },
+    totals: { sources: 8, done: 7, results: 65 },
   };
 }
 
@@ -112,15 +105,13 @@ function failedSnapshot(errorCode: string): SearchSnapshot {
       errorCode,
       startedAt: null,
       finishedAt: "2026-11-16T10:00:40Z",
-      credits: 0,
     },
-    totals: { sources: 8, done: 0, results: 0, credits: 0 },
+    totals: { sources: 8, done: 0, results: 0 },
     results: [],
     sources: running.sources.map((source) => ({
       ...source,
       state: "failed",
       resultCount: 0,
-      creditsCharged: null,
     })),
   };
 }
@@ -175,14 +166,13 @@ describe("SearchDetail", () => {
     expect(screen.getByText("Pencarian gagal. Coba lagi sebentar lagi.")).toBeTruthy();
   });
 
-  it("shows only the known result count and credits", () => {
+  it("never shows credits to a tenant", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const done = finishedSnapshot();
-    done.sources = done.sources.map((source) => ({ ...source, creditsCharged: 1 }));
-    done.totals = { sources: 8, done: 7, results: 2, credits: 99 };
+    done.totals = { sources: 8, done: 7, results: 2 };
     render(<SearchDetail initialSnapshot={done} />);
     expect(screen.getByText(/2 hasil/)).toBeTruthy();
-    expect(screen.getByText("2 kredit")).toBeTruthy();
+    expect(screen.queryByText(/kredit/)).toBeNull();
   });
 
   it("uses the server-provided now for a running search instead of the wall clock", () => {
@@ -197,7 +187,7 @@ describe("SearchDetail", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const partial = finishedSnapshot();
     partial.search.status = "partial";
-    partial.totals = { sources: 8, done: 6, results: 20, credits: 1 };
+    partial.totals = { sources: 8, done: 6, results: 20 };
     render(<SearchDetail initialSnapshot={partial} />);
     expect(screen.getByText(/6 dari 8 sumber menjawab/)).toBeTruthy();
   });

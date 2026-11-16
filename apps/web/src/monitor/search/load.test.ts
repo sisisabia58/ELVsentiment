@@ -121,7 +121,7 @@ describe("loadSearchSnapshot", () => {
     expect(await loadSearchSnapshot(db, CUSTOMER, "a".repeat(5000))).toBeNull();
   });
 
-  it("returns progress totals and credits", async () => {
+  it("returns progress totals without providers or credits", async () => {
     const db = await migrated();
     await insertSearch(db, SEARCH, CUSTOMER, { status: "running", credits: 12 });
     const states: Array<[string, string, number]> = [
@@ -151,8 +151,14 @@ describe("loadSearchSnapshot", () => {
     });
     const snapshot = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
     // 43 is the stale sum of source result_count; the header must use rows.
-    expect(snapshot?.totals).toEqual({ sources: 8, done: 4, results: 2, credits: 12 });
+    expect(snapshot?.totals).toEqual({ sources: 8, done: 4, results: 2 });
+    expect(snapshot?.search).not.toHaveProperty("credits");
     expect(snapshot?.search.status).toBe("running");
+    for (const source of snapshot?.sources ?? []) {
+      expect(source).not.toHaveProperty("provider");
+      expect(source).not.toHaveProperty("attemptedProviders");
+      expect(source).not.toHaveProperty("creditsCharged");
+    }
     expect(snapshot?.sources.map((row) => row.platform)).toEqual([
       "threads",
       "tiktok",

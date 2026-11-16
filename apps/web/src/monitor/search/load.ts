@@ -26,7 +26,6 @@ export type SnapshotSearch = {
   status: string;
   summaryStatus: string;
   overallStance: string | null;
-  credits: number;
   errorCode: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -35,12 +34,9 @@ export type SnapshotSearch = {
 
 export type SnapshotSource = {
   platform: string;
-  provider: string;
   state: string;
   resultCount: number;
   latencyMs: number | null;
-  creditsCharged: number | null;
-  attemptedProviders: string[];
   safeDetail: string;
   updatedAt: string;
 };
@@ -101,7 +97,7 @@ export type SnapshotQuestion = {
 export type SearchSnapshot = {
   search: SnapshotSearch;
   sources: SnapshotSource[];
-  totals: { sources: number; done: number; results: number; credits: number };
+  totals: { sources: number; done: number; results: number };
   results: SnapshotResult[];
   comments: SnapshotComment[];
   ai: SnapshotAi | null;
@@ -162,14 +158,13 @@ export async function loadSearchSnapshot(
       status: string;
       summary_status: string;
       overall_stance: string | null;
-      credits_used: number | string;
       error_code: string | null;
       created_at: string | Date;
       started_at: string | Date | null;
       finished_at: string | Date | null;
     }>(
       `select id, query_text, keyword_intent, date_window, sort_mode, language_filter,
-              status, summary_status, overall_stance, credits_used, error_code,
+              status, summary_status, overall_stance, error_code,
               created_at, started_at, finished_at
        from instant_searches
        where id = $1 and customer_id = $2`,
@@ -180,17 +175,13 @@ export async function loadSearchSnapshot(
 
     const sourceRows = await db.query<{
       platform: string;
-      provider: string;
       state: string;
       result_count: number | string;
       latency_ms: number | null;
-      credits_charged: number | null;
-      attempted_providers: string[] | null;
       safe_detail: string;
       updated_at: string | Date;
     }>(
-      `select platform, provider, state, result_count, latency_ms, credits_charged,
-              attempted_providers, safe_detail, updated_at
+      `select platform, state, result_count, latency_ms, safe_detail, updated_at
        from instant_search_sources
        where search_id = $1 and customer_id = $2`,
       [searchId, customerId],
@@ -199,12 +190,9 @@ export async function loadSearchSnapshot(
     const sources: SnapshotSource[] = sourceRows.rows
       .map((source) => ({
         platform: source.platform,
-        provider: source.provider,
         state: source.state,
         resultCount: int(source.result_count),
         latencyMs: source.latency_ms,
-        creditsCharged: source.credits_charged,
-        attemptedProviders: Array.isArray(source.attempted_providers) ? source.attempted_providers : [],
         safeDetail: source.safe_detail,
         updatedAt: iso(source.updated_at) ?? new Date(0).toISOString(),
       }))
@@ -363,7 +351,6 @@ export async function loadSearchSnapshot(
         status: row.status,
         summaryStatus: row.summary_status,
         overallStance: row.overall_stance,
-        credits: int(row.credits_used),
         errorCode: row.error_code,
         createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
         startedAt: iso(row.started_at),
@@ -374,7 +361,6 @@ export async function loadSearchSnapshot(
         sources: sources.length,
         done: sources.filter((source) => source.state === "answered").length,
         results: storedResultCount,
-        credits: int(row.credits_used),
       },
       results,
       comments,

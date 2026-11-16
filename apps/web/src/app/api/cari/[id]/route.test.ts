@@ -45,6 +45,15 @@ beforeAll(async () => {
       );
     });
   }
+  await withCustomer(db, owner.customerId, async () => {
+    await db.query(
+      `insert into instant_search_sources
+         (search_id, customer_id, platform, provider, state, result_count, safe_detail,
+          credits_charged, attempted_providers)
+       values ($1, $2, 'youtube', 'scrapeatlas', 'answered', 1, 'ok', 2, array['scrapeatlas'])`,
+      [SEARCH, owner.customerId],
+    );
+  });
 });
 
 beforeEach(() => {
@@ -85,6 +94,11 @@ describe("GET /api/cari/[id]", () => {
     const body = await response.json();
     expect(body.search.query).toBe("barayam");
     expect(body.search.filters).toEqual({ dateWindow: "all", sort: "relevance", language: "all" });
+    expect(body.search).not.toHaveProperty("credits");
+    expect(body.totals).not.toHaveProperty("credits");
+    expect(body.sources[0]).not.toHaveProperty("provider");
+    expect(body.sources[0]).not.toHaveProperty("attemptedProviders");
+    expect(body.sources[0]).not.toHaveProperty("creditsCharged");
   });
 
   it("returns 404 for a foreign search id without leaking its data", async () => {

@@ -23,14 +23,13 @@ function snapshot(overrides: Partial<SearchSnapshot> = {}): SearchSnapshot {
       status: "running",
       summaryStatus: "pending",
       overallStance: null,
-      credits: 1,
       errorCode: null,
       createdAt: "2026-11-16T10:00:00Z",
       startedAt: "2026-11-16T10:00:00Z",
       finishedAt: null,
     },
     sources: [],
-    totals: { sources: 8, done: 4, results: 43, credits: 1 },
+    totals: { sources: 8, done: 4, results: 43 },
     results: [],
     comments: [],
     ai: null,
@@ -53,12 +52,9 @@ const states = [
 const snapshotWithStates = snapshot({
   sources: states.map(([platform, state, resultCount, latencyMs]) => ({
     platform,
-    provider: "scrapeatlas",
     state,
     resultCount,
     latencyMs,
-    creditsCharged: null,
-    attemptedProviders: ["scrapeatlas"],
     safeDetail: state === "unavailable" ? "deadline" : "ok",
     updatedAt: "2026-11-16T10:00:10Z",
   })),
@@ -78,16 +74,9 @@ describe("ProgressPanel", () => {
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
   });
 
-  it("shows only the known ledger credits, and nothing when unknown", () => {
-    const known = {
-      ...snapshotWithStates,
-      sources: snapshotWithStates.sources.map((source, index) => ({
-        ...source,
-        creditsCharged: index < 2 ? 2 : null,
-      })),
-    };
-    render(<ProgressPanel snapshot={known} now={new Date("2026-11-16T10:00:14Z")} />);
-    expect(screen.getByText(/4 kredit/)).toBeTruthy();
+  it("never shows provider credits to a tenant", () => {
+    render(<ProgressPanel snapshot={snapshotWithStates} now={new Date("2026-11-16T10:00:14Z")} />);
+    expect(screen.queryByText(/kredit/)).toBeNull();
   });
 
   it("hides elapsed time for a finished search that never started", () => {
@@ -115,9 +104,8 @@ describe("ProgressPanel", () => {
             ...snapshot().search,
             status: "succeeded",
             finishedAt: "2026-11-16T10:00:31Z",
-            credits: 12,
           },
-          totals: { sources: 8, done: 8, results: 65, credits: 12 },
+          totals: { sources: 8, done: 8, results: 65 },
         })}
         now={new Date("2026-11-16T10:00:31Z")}
       />,

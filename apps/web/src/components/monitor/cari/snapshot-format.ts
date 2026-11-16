@@ -1,16 +1,5 @@
 import type { SearchSnapshot } from "@/monitor/search/load";
 
-// Only credits the ledger actually recorded are shown. A failed search that
-// never called a provider has no known cost, so it shows no credit figure.
-export function knownCredits(snapshot: SearchSnapshot): number | null {
-  const known = snapshot.sources.flatMap((source) =>
-    typeof source.creditsCharged === "number" ? [source.creditsCharged] : [],
-  );
-  if (known.length === 0) return null;
-  const total = known.reduce((sum, value) => sum + value, 0);
-  return total > 0 ? total : null;
-}
-
 // A finished search must use started_at and finished_at. If either is missing
 // (it never started, or a failed sweep stamped only finished_at), hide the
 // elapsed time instead of showing a made-up "300 dtk".

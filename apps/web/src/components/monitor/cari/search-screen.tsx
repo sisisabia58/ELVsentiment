@@ -20,7 +20,7 @@ import { PlatformTile } from "./platform-tile";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
-import { elapsedSeconds, knownCredits } from "./snapshot-format";
+import { elapsedSeconds } from "./snapshot-format";
 import { useSearchPoll } from "./use-search-poll";
 
 export type SearchHistoryRow = {
@@ -122,7 +122,6 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
   const elapsed = elapsedSeconds(snapshot, now);
-  const credits = knownCredits(snapshot);
   const receipt = running
     ? [
         "Sedang berjalan",
@@ -131,7 +130,6 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
       ]
     : [`${done} dari ${total} sumber menjawab`, `${snapshot.totals.results} hasil`];
   if (!running && elapsed !== null) receipt.push(`${elapsed} dtk`);
-  if (credits !== null) receipt.push(`${credits} kredit`);
   const failureCopy =
     !running && (search.errorCode !== null || search.status === "failed")
       ? (search.errorCode ? FAILED_SEARCH_COPY[search.errorCode] : null) ?? FAILED_SEARCH_FALLBACK
@@ -146,11 +144,6 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
           <p className="font-mono text-[12.5px] text-muted-foreground">{receipt.join(" · ")}</p>
-          {credits !== null ? (
-            <span className="rounded-full bg-surface-subtle px-2 py-0.5 font-sans text-[11.5px] font-medium text-foreground">
-              {credits} kredit
-            </span>
-          ) : null}
         </div>
       </section>
       {failureCopy ? (

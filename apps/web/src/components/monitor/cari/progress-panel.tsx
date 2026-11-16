@@ -2,7 +2,7 @@ import { Check, Loader2 } from "lucide-react";
 import { cn } from "cn";
 import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
-import { elapsedSeconds, knownCredits } from "./snapshot-format";
+import { elapsedSeconds } from "./snapshot-format";
 
 // Komentar and Ringkasan AI belong to M4/M5. Keep them out of the progress
 // panel until those milestones ship.
@@ -121,7 +121,6 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
   const finished = ["succeeded", "partial", "failed"].includes(snapshot.search.status);
   const running = !finished;
   const elapsed = elapsedSeconds(snapshot, now);
-  const credits = knownCredits(snapshot);
 
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -159,11 +158,6 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
               )}
               {running ? `Mencari ${total} sumber` : `${total} sumber`}
             </h2>
-            {credits !== null ? (
-              <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-[11.5px] font-medium text-foreground">
-                {credits} kredit
-              </span>
-            ) : null}
           </div>
           <div className="mt-4 space-y-2.5">
             {snapshot.sources.map((source) => (
