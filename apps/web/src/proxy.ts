@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { homeDestination, SESSION_COOKIE } from "@/auth/home-redirect";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { withClient } from "@/db/pg";
+import { cariSekarangEnabled } from "@/monitor/search/feature";
 
 async function lookupCustomer(token: string): Promise<string | null> {
   try {
@@ -59,14 +60,35 @@ export async function redirectSignedOut(request: NextRequest, lookup: SessionLoo
   return NextResponse.redirect(url);
 }
 
+export function isCariPath(pathname: string): boolean {
+  return pathname === "/cari" || pathname.startsWith("/cari/");
+}
+
+// notFound() inside <Suspense> runs after the PPR shell streamed, so the status
+// was 200. The flag is decided here, before any HTML, for a real 404.
+export function cariGate(request: NextRequest): NextResponse | null {
+  if (cariSekarangEnabled()) return null;
+  const pathname = request.nextUrl.pathname;
+  if (!isCariPath(pathname) && pathname !== "/pengaturan/provider") return null;
+  return new NextResponse("Not Found", {
+    status: 404,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 // Next.js calls proxy(request, event). The event is not a session lookup.
 export function proxy(request: NextRequest) {
+  const gated = cariGate(request);
+  if (gated) return gated;
   return redirectSignedOut(request);
 }
 
 export const config = {
   matcher: [
     "/",
+    "/cari",
+    "/cari/:path*",
+    "/pengaturan/provider",
     "/dasbor",
     "/dasbor/:path*",
     "/sebutan",

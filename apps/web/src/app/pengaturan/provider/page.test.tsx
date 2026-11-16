@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  flag: true,
   frame: vi.fn((props: { children?: ReactNode }) => props.children),
   requireWorkspace: vi.fn(async () => ({
     customerId: "11111111-1111-4111-8111-111111111111",
@@ -17,6 +18,12 @@ vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("REDIRECT");
   },
+  notFound: () => {
+    throw new Error("NEXT_NOT_FOUND");
+  },
+}));
+vi.mock("@/monitor/search/feature", () => ({
+  cariSekarangEnabled: () => mocks.flag,
 }));
 vi.mock("@/monitor/session-page", () => ({ requireWorkspace: mocks.requireWorkspace }));
 vi.mock("@/db/pg", () => ({ withClient: async (fn: (db: unknown) => Promise<unknown>) => fn({}) }));
@@ -50,6 +57,7 @@ afterEach(() => {
   mocks.requireWorkspace.mockClear();
   mocks.isAdminEmail.mockReset();
   mocks.isAdminEmail.mockReturnValue(true);
+  mocks.flag = true;
 });
 
 describe("/pengaturan/provider page", () => {
@@ -58,6 +66,13 @@ describe("/pengaturan/provider page", () => {
     expect(mocks.requireWorkspace).toHaveBeenCalledTimes(1);
     expect(mocks.frame).toHaveBeenCalledTimes(1);
     expect(mocks.frame.mock.calls[0][0]).toMatchObject({ active: "/pengaturan/provider" });
+  });
+
+  it("is a real not-found while the feature flag is off", async () => {
+    mocks.flag = false;
+    await expect(ProviderPageBody()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.requireWorkspace).not.toHaveBeenCalled();
+    expect(mocks.frame).not.toHaveBeenCalled();
   });
 
   it("keeps the non-admin message inside the app frame", async () => {

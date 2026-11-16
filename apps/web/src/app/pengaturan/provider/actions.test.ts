@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openSession } from "@/auth/accounts";
 import { applyMigration, pgliteQueryable } from "@/db/migrate";
 import { saveProviderSettingAction } from "./actions";
@@ -20,6 +20,10 @@ async function seeded() {
   const session = await openSession(db, USER, CUSTOMER);
   return { db, token: session.token };
 }
+
+beforeEach(() => {
+  vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -54,6 +58,26 @@ describe("provider settings server action", () => {
       { db, readSessionToken: async () => token },
     );
     expect(result).toEqual({ ok: false, error: "not_admin" });
+    const audit = await db.query<{ n: number }>(
+      "select count(*)::int as n from provider_settings_audit",
+    );
+    expect(audit.rows[0]?.n).toBe(0);
+  });
+
+  it("rejects writes while the Cari feature flag is off", async () => {
+    const { db, token } = await seeded();
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "0");
+    vi.stubEnv("ADMIN_EMAILS", "owner@example.com");
+    const result = await saveProviderSettingAction(
+      {
+        platform: "youtube",
+        provider: "off",
+        fallbackProvider: null,
+        fallbackOnFailure: false,
+      },
+      { db, readSessionToken: async () => token },
+    );
+    expect(result).toEqual({ ok: false, error: "disabled" });
     const audit = await db.query<{ n: number }>(
       "select count(*)::int as n from provider_settings_audit",
     );

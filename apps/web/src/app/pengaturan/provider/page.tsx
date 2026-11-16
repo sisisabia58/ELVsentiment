@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { notFound } from "next/navigation";
 import { adminEmailForCustomer, isAdminEmail } from "@/auth/admin";
 import { withSessionDeps } from "@/auth/request-session";
 import { LogoutForm } from "@/components/logout-form";
@@ -7,6 +8,7 @@ import { ProviderSettingsForm } from "@/components/monitor/cari/provider-setting
 import { Frame } from "@/components/monitor/shell";
 import { withCustomer } from "@/db/migrate";
 import { withClient } from "@/db/pg";
+import { cariSekarangEnabled } from "@/monitor/search/feature";
 import { loadProviderSettingRows } from "@/monitor/search/provider-settings";
 import { requireWorkspace } from "@/monitor/session-page";
 import {
@@ -15,6 +17,7 @@ import {
 } from "./actions";
 
 export async function ProviderPageBody() {
+  if (!cariSekarangEnabled()) notFound();
   const { customerId, workspace } = await requireWorkspace(undefined);
 
   const data = await withClient(async (db) => {

@@ -3,6 +3,7 @@
 import { adminEmailForCustomer, isAdminEmail } from "@/auth/admin";
 import { customerIdFromSessionToken, type SessionActionDeps } from "@/auth/session";
 import { withCustomer } from "@/db/migrate";
+import { cariSekarangEnabled } from "@/monitor/search/feature";
 import { saveProviderSetting } from "@/monitor/search/provider-settings";
 
 export type ProviderSettingActionInput = {
@@ -20,6 +21,7 @@ export async function saveProviderSettingAction(
   input: ProviderSettingActionInput,
   deps: SessionActionDeps,
 ): Promise<ProviderSettingActionResult> {
+  if (!cariSekarangEnabled()) return { ok: false, error: "disabled" };
   let customerId: string;
   try {
     customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
