@@ -1201,6 +1201,7 @@ def test_postgres16_migration_012_seeds_routing_and_gates_admin_writes(pg16):
         "instant_search_questions",
         "search_credit_ledger",
         "gemini_gate",
+        "platform_admins",
     )
     for table in tables:
         assert conn.execute("select to_regclass(%s)", (f"public.{table}",)).fetchone()[0] is not None
@@ -1216,11 +1217,16 @@ def test_postgres16_migration_012_seeds_routing_and_gates_admin_writes(pg16):
     assert denied.rowcount == 0
     conn.rollback()
 
+    # app.is_admin is no longer trusted; app_user can set that GUC itself.
+    # Provider writes now require a live session for an operator-granted
+    # platform_admins row (covered by the web PG integration test).
     conn.execute("begin")
     conn.execute("select set_config('app.is_admin', 'on', true)")
     conn.execute("set local role app_user")
-    allowed = conn.execute("update provider_settings set provider = 'off' where platform = 'youtube'")
-    assert allowed.rowcount == 1
+    still_denied = conn.execute(
+        "update provider_settings set provider = 'off' where platform = 'youtube'"
+    )
+    assert still_denied.rowcount == 0
     conn.rollback()
 
     conn.execute("begin")
