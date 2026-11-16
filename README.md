@@ -39,6 +39,17 @@ Names: `DATABASE_URL`, `CONFIG_DIR`, `WORKER_DATABASE_URL`, `MIGRATION_DATABASE_
 
 `SCORE_INTERVAL_SECONDS` is optional. It defaults to 20. The scoring loop sleeps that many seconds after a batch finds no pending mentions. Values below 5, above 3600, or not a number use 20. `npm run score` ignores it. See `docs/operator-scoring.md`.
 
+### Cari sekarang (instant search)
+
+Names only; set real values in Railway. Do not commit values.
+
+- `CARI_SEKARANG_ENABLED` — off by default. Only `1`/`true` enables the `/cari` pages, the polling route, and the nav entry.
+- `CARI_PROVIDER_MODE` — live by default. Fixture data is used only when this is explicitly `fixture`.
+- `CARI_AI_PROVIDER` — which AI provider the later AI milestones use; defaults to `demo`.
+- `SCRAPEATLAS_API_KEY` — ScrapeAtlas provider credential for the launch sources.
+- `ADMIN_EMAILS` — comma-separated allowlist for `/pengaturan/provider` writes.
+- `CARI_DAILY_SEARCH_LIMIT` — optional per-customer daily instant-search cap (web and worker, default 20).
+
 The web service pre-deploy command is `node src/db/migrate-cli.mjs`.
 
 ## Harken
