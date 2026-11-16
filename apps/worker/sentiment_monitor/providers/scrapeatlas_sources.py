@@ -16,6 +16,7 @@ from sentiment_monitor.providers.canonical import (
     detect_language,
     filter_since,
     keyword_relevance,
+    sanitize_post,
 )
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
 from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
@@ -163,23 +164,10 @@ def _fetch(
         web_index_from_warnings
         and "web_index_selection" in payload.coverage_warnings
     )
-    posts = [
-        _canonical_from(
-            platform,
-            item,
-            keyword,
-            collected_at,
-            route_id,
-            web_index=web_index,
-        )
-        for item in extract(payload, collected_at)
-    ]
-    if date_window_days is not None:
-        cutoff = _cutoff(collected_at, date_window_days)
-        if cutoff is not None:
-            posts = filter_since(posts, cutoff)
     status = payload.get("status")
     outcome = "partial" if status == "partial" else "success"
+    # The paid call is durable before any post is parsed: a poisoned record or
+    # a filter error must still return the ledger row to the caller.
     call = RouteCall(
         provider="scrapeatlas",
         platform=platform,
@@ -191,6 +179,30 @@ def _fetch(
         latency_ms=latency_ms,
         safe_detail="ok",
     )
+    try:
+        posts: list[CanonicalPost] = []
+        for item in extract(payload, collected_at):
+            try:
+                post = _canonical_from(
+                    platform,
+                    item,
+                    keyword,
+                    collected_at,
+                    route_id,
+                    web_index=web_index,
+                )
+                posts.append(sanitize_post(post))
+            except Exception:
+                # One malformed record is dropped; its siblings survive.
+                continue
+        if date_window_days is not None:
+            cutoff = _cutoff(collected_at, date_window_days)
+            if cutoff is not None:
+                posts = filter_since(posts, cutoff)
+    except Exception:
+        return PlatformFetch(
+            platform, "scrapeatlas", [], [call], "failed", "storage_failed", latency_ms
+        )
     return PlatformFetch(
         platform, "scrapeatlas", posts, [call], "answered", "ok", latency_ms
     )

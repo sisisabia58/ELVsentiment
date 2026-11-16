@@ -610,7 +610,16 @@ def _handle_result(
     # own source; the other platforms keep their results and ledger rows.
     try:
         if state == "answered":
-            kept = [_normalize(item, job) for item in filter_since(result.posts or [], cutoff_iso)]
+            # Sanitise each record before the cutoff filter, and isolate each
+            # record: a poisoned date or normalisation error must drop only
+            # that post, never its siblings or the platform's ledger rows.
+            kept = []
+            for item in result.posts or []:
+                try:
+                    kept.append(_normalize(item, job))
+                except Exception:
+                    continue
+            kept = filter_since(kept, cutoff_iso)
             kept = sort_posts(dedupe_posts(kept), job.sort_mode)[:MAX_PLATFORM_RESULTS]
             tx.run(
                 lambda conn: _store_answered(

@@ -142,3 +142,43 @@ def test_extreme_dates_become_undated_instead_of_raising(value):
 def test_ordinary_iso_dates_still_normalise_to_utc():
     assert safe_published_at("2026-11-15T00:00:00Z") == "2026-11-15T00:00:00Z"
     assert safe_published_at("2026-11-15T07:00:00+07:00") == "2026-11-15T00:00:00Z"
+
+
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Jakarta"])
+def test_naive_dates_are_treated_as_utc_and_never_raise(tz):
+    import os
+    import time
+
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = tz
+    time.tzset()
+    try:
+        posts = [
+            post(external_id="naive-old", published_at="0001-01-01"),
+            post(external_id="naive-future", published_at="9999-12-31T23:59:59"),
+            post(external_id="undated", published_at=None),
+            post(external_id="new", published_at="2026-11-15T00:00:00Z"),
+        ]
+        kept = filter_since(posts, "2026-11-08T00:00:00Z")
+        assert [item.external_id for item in kept] == [
+            "naive-future",
+            "undated",
+            "new",
+        ]
+        ordered = sort_posts(posts, "newest")
+        assert [item.external_id for item in ordered] == [
+            "naive-future",
+            "new",
+            "naive-old",
+            "undated",
+        ]
+        assert filter_since(
+            [post(external_id="poison", published_at="not-a-date")],
+            "0001-01-01T00:00:00Z",
+        )[0].external_id == "poison"
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()

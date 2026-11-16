@@ -5,14 +5,21 @@ The shape differences (cursor rows vs None for writes) are invisible to the
 plain RowListConnection used by the older tests.
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
+import os
 from typing import Any
 import uuid
 
+import pytest
+
 from sentiment_monitor import instant_search
 from sentiment_monitor import scheduler
+from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
-from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
+from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS, ProviderSetting
+from sentiment_monitor.providers.fetch import fetch_platform
 from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
 
 
@@ -798,3 +805,357 @@ def test_hung_route_does_not_delay_finish_search(prod_db, monkeypatch):
     view = prod_db.view(search_id)
     assert view["search"]["status"] in ("partial", "failed"), view
     assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
+
+
+_N1B_PLATFORMS = ("threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin")
+_N1B_SA_PLATFORMS = ("threads", "tiktok", "youtube", "reddit", "facebook", "linkedin")
+_N1B_LIST_KEY = {
+    "threads": "posts",
+    "tiktok": "item_list",
+    "youtube": "videos",
+    "reddit": "posts",
+    "facebook": "posts",
+    "linkedin": "posts",
+}
+_N1B_DATES = [
+    "0001-01-01",
+    "0001-01-01T00:00:00",
+    "0001-01-01T03:00:00",
+    "9999-12-31T23:59:59",
+    "9999-12-31",
+    "9999-12-31T23:59:59-14:00",
+    "9999-12-31T23:59:59-23:59",
+    "0001-01-01T00:00:00+14:00",
+    "0001-01-01T00:00:00+23:59",
+    "0000-01-01T00:00:00Z",
+    "10000-01-01T00:00:00Z",
+    1e300,
+    "99999999999999999999",
+    -62135596801,
+    -1e18,
+    "NaN",
+    "Infinity",
+    2**70,
+]
+
+
+class _N1BResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.status = 200
+        self.headers = {"x-credits-charged": "1", "credits-charged": "1"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        return self._body if size is None or size < 0 else self._body[:size]
+
+
+def _n1b_settings(mode: str) -> dict[str, ProviderSetting]:
+    settings = {
+        name: ProviderSetting(platform=name, provider="off")
+        for name in DEFAULT_SETTINGS
+    }
+    for platform in _N1B_PLATFORMS:
+        if platform == "instagram" or (
+            mode == "SC" and platform in ("tiktok", "threads")
+        ):
+            settings[platform] = ProviderSetting(
+                platform=platform, provider="scrapecreators"
+            )
+        else:
+            settings[platform] = ProviderSetting(
+                platform=platform, provider="scrapeatlas"
+            )
+    return settings
+
+
+def _n1b_now_ts() -> int:
+    import time
+
+    return int(time.time()) - 3600
+
+
+def _n1b_recent(platform: str, now_ts: int) -> Any:
+    iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    return {
+        "threads": now_ts,
+        "tiktok": now_ts,
+        "facebook": now_ts,
+        "youtube": iso,
+        "reddit": iso,
+        "linkedin": iso,
+    }[platform]
+
+
+def _n1b_item(platform: str, index: int, date: Any) -> dict[str, Any]:
+    ident = f"id{index}"
+    text = f"barayam enak {index}"
+    if platform == "threads":
+        return {"pk": ident, "code": f"C{index}", "caption": {"text": text}, "user": {"username": "u"}, "taken_at": date, "like_count": 2}
+    if platform == "tiktok":
+        return {"id": ident, "desc": text, "createTime": date, "author": {"uniqueId": "u"}, "stats": {"playCount": 5, "diggCount": 2}}
+    if platform == "youtube":
+        return {"id": ident, "title": text, "url": f"https://example.invalid/youtube/{ident}", "publishedTime": date, "viewCountInt": 5, "channel": {"title": "c"}}
+    if platform == "reddit":
+        return {"id": ident, "title": text, "permalink": f"/r/x/{ident}", "created_at_iso": date, "score": 2}
+    if platform == "facebook":
+        return {"id": ident, "text": text, "url": f"https://example.invalid/facebook/{ident}", "publishTime": date, "reactionCount": 2, "videoViewCount": 5}
+    return {"id": ident, "description": text, "url": f"https://example.invalid/linkedin/{ident}", "datePublished": date, "likeCount": 2}
+
+
+def _n1b_sc_item(index: int, date: Any) -> dict[str, Any]:
+    ident = f"sc{index}"
+    text = f"barayam enak sc {index}"
+    return {
+        "aweme_id": ident,
+        "id": ident,
+        "pk": ident,
+        "code": f"C{ident}",
+        "desc": text,
+        "caption": {"text": text},
+        "text": text,
+        "create_time": date,
+        "taken_at": date,
+        "user": {"username": "u"},
+        "author": {"unique_id": "u", "uniqueId": "u"},
+        "statistics": {"play_count": 5, "digg_count": 2},
+        "like_count": 2,
+    }
+
+
+def _n1b_payload(platform: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"success": True, "status": "success", _N1B_LIST_KEY[platform]: items}
+
+
+def _n1b_sc_payload(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "success": True,
+        "search_item_list": items,
+        "aweme_list": items,
+        "posts": items,
+        "items": items,
+        "reels": items,
+        "data": items,
+    }
+
+
+@contextmanager
+def _n1b_tz(name: str):
+    import time
+
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
+def _n1b_run(
+    prod_db,
+    *,
+    mode: str,
+    window: str,
+    poisoned: dict[str, Any],
+) -> tuple[dict, int, int, int]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    import time
+
+    settings = _n1b_settings(mode)
+    now_ts = _n1b_now_ts()
+    calls: dict[str, int] = {}
+
+    def opener(request, timeout=None):
+        url = request.full_url.split("?")[0]
+        platform = next(item for item in _N1B_PLATFORMS if item in url)
+        calls[platform] = calls.get(platform, 0) + 1
+        date = poisoned.get(platform)
+        if settings[platform].provider == "scrapeatlas":
+            items = [
+                _n1b_item(platform, 1, _n1b_recent(platform, now_ts)),
+                _n1b_item(platform, 2, _n1b_recent(platform, now_ts)),
+                _n1b_item(
+                    platform,
+                    3,
+                    date if platform in poisoned else _n1b_recent(platform, now_ts),
+                ),
+            ]
+            body = _n1b_payload(platform, items)
+        else:
+            items = [
+                _n1b_sc_item(1, now_ts),
+                _n1b_sc_item(2, now_ts),
+                _n1b_sc_item(3, date if platform in poisoned else now_ts),
+            ]
+            body = _n1b_sc_payload(items)
+        return _N1BResponse(json.dumps(body).encode())
+
+    env = {
+        "SCRAPEATLAS_API_KEY": "synthetic-atlas-key",
+        "SCRAPECREATORS_API_KEY": "synthetic-creators-key",
+        "CARI_PROVIDER_MODE": "live",
+    }
+
+    def fetcher(platform, keyword, settings_for_call, **kwargs):
+        return fetch_platform(
+            platform,
+            keyword,
+            settings_for_call,
+            env=env,
+            collected_at=kwargs["collected_at"],
+            date_window_days=kwargs.get("date_window_days"),
+            opener=opener,
+        )
+
+    prod_db.admin.execute(
+        "delete from search_credit_ledger where customer_id = %s", (prod_db.customer,)
+    )
+    prod_db.admin.execute(
+        "delete from instant_searches where customer_id = %s", (prod_db.customer,)
+    )
+    search_id = str(uuid.uuid4())
+    prod_db.admin.execute(
+        """
+        insert into instant_searches
+          (id, customer_id, query_text, keyword_intent, date_window, sort_mode,
+           language_filter, status, created_at, deadline_at, retention_expires_at)
+        values (%s, %s, 'barayam', 'phrase', %s, 'relevance', 'all', 'queued',
+                now(), now() + interval '40 seconds', now() + interval '30 days')
+        """,
+        (search_id, prod_db.customer, window),
+    )
+    job = instant_search._Transactions(prod_db.connect).run(
+        lambda conn: instant_search.claim_instant_search(conn, "qa")
+    )
+    assert job is not None
+    instant_search._run_job_safely(
+        prod_db.connect,
+        job,
+        {
+            "env": env,
+            "now": datetime.now(timezone.utc),
+            "settings": settings,
+            "fetcher": fetcher,
+            "deadline_seconds": instant_search.SEARCH_DEADLINE_SECONDS,
+        },
+    )
+    calls_before = sum(calls.values())
+    executor = ThreadPoolExecutor(max_workers=2)
+    in_flight: set[Any] = set()
+    reclaimed = instant_search.run_instant_search_poll(
+        prod_db.connect,
+        env=env,
+        now=datetime.now(timezone.utc),
+        limits=None,
+        submit=executor.submit,
+        in_flight=in_flight,
+        settings=settings,
+        fetcher=fetcher,
+    )
+    for future in list(in_flight):
+        future.result()
+    executor.shutdown(wait=False, cancel_futures=True)
+    time.sleep(0)
+    return prod_db.view(search_id), calls_before, sum(calls.values()), reclaimed
+
+
+def _n1b_assert_isolated(
+    view: dict,
+    *,
+    calls_before: int,
+    calls_after: int,
+    reclaimed: int,
+    poisoned: set[str],
+    baseline: dict,
+    label: str,
+) -> None:
+    assert view["search"]["status"] in ("succeeded", "partial"), (label, view)
+    sources = {row["platform"]: row for row in view["sources"]}
+    assert set(sources) == set(_N1B_PLATFORMS), (label, view)
+    assert not [
+        row for row in view["sources"] if row["state"] in ("queued", "searching")
+    ], (label, view)
+    assert view["ledger"] == calls_before == calls_after, (label, view, calls_before, calls_after)
+    assert reclaimed == 0, (label, reclaimed)
+    for platform in _N1B_PLATFORMS:
+        source = sources[platform]
+        count = view["counts"].get(platform, 0)
+        assert source["state"] == "answered", (label, platform, source, view)
+        assert source["result_count"] == count, (label, platform, source, view)
+        if platform in poisoned:
+            assert count >= 2, (label, platform, count, view)
+        else:
+            assert count == baseline["counts"].get(platform), (label, platform, count, view)
+
+
+@pytest.mark.parametrize("window", ["7d", "all"])
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Jakarta"])
+def test_far_dates_never_drop_a_platform_or_its_paid_ledger_row(
+    prod_db, window: str, tz: str
+):
+    with _n1b_tz(tz):
+        baseline_sa, sa_before, sa_after, sa_reclaimed = _n1b_run(
+            prod_db, mode="SA", window=window, poisoned={}
+        )
+        _n1b_assert_isolated(
+            baseline_sa,
+            calls_before=sa_before,
+            calls_after=sa_after,
+            reclaimed=sa_reclaimed,
+            poisoned=set(),
+            baseline={**baseline_sa, "counts": {platform: 3 for platform in _N1B_PLATFORMS}},
+            label=f"baseline SA {window} {tz}",
+        )
+        baseline_sc, sc_before, sc_after, sc_reclaimed = _n1b_run(
+            prod_db, mode="SC", window=window, poisoned={}
+        )
+        _n1b_assert_isolated(
+            baseline_sc,
+            calls_before=sc_before,
+            calls_after=sc_after,
+            reclaimed=sc_reclaimed,
+            poisoned=set(),
+            baseline={**baseline_sc, "counts": {platform: 3 for platform in _N1B_PLATFORMS}},
+            label=f"baseline SC {window} {tz}",
+        )
+        for date in _N1B_DATES:
+            label = f"SA {window} {tz} {date!r}"
+            sa_poison = {platform: date for platform in _N1B_PLATFORMS}
+            view, calls_before, calls_after, reclaimed = _n1b_run(
+                prod_db, mode="SA", window=window, poisoned=sa_poison
+            )
+            _n1b_assert_isolated(
+                view,
+                calls_before=calls_before,
+                calls_after=calls_after,
+                reclaimed=reclaimed,
+                poisoned=set(_N1B_PLATFORMS),
+                baseline=baseline_sa,
+                label=label,
+            )
+
+            label = f"SC {window} {tz} {date!r}"
+            sc_poison = {"tiktok": date, "threads": date, "instagram": date}
+            view, calls_before, calls_after, reclaimed = _n1b_run(
+                prod_db, mode="SC", window=window, poisoned=sc_poison
+            )
+            _n1b_assert_isolated(
+                view,
+                calls_before=calls_before,
+                calls_after=calls_after,
+                reclaimed=reclaimed,
+                poisoned=set(sc_poison),
+                baseline=baseline_sc,
+                label=label,
+            )

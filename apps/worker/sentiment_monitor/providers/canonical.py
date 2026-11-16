@@ -305,13 +305,25 @@ def _parse_iso(value: str | None) -> datetime | None:
     text = value.strip().replace("Z", "+00:00").replace("z", "+00:00")
     try:
         return datetime.fromisoformat(text)
-    except ValueError:
+    except Exception:
+        # A provider date is untrusted input: a bad value makes the post
+        # undated instead of aborting the platform's whole search.
         return None
 
 
 def _timestamp(value: str | None) -> float | None:
     parsed = _parse_iso(value)
-    return parsed.timestamp() if parsed is not None else None
+    if parsed is None:
+        return None
+    # Naive provider timestamps are UTC. Calling .timestamp() on a naive
+    # datetime uses the host zone and raises for year 1 (or year 9999 in
+    # UTC+ zones), which used to drop a whole platform.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        return parsed.timestamp()
+    except Exception:
+        return None
 
 
 def filter_since(
