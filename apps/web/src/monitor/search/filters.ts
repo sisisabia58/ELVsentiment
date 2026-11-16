@@ -57,11 +57,21 @@ export const LANGUAGE_SHORT_LABEL: Record<LanguageFilter, string> = {
 export const QUERY_MIN_LENGTH = 2;
 export const QUERY_MAX_LENGTH = 160;
 
+// Zero-width characters are invisible, so they must not pad a query into the
+// minimum length. Control characters (NUL etc.) are rejected outright.
+const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
+const CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
+
+export function cleanQuery(query: string): string {
+  return query.replace(ZERO_WIDTH, "").trim();
+}
+
 export function validateSearchInput(
   query: string,
   filters: SearchFilters,
 ): "invalid_query" | "query_too_long" | null {
-  const text = typeof query === "string" ? query.trim() : "";
+  const text = typeof query === "string" ? cleanQuery(query) : "";
+  if (CONTROL.test(text)) return "invalid_query";
   if (text.length < QUERY_MIN_LENGTH) return "invalid_query";
   if (text.length > QUERY_MAX_LENGTH) return "query_too_long";
   if (!DATE_WINDOWS.includes(filters?.dateWindow)) return "invalid_query";

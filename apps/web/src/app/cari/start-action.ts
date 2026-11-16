@@ -9,7 +9,11 @@ import {
   type StartSearchResult,
 } from "./actions";
 
-export async function startSearchAction(input: StartSearchInput): Promise<StartSearchResult> {
+export async function startSearchAction(
+  input: StartSearchInput | null | undefined,
+): Promise<StartSearchResult> {
+  const query = (input as { query?: unknown } | null | undefined)?.query;
+  const filters = (input as { filters?: StartSearchInput["filters"] } | null | undefined)?.filters;
   return withSessionDeps(async (deps) => {
     let customerId: string;
     try {
@@ -20,8 +24,8 @@ export async function startSearchAction(input: StartSearchInput): Promise<StartS
     return startSearchForCustomer({
       db: deps.db,
       customerId,
-      query: input.query,
-      filters: input.filters,
+      query: query as string,
+      filters: filters as StartSearchInput["filters"],
       env: process.env,
       limits: readSearchLimits(),
       now: new Date(),

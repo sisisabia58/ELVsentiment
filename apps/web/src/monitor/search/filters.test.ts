@@ -28,6 +28,16 @@ describe("cari sekarang filters", () => {
     expect(validateSearchInput("a".repeat(160), DEFAULT_FILTERS)).toBeNull();
   });
 
+  it("strips zero-width characters and rejects control characters", () => {
+    expect(validateSearchInput("\u200B\u200C\u200D\u2060\uFEFF", DEFAULT_FILTERS)).toBe(
+      "invalid_query",
+    );
+    expect(validateSearchInput("  \u200Bbarayam\u200D \u2060", DEFAULT_FILTERS)).toBeNull();
+    expect(validateSearchInput("bar\u0000ayam", DEFAULT_FILTERS)).toBe("invalid_query");
+    expect(validateSearchInput("bar\u0001ayam", DEFAULT_FILTERS)).toBe("invalid_query");
+    expect(validateSearchInput("bar\u007Fayam", DEFAULT_FILTERS)).toBe("invalid_query");
+  });
+
   it("computes date windows and a Jakarta-day start", () => {
     expect(dateWindowDays("24h")).toBe(1);
     expect(dateWindowDays("7d")).toBe(7);

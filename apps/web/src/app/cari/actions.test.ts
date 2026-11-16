@@ -57,6 +57,71 @@ describe("startSearchForCustomer", () => {
     ).toBe(0);
   });
 
+  it("rejects non-string, missing, control-character, and zero-width-only queries", async () => {
+    const db = await seededDb();
+    for (const query of [undefined, null, 42, { text: "barayam" }, ["barayam"]] as unknown[]) {
+      expect(
+        await startSearchForCustomer({
+          db,
+          customerId: CUSTOMER,
+          query: query as never,
+          filters: DEFAULT_FILTERS,
+          env: { CARI_SEKARANG_ENABLED: "1" },
+          limits,
+          now: NOW,
+        }),
+      ).toEqual({ ok: false, error: "invalid_query" });
+    }
+    expect(
+      await startSearchForCustomer({
+        db,
+        customerId: CUSTOMER,
+        query: "barayam",
+        filters: null as never,
+        env: { CARI_SEKARANG_ENABLED: "1" },
+        limits,
+        now: NOW,
+      }),
+    ).toEqual({ ok: false, error: "invalid_query" });
+    for (const query of [
+      "bar\u0000ayam",
+      "bar\u0001ayam",
+      "\u200B\u200C\u200D\u2060\uFEFF",
+      " \t \n ",
+    ]) {
+      expect(
+        await startSearchForCustomer({
+          db,
+          customerId: CUSTOMER,
+          query,
+          filters: DEFAULT_FILTERS,
+          env: { CARI_SEKARANG_ENABLED: "1" },
+          limits,
+          now: NOW,
+        }),
+      ).toEqual({ ok: false, error: "invalid_query" });
+    }
+    expect(
+      (await db.query<{ n: number }>("select count(*)::int as n from instant_searches")).rows[0]?.n,
+    ).toBe(0);
+  });
+
+  it("stores a query with zero-width padding stripped", async () => {
+    const db = await seededDb();
+    const result = await startSearchForCustomer({
+      db,
+      customerId: CUSTOMER,
+      query: "  \u200Bbarayam\u200D \u2060",
+      filters: DEFAULT_FILTERS,
+      env: { CARI_SEKARANG_ENABLED: "1" },
+      limits,
+      now: NOW,
+    });
+    expect(result.ok).toBe(true);
+    const stored = await db.query<{ query_text: string }>("select query_text from instant_searches");
+    expect(stored.rows[0]?.query_text).toBe("barayam");
+  });
+
   it("maps query validation, hashtag intent, and the daily cap", async () => {
     const db = await seededDb();
     expect(
