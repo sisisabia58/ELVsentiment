@@ -2754,8 +2754,9 @@ def test_instagram_paid_context_survives_unexpected_error_and_job_fails(
         def __init__(self, payload):
             self.payload = json.dumps(payload)
 
-        def read(self):
-            return self.payload.encode()
+        def read(self, size=-1):
+            data = self.payload.encode()
+            return data if size is None or size < 0 else data[:size]
 
         def __enter__(self):
             return self
