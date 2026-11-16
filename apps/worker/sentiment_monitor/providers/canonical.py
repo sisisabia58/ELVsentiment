@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
+from datetime import datetime
 import re
-from typing import Literal
+from typing import Iterable, Literal
 import urllib.parse
 
 from sentiment_monitor.relevance import literal_match_status, normalize_match_text
@@ -143,3 +144,121 @@ def post_identity(post: CanonicalPost) -> tuple[str, str] | None:
         return None
     path = parts.path.rstrip("/")
     return (post.platform, f"url:{scheme}://{netloc}{path}")
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00").replace("z", "+00:00")
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _timestamp(value: str | None) -> float | None:
+    parsed = _parse_iso(value)
+    return parsed.timestamp() if parsed is not None else None
+
+
+def filter_since(
+    posts: Iterable[CanonicalPost], cutoff_iso: str | None
+) -> list[CanonicalPost]:
+    cutoff = _timestamp(cutoff_iso)
+    if cutoff is None:
+        return list(posts)
+    kept: list[CanonicalPost] = []
+    for post in posts:
+        published = _timestamp(post.published_at)
+        if published is None or published >= cutoff:
+            kept.append(post)
+    return kept
+
+
+def engagement_score(post: CanonicalPost) -> int:
+    return (
+        (post.views or 0)
+        + 3 * (post.likes or 0)
+        + 2 * (post.replies or 0)
+        + 2 * (post.shares or 0)
+    )
+
+
+def _richness(post: CanonicalPost) -> int:
+    score = len(post.routes)
+    for name in (
+        "text", "title", "author_name", "author_handle", "url", "published_at",
+        "thumbnail_url", "views", "likes", "replies", "shares",
+    ):
+        value = getattr(post, name)
+        if value is not None and value != "" and value != ():
+            score += 1
+    return score
+
+
+def _merge_group(group: list[CanonicalPost]) -> CanonicalPost:
+    base = max(group, key=_richness)
+    changes: dict[str, object] = {}
+    for field in fields(CanonicalPost):
+        name = field.name
+        if name in ("platform", "external_id", "routes"):
+            continue
+        current = getattr(base, name)
+        if current is None or current == "":
+            for other in group:
+                if other is base:
+                    continue
+                value = getattr(other, name)
+                if value is not None and value != "":
+                    changes[name] = value
+                    break
+    routes: list[str] = []
+    for item in group:
+        for route in item.routes:
+            if route not in routes:
+                routes.append(route)
+    if tuple(routes) != base.routes:
+        changes["routes"] = tuple(routes)
+    return replace(base, **changes)
+
+
+def dedupe_posts(posts: Iterable[CanonicalPost]) -> list[CanonicalPost]:
+    groups: dict[tuple[str, str], list[CanonicalPost]] = {}
+    order: list[tuple[str, str]] = []
+    for post in posts:
+        identity = post_identity(post)
+        if identity is None:
+            continue
+        if identity not in groups:
+            groups[identity] = []
+            order.append(identity)
+        groups[identity].append(post)
+    return [_merge_group(groups[identity]) for identity in order]
+
+
+_RELEVANCE_RANK = {"literal_match": 0, "all_words_match": 1, "no_match": 2}
+
+
+def sort_posts(posts: Iterable[CanonicalPost], mode: str = "relevance") -> list[CanonicalPost]:
+    dated: list[CanonicalPost] = []
+    undated: list[CanonicalPost] = []
+    for post in posts:
+        if _parse_iso(post.published_at) is None:
+            undated.append(post)
+        else:
+            dated.append(post)
+    if mode == "newest":
+        dated.sort(key=lambda item: item.external_id)
+        dated.sort(key=lambda item: _timestamp(item.published_at) or 0.0, reverse=True)
+    elif mode == "popular":
+        dated.sort(key=lambda item: (-engagement_score(item), item.external_id))
+    else:
+        dated.sort(
+            key=lambda item: (
+                _RELEVANCE_RANK.get(item.relevance, 2),
+                -engagement_score(item),
+                item.external_id,
+            )
+        )
+    undated.sort(key=lambda item: item.external_id)
+    return dated + undated

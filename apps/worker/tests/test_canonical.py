@@ -55,3 +55,65 @@ def test_identity_keeps_distinct_urls_apart():
     left = post(external_id="", url="https://Example.com/p/1/?utm=x")
     right = post(external_id="", url="https://example.com/p/2")
     assert post_identity(left) != post_identity(right)
+
+
+from sentiment_monitor.providers.canonical import (
+    dedupe_posts,
+    engagement_score,
+    filter_since,
+    sort_posts,
+)
+
+
+def test_date_filter_keeps_undated_and_drops_older():
+    posts = [
+        post(external_id="new", published_at="2026-11-15T00:00:00Z"),
+        post(external_id="old", published_at="2026-10-01T00:00:00Z"),
+        post(external_id="undated", published_at=None),
+    ]
+    kept = filter_since(posts, "2026-11-08T00:00:00Z")
+    assert [item.external_id for item in kept] == ["new", "undated"]
+
+
+def test_dedupe_merges_routes_and_keeps_richest_fields():
+    sparse = post(external_id="same", source_provider="scrapecreators", likes=None)
+    rich = post(external_id="same", source_provider="scrapeatlas", likes=99,
+                thumbnail_url="https://img/x.jpg", routes=("threads.recent",))
+    merged = dedupe_posts([sparse, rich])
+    assert len(merged) == 1
+    assert merged[0].likes == 99
+    assert merged[0].thumbnail_url == "https://img/x.jpg"
+    assert set(merged[0].routes) == {"threads.keyword", "threads.recent"}
+
+
+def test_undated_items_sort_last_even_for_popular():
+    posts = [
+        post(external_id="undated", published_at=None, views=10**9),
+        post(external_id="dated", published_at="2026-11-15T00:00:00Z", views=1),
+    ]
+    assert [item.external_id for item in sort_posts(posts, "popular")] == ["dated", "undated"]
+
+
+def test_undated_stays_last_in_newest_and_relevance_modes():
+    posts = [
+        post(external_id="undated", published_at=None, relevance="literal_match", views=10**9),
+        post(external_id="new", published_at="2026-11-15T00:00:00Z", relevance="no_match"),
+        post(external_id="old", published_at="2026-11-01T00:00:00Z", relevance="all_words_match"),
+    ]
+    assert [item.external_id for item in sort_posts(posts, "newest")] == ["new", "old", "undated"]
+    assert [item.external_id for item in sort_posts(posts, "relevance")] == [
+        "old", "new", "undated"
+    ]
+
+
+def test_dedupe_drops_blank_identity_without_colliding():
+    blank = post(external_id="  ", url=None, raw_ref="scrapeatlas:threads:blank")
+    blank_two = post(external_id="", url="   ", raw_ref="scrapeatlas:threads:blank-two")
+    real = post(external_id="p2", raw_ref="scrapeatlas:threads:p2")
+    merged = dedupe_posts([blank, blank_two, real])
+    assert [item.external_id for item in merged] == ["p2"]
+
+
+def test_engagement_score_weights_views_and_actions():
+    assert engagement_score(post(views=10, likes=2, replies=3, shares=4)) == 10 + 6 + 6 + 8
+    assert engagement_score(post(views=None, likes=None, replies=None, shares=None)) == 0
