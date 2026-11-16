@@ -9,6 +9,7 @@ describe("provider settings", () => {
     await applyMigration(db);
     const result = await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
       platform: "youtube",
       provider: "scrapeatlas",
@@ -27,6 +28,7 @@ describe("provider settings", () => {
     await applyMigration(db);
     const result = await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
       platform: "instagram",
       provider: "scrapeatlas",
@@ -43,6 +45,7 @@ describe("provider settings", () => {
     await applyMigration(db);
     await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
       platform: "threads",
       provider: "scrapecreators",
@@ -51,6 +54,7 @@ describe("provider settings", () => {
     });
     await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
       platform: "threads",
       provider: "off",
@@ -94,6 +98,7 @@ describe("provider settings", () => {
 
     const rejected = await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
       platform: "youtube",
       provider: "scrapeatlas",
@@ -109,6 +114,7 @@ describe("provider settings", () => {
     expect(
       await saveProviderSetting(db, {
         actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
         platform: "myspace",
         provider: "scrapeatlas",
@@ -119,6 +125,7 @@ describe("provider settings", () => {
     expect(
       await saveProviderSetting(db, {
         actorEmail: "owner@example.com",
+      customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
         platform: "youtube",
         provider: "scrapeatlas",

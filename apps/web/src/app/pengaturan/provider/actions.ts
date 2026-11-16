@@ -36,6 +36,7 @@ export async function saveProviderSettingAction(
   if (!admin) return { ok: false, error: "not_admin" };
   return saveProviderSetting(deps.db, {
     actorEmail: admin.email,
+    customerId,
     sessionTokenHash: hash,
     platform: input.platform,
     provider: input.provider,

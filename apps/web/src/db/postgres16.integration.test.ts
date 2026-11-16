@@ -10,6 +10,7 @@ import { runNowAction } from "../app/dasbor/actions";
 import { saveVariantsAction } from "../app/onboarding/actions";
 import { createProject } from "../projects/handlers";
 import { createInstantSearch } from "../monitor/search/mutations";
+import { saveProviderSetting } from "../monitor/search/provider-settings";
 import { type Queryable, withCustomer } from "./migrate";
 import { enableRoleLogin, MIGRATION_ADVISORY_LOCK, migrate, sha256 } from "./production-migrate.mjs";
 
@@ -640,6 +641,59 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
     } finally {
       await app.end();
       await worker.end();
+    }
+  });
+
+  it("saves provider settings on a reused app_user connection after a tenant transaction", async () => {
+    await migrate(db, { sqlDir: SQL_DIR });
+    await enableRoleLogin(db, { appPassword: APP_PASSWORD, workerPassword: WORKER_PASSWORD });
+
+    const customerId = randomUUID();
+    const adminUserId = randomUUID();
+    const adminToken = "synthetic-reused-connection-admin-token";
+    const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+    await db.query("insert into customers (id, customer_id, created_at) values ($1, $1, now())", [customerId]);
+    await db.query(
+      "insert into users (id, customer_id, email, password_hash, created_at) values ($1, $2, 'reused@example.com', 'hash', now())",
+      [adminUserId, customerId],
+    );
+    await db.query(
+      "insert into sessions (id, customer_id, user_id, token_hash, expires_at) values ($1, $2, $3, $4, now() + interval '1 day')",
+      [randomUUID(), customerId, adminUserId, hash(adminToken)],
+    );
+    await db.query("insert into platform_admins (user_id, note) values ($1, 'qa grant')", [adminUserId]);
+
+    // A pool client is reused across requests. An earlier request sets the
+    // tenant GUC with is_local=true and commits; afterwards the GUC reads back
+    // as '' on that same client, which used to make the sessions policy cast
+    // ''::uuid error before the token policy could match.
+    const app = new Client(loginConfig("app_user", APP_PASSWORD));
+    await app.connect();
+    try {
+      await app.query("begin");
+      await app.query("select set_config('app.customer_id', $1, true)", [customerId]);
+      await app.query("commit");
+      expect((await app.query<{ value: string }>("select current_setting('app.customer_id', true) as value")).rows[0].value).toBe("");
+
+      const result = await saveProviderSetting(clientAsQueryable(app), {
+        actorEmail: "reused@example.com",
+        customerId,
+        sessionTokenHash: hash(adminToken),
+        platform: "youtube",
+        provider: "off",
+        fallbackProvider: null,
+        fallbackOnFailure: false,
+      });
+      expect(result).toEqual({ ok: true });
+      expect(
+        (await db.query<{ provider: string }>("select provider from provider_settings where platform = 'youtube'"))
+          .rows[0].provider,
+      ).toBe("off");
+      expect(
+        (await db.query<{ n: number }>("select count(*)::int as n from provider_settings_audit")).rows[0].n,
+      ).toBe(1);
+    } finally {
+      await app.end();
     }
   });
 

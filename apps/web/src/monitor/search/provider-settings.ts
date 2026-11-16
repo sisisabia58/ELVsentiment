@@ -13,6 +13,7 @@ export type ProviderSettingRow = ProviderSetting & { target: SettingTarget };
 
 export type SaveProviderSettingInput = {
   actorEmail: string;
+  customerId: string;
   sessionTokenHash: string;
   platform: string;
   provider: string;
@@ -96,6 +97,11 @@ export async function saveProviderSetting(
     await db.query("select set_config('app.session_token_hash', $1, true)", [
       input.sessionTokenHash,
     ]);
+    // Policy providers (_set_customer in the worker, customerIdFromSessionToken
+    // in the web app) use transaction-local GUCs. After a commit the value
+    // reads back as '' on a reused pool connection, and ''::uuid aborts the
+    // sessions policy before the token policy can match. Set it explicitly.
+    await db.query("select set_config('app.customer_id', $1, true)", [input.customerId]);
     const current = await db.query<{
       provider: string;
       fallback_provider: string | null;
