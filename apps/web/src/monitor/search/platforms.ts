@@ -78,6 +78,21 @@ export const CAPABILITIES: Record<ProviderMode, Partial<Record<SearchPlatform, P
   comments: COMMENTS_CAPABILITIES,
 };
 
+const LAUNCH_PLATFORM_ORDER: SearchPlatform[] = [
+  "threads",
+  "instagram",
+  "tiktok",
+  "youtube",
+  "facebook",
+  "reddit",
+  "linkedin",
+];
+
+export const LAUNCH_PLATFORMS: SearchPlatform[] = [
+  ...LAUNCH_PLATFORM_ORDER,
+  ...SEARCH_PLATFORMS.filter((platform) => !LAUNCH_PLATFORM_ORDER.includes(platform)),
+].filter((platform) => supportedProviders(platform).length > 0);
+
 // Mirrors config/cari-providers.json, which the Python worker reads and the
 // tests compare against. Next cannot bundle a file outside apps/web, so the
 // defaults live here as a literal.

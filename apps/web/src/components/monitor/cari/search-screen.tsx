@@ -13,6 +13,7 @@ import {
   type SearchFilters,
 } from "@/monitor/search/filters";
 import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
+import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platforms";
 import { startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
@@ -72,6 +73,9 @@ function RecentSearches(props: { history: SearchHistoryRow[]; now: string }) {
     </section>
   );
 }
+
+const LAUNCH_SOURCE_NAMES = LAUNCH_PLATFORMS.map((platform) => SEARCH_PLATFORM_NAME[platform]);
+const LAUNCH_SOURCE_SUMMARY = `${LAUNCH_SOURCE_NAMES.slice(0, -1).join(", ")}, dan ${LAUNCH_SOURCE_NAMES[LAUNCH_SOURCE_NAMES.length - 1]}`;
 
 function filterSummary(filters: SearchSnapshot["search"]["filters"]): string {
   const parts = [DATE_LABEL[filters.dateWindow], SORT_LABEL[filters.sort]];
@@ -176,7 +180,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }
       <section className="mx-auto max-w-[760px] pt-4 text-center lg:pt-10">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-[12px] font-medium text-muted-foreground shadow-card">
           <span className="h-1.5 w-1.5 rounded-full bg-positif" aria-hidden="true" />
-          8 sumber siap · hasil dalam ±30 detik
+          {LAUNCH_PLATFORMS.length} sumber siap · hasil dalam ±30 detik
         </span>
         <h2 className="mt-5 text-[28px] font-semibold leading-tight tracking-tight text-foreground lg:text-[36px]">
           Apa kata orang tentang merek Anda?
@@ -209,7 +213,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }
               onClick={() => void startExample(example.query)}
               className="group flex items-center gap-3 rounded-[14px] border border-border bg-surface p-4 text-left shadow-card transition hover:border-primary/40 hover:shadow-float disabled:opacity-60"
             >
-              <PlatformTile platform={["tiktok", "instagram", "x", "threads"][index] ?? "web"} size={32} />
+              <PlatformTile platform={LAUNCH_PLATFORMS[index] ?? "threads"} size={32} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[14px] font-semibold text-foreground">{example.query}</span>
                 <span className="block text-[12px] text-muted-foreground">{example.label}</span>
@@ -223,8 +227,8 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }
           {[
             {
               icon: Search,
-              title: "Cari di 8 sumber",
-              body: "Threads, Instagram, TikTok, YouTube, Facebook, X, Reddit, dan web — semuanya sekaligus.",
+              title: `Cari di ${LAUNCH_PLATFORMS.length} sumber`,
+              body: `${LAUNCH_SOURCE_SUMMARY} — semuanya sekaligus.`,
             },
             {
               icon: MessageSquareText,

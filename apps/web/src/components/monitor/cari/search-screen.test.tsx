@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
-import { SearchDetail } from "./search-screen";
+import { SearchDetail, SearchScreen } from "./search-screen";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+vi.mock("@/app/cari/start-action", () => ({
+  startSearchAction: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
@@ -125,5 +132,25 @@ describe("SearchDetail", () => {
     partial.totals = { sources: 8, done: 6, results: 20, credits: 1 };
     render(<SearchDetail initialSnapshot={partial} />);
     expect(screen.getByText(/6 dari 8 sumber menjawab/)).toBeTruthy();
+  });
+});
+
+describe("SearchScreen", () => {
+  it("describes and illustrates only the launch sources", () => {
+    render(<SearchScreen history={[]} now="2026-11-16T10:00:00Z" />);
+    expect(screen.getByText("7 sumber siap · hasil dalam ±30 detik")).toBeTruthy();
+    expect(screen.getByText("Cari di 7 sumber")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Threads, Instagram, TikTok, YouTube, Facebook, Reddit, dan LinkedIn — semuanya sekaligus.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/8 sumber/)).toBeNull();
+    expect(screen.queryByText(/Facebook, X, Reddit/)).toBeNull();
+    expect(screen.queryByText(/dan web — semuanya/)).toBeNull();
+    for (const button of screen.getAllByRole("button")) {
+      expect(within(button).queryByText("X")).toBeNull();
+      expect(within(button).queryByText("W")).toBeNull();
+    }
   });
 });
