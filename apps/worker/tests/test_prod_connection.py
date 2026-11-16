@@ -367,3 +367,46 @@ def test_platform_results_are_capped_after_dedupe(prod_db):
     view = prod_db.view(search_id)
     assert view["counts"].get("youtube") == instant_search.MAX_PLATFORM_RESULTS
     assert view["sources"][0]["result_count"] == instant_search.MAX_PLATFORM_RESULTS
+
+
+def test_app_user_cannot_attach_a_child_row_to_another_tenants_search(prod_db):
+    import psycopg
+    import pytest
+
+    other_customer = str(uuid.uuid4())
+    other_search = str(uuid.uuid4())
+    prod_db.admin.execute(
+        "insert into customers (id, customer_id, created_at) values (%s, %s, now())",
+        (other_customer, other_customer),
+    )
+    prod_db.admin.execute(
+        """
+        insert into instant_searches
+          (id, customer_id, query_text, keyword_intent, date_window, sort_mode,
+           language_filter, status, deadline_at)
+        values (%s, %s, 'barayam', 'phrase', 'all', 'relevance', 'all', 'queued',
+                now() + interval '40 seconds')
+        """,
+        (other_search, other_customer),
+    )
+    prod_db.observer.execute(
+        "select set_config('app.customer_id', %s, false)", (prod_db.customer,)
+    )
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        prod_db.observer.execute(
+            """
+            insert into instant_search_sources
+              (search_id, customer_id, platform, provider, state)
+            values (%s, %s, 'youtube', 'scrapeatlas', 'queued')
+            """,
+            (other_search, prod_db.customer),
+        )
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        prod_db.observer.execute(
+            """
+            insert into instant_search_questions
+              (id, search_id, customer_id, question, status)
+            values (%s, %s, %s, 'kenapa?', 'queued')
+            """,
+            (str(uuid.uuid4()), other_search, prod_db.customer),
+        )

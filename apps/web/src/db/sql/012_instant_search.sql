@@ -51,11 +51,12 @@ create table instant_searches (
   started_at timestamptz,
   finished_at timestamptz,
   deadline_at timestamptz not null,
-  retention_expires_at timestamptz not null default now() + interval '30 days'
+  retention_expires_at timestamptz not null default now() + interval '30 days',
+  unique (id, customer_id)
 );
 
 create table instant_search_sources (
-  search_id uuid not null references instant_searches (id) on delete cascade,
+  search_id uuid not null,
   customer_id uuid not null references customers (id),
   platform text not null,
   provider text not null,
@@ -66,12 +67,15 @@ create table instant_search_sources (
   attempted_providers text[] not null default '{}',
   safe_detail text not null default 'queued',
   updated_at timestamptz not null default now(),
-  primary key (search_id, platform)
+  primary key (search_id, platform),
+  constraint instant_search_sources_tenant_fk
+    foreign key (search_id, customer_id)
+    references instant_searches (id, customer_id) on delete cascade
 );
 
 create table instant_search_results (
   id uuid primary key,
-  search_id uuid not null references instant_searches (id) on delete cascade,
+  search_id uuid not null,
   customer_id uuid not null references customers (id),
   platform text not null,
   external_id text not null,
@@ -94,12 +98,15 @@ create table instant_search_results (
   raw_ref text not null,
   rank integer,
   collected_at timestamptz not null default now(),
-  unique (search_id, platform, external_id)
+  unique (search_id, platform, external_id),
+  constraint instant_search_results_tenant_fk
+    foreign key (search_id, customer_id)
+    references instant_searches (id, customer_id) on delete cascade
 );
 
 create table instant_search_comments (
   id uuid primary key,
-  search_id uuid not null references instant_searches (id) on delete cascade,
+  search_id uuid not null,
   customer_id uuid not null references customers (id),
   result_id uuid not null references instant_search_results (id) on delete cascade,
   platform text not null,
@@ -113,11 +120,14 @@ create table instant_search_comments (
   source_provider text not null,
   raw_ref text not null,
   collected_at timestamptz not null default now(),
-  unique (search_id, result_id, external_id)
+  unique (search_id, result_id, external_id),
+  constraint instant_search_comments_tenant_fk
+    foreign key (search_id, customer_id)
+    references instant_searches (id, customer_id) on delete cascade
 );
 
 create table instant_search_ai (
-  search_id uuid primary key references instant_searches (id) on delete cascade,
+  search_id uuid primary key,
   customer_id uuid not null references customers (id),
   overall_summary text not null,
   overall_stance text not null
@@ -129,12 +139,15 @@ create table instant_search_ai (
   input_tokens integer,
   output_tokens integer,
   cost_usd numeric(12,6) not null default 0,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint instant_search_ai_tenant_fk
+    foreign key (search_id, customer_id)
+    references instant_searches (id, customer_id) on delete cascade
 );
 
 create table instant_search_questions (
   id uuid primary key,
-  search_id uuid not null references instant_searches (id) on delete cascade,
+  search_id uuid not null,
   customer_id uuid not null references customers (id),
   question text not null,
   status text not null check (status in ('queued','running','done','failed')),
@@ -145,7 +158,10 @@ create table instant_search_questions (
   user_credits integer not null default 1 check (user_credits >= 0),
   cost_usd numeric(12,6) not null default 0,
   created_at timestamptz not null default now(),
-  answered_at timestamptz
+  answered_at timestamptz,
+  constraint instant_search_questions_tenant_fk
+    foreign key (search_id, customer_id)
+    references instant_searches (id, customer_id) on delete cascade
 );
 
 create table search_credit_ledger (

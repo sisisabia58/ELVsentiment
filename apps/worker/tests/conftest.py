@@ -97,6 +97,7 @@ def _role_url(dbname: str, user: str, password: str) -> str:
 
 
 def _seed(db) -> None:
+    db.execute("delete from search_credit_ledger")
     db.execute("delete from instant_searches")
     db.execute("delete from customers where id = %s", (CUSTOMER,))
     db.execute("insert into customers (id, customer_id, created_at) values (%s, %s, now())", (CUSTOMER, CUSTOMER))
