@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { enableRoleLogin, migrate } from "./production-migrate.mjs";
+import { enableRoleLogin, migrate, scramVerifier } from "./production-migrate.mjs";
 
 const LOCK = [814158, 1];
 
@@ -80,7 +80,7 @@ describe("role login passwords", () => {
     expect(client.queries).toEqual([]);
   });
 
-  it("quotes passwords and turns off statement logging before the alter when the migration role is superuser", async () => {
+  it("sends a SCRAM verifier and turns off statement logging before the alter when the migration role is superuser", async () => {
     const client = recordingClient();
     await enableRoleLogin(client, {
       appPassword: "p'; drop role app_user;--",
@@ -93,18 +93,42 @@ describe("role login passwords", () => {
     expect(before).toContain("begin");
     expect(before.some((sql) => sql.includes("log_statement") && sql.includes("none"))).toBe(true);
     expect(before.some((sql) => sql.includes("log_min_error_statement") && sql.includes("panic"))).toBe(true);
-    expect(sqls[alterAt]).toBe("alter role app_user with login password 'p''; drop role app_user;--'");
-    expect(sqls.some((sql) => sql === "alter role worker_role with login password 'w''orker'")).toBe(true);
+    expect(sqls[alterAt]).toMatch(
+      /^alter role app_user with login password 'SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+'$/,
+    );
+    expect(
+      sqls.some((sql) =>
+        /^alter role worker_role with login password 'SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+'$/.test(
+          sql,
+        ),
+      ),
+    ).toBe(true);
+    expect(sqls.join("\n")).not.toContain("drop role app_user");
     expect(sqls.join("\n")).not.toContain("password p'");
     expect(sqls.at(-1)).toBe("commit");
   });
 
-  it("sets passwords without touching log settings when the migration role is not a superuser", async () => {
+  it("sets password verifiers without touching log settings when the migration role is not a superuser", async () => {
     const client = recordingClient(undefined, false);
     await enableRoleLogin(client, { appPassword: "app-secret", workerPassword: "worker-secret" });
     const sqls = client.queries.map((query) => query.sql);
     expect(sqls.some((sql) => sql.includes("log_min_error_statement"))).toBe(false);
-    expect(sqls.some((sql) => sql.startsWith("alter role app_user with login password "))).toBe(true);
+    expect(
+      sqls.some((sql) =>
+        /^alter role app_user with login password 'SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+'$/.test(
+          sql,
+        ),
+      ),
+    ).toBe(true);
+    expect(sqls.join("\n")).not.toContain("app-secret");
     expect(sqls.at(-1)).toBe("commit");
+  });
+
+  it("formats a verifier Postgres accepts as a SCRAM-SHA-256 secret", () => {
+    const verifier = scramVerifier("pencil", Buffer.from("0123456789abcdef", "utf8"), 4096);
+    expect(verifier).toMatch(
+      /^SCRAM-SHA-256\$4096:MDEyMzQ1Njc4OWFiY2RlZg==\$[A-Za-z0-9+/=]{44}:[A-Za-z0-9+/=]{44}$/,
+    );
+    expect(verifier).toBe(scramVerifier("pencil", Buffer.from("0123456789abcdef", "utf8"), 4096));
   });
 });

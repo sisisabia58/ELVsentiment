@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
@@ -143,6 +143,25 @@ async function migrateLocked(client, { sqlDir }) {
 }
 
 /**
+ * Compute the SCRAM-SHA-256 secret Postgres stores in pg_authid, so a logged
+ * ALTER statement never contains the plaintext password. This is the format
+ * Postgres itself accepts for `ALTER ROLE ... PASSWORD '<verifier>'`.
+ *
+ * @param {string} password
+ * @param {Buffer} [salt]
+ * @param {number} [iterations]
+ */
+export function scramVerifier(password, salt = randomBytes(16), iterations = 4096) {
+  const saltedPassword = pbkdf2Sync(Buffer.from(password, "utf8"), salt, iterations, 32, "sha256");
+  const clientKey = createHmac("sha256", saltedPassword).update("Client Key").digest();
+  const storedKey = createHash("sha256").update(clientKey).digest();
+  const serverKey = createHmac("sha256", saltedPassword).update("Server Key").digest();
+  return `SCRAM-SHA-256$${iterations}:${salt.toString("base64")}$${storedKey.toString(
+    "base64",
+  )}:${serverKey.toString("base64")}`;
+}
+
+/**
  * @param {MigrationClient} client
  * @param {{ appPassword?: string, workerPassword?: string }} passwords
  */
@@ -160,8 +179,15 @@ export async function enableRoleLogin(client, { appPassword, workerPassword }) {
       await client.query("select set_config('log_statement', 'none', true)");
       await client.query("select set_config('log_min_error_statement', 'panic', true)");
     }
-    await client.query(`alter role app_user with login password ${pg.escapeLiteral(app)}`);
-    await client.query(`alter role worker_role with login password ${pg.escapeLiteral(worker)}`);
+    // Send a salted verifier, not the plaintext: even a non-superuser cannot
+    // stop a failing ALTER from being logged, but the log no longer holds a
+    // usable password.
+    await client.query(
+      `alter role app_user with login password ${pg.escapeLiteral(scramVerifier(app))}`,
+    );
+    await client.query(
+      `alter role worker_role with login password ${pg.escapeLiteral(scramVerifier(worker))}`,
+    );
     await client.query("commit");
   } catch (error) {
     await client.query("rollback");
