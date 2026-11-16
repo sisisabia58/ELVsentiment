@@ -1,0 +1,145 @@
+"""Canonical post/comment records shared by every provider adapter."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+from typing import Literal
+import urllib.parse
+
+from sentiment_monitor.relevance import literal_match_status, normalize_match_text
+
+PlatformId = Literal[
+    "threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x", "web"
+]
+ProviderId = Literal["scrapecreators", "scrapeatlas", "official_x", "off"]
+Relevance = Literal["literal_match", "all_words_match", "no_match"]
+
+
+@dataclass(frozen=True)
+class CanonicalComment:
+    external_id: str
+    text: str
+    author_name: str | None
+    author_handle: str | None
+    published_at: str | None
+    likes: int | None
+    replies: int | None
+    source_provider: str
+    raw_ref: str
+
+
+@dataclass(frozen=True)
+class CanonicalPost:
+    platform: PlatformId
+    external_id: str
+    text: str
+    title: str | None
+    author_name: str | None
+    author_handle: str | None
+    url: str | None
+    published_at: str | None
+    thumbnail_url: str | None
+    views: int | None
+    likes: int | None
+    replies: int | None
+    shares: int | None
+    top_replies: tuple[CanonicalComment, ...]
+    hashtags: tuple[str, ...]
+    source_provider: str
+    routes: tuple[str, ...]
+    raw_ref: str
+    collected_at: str
+    language: str = "other"
+    relevance: Relevance = "no_match"
+    web_index: bool = False
+
+
+@dataclass(frozen=True)
+class RouteCall:
+    provider: str
+    platform: str
+    route: str
+    outcome: Literal["success", "partial", "failed", "unavailable"]
+    http_status: int | None = None
+    credits_charged: int | None = None
+    body_length: int | None = None
+    latency_ms: int | None = None
+    safe_detail: str = "ok"
+
+
+_ID_WORDS = frozenset(
+    {
+        "aku", "anda", "apa", "banget", "banyak", "baru", "beli", "benar", "bisa",
+        "dan", "dari", "dengan", "di", "dong", "enggak", "gak", "ga", "gue", "ini",
+        "itu", "jadi", "jangan", "juga", "kalian", "kamu", "karena", "ke", "kita",
+        "kok", "lagi", "makan", "mereka", "nya", "pada", "saja", "sangat", "saya",
+        "sih", "sudah", "tidak", "untuk", "yang",
+    }
+)
+_EN_WORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "but", "by", "chicken", "crispy",
+        "for", "from", "good", "he", "her", "his", "i", "in", "is", "it", "its",
+        "my", "not", "of", "on", "or", "our", "she", "so", "that", "the", "their",
+        "them", "there", "they", "this", "to", "was", "we", "were", "with", "you",
+        "your",
+    }
+)
+_ID_SUFFIXES = ("nya", "lah", "kah", "pun")
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z]+", normalize_match_text(text))
+
+
+def detect_language(text: str) -> str:
+    words = _words(text)
+    if len(words) < 2:
+        return "other"
+    indonesian = sum(1 for word in words if word in _ID_WORDS)
+    indonesian += sum(
+        1 for word in words if len(word) > 5 and word.endswith(_ID_SUFFIXES)
+    )
+    english = sum(1 for word in words if word in _EN_WORDS)
+    if indonesian > english:
+        return "id"
+    if english > indonesian:
+        return "en"
+    return "other"
+
+
+def _word_pattern(token: str) -> re.Pattern[str]:
+    if token.startswith("#"):
+        token = token[1:]
+    return re.compile(rf"(?<!\w){re.escape(token)}(?!\w)", re.UNICODE)
+
+
+def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase") -> Relevance:
+    for candidate in (post.text or "", post.title or ""):
+        if literal_match_status(
+            candidate, keyword, intent, hashtags=post.hashtags
+        ) == "literal_match":
+            return "literal_match"
+    tokens = normalize_match_text(keyword).split()
+    if tokens:
+        haystack = normalize_match_text(f"{post.text or ''} {post.title or ''}")
+        if all(_word_pattern(token).search(haystack) for token in tokens):
+            return "all_words_match"
+    return "no_match"
+
+
+def post_identity(post: CanonicalPost) -> tuple[str, str] | None:
+    external_id = str(post.external_id or "").strip()
+    if external_id:
+        return (post.platform, external_id)
+    url = str(post.url or "").strip()
+    if not url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    netloc = parts.netloc.lower()
+    if not scheme or not netloc:
+        return None
+    path = parts.path.rstrip("/")
+    return (post.platform, f"url:{scheme}://{netloc}{path}")
