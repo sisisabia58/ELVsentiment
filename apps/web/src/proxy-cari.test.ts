@@ -43,10 +43,10 @@ describe("flag-off Cari routes answer a real 404", () => {
     expect(await status("/api/cari/33333333-3333-4333-8333-333333333333")).toBe(200);
   });
 
-  it("serves the pages normally when the flag is on", async () => {
+  it("redirects anonymous Cari pages when the flag is on", async () => {
     vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
-    expect(await status("/cari")).toBe(200);
-    expect(await status("/cari/riwayat")).toBe(200);
+    expect(await status("/cari")).toBe(307);
+    expect(await status("/cari/riwayat")).toBe(307);
     expect(await status("/pengaturan/provider")).toBe(200);
   });
 
@@ -124,5 +124,30 @@ describe("cari detail id gate", () => {
     vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
     expect(await status(`/cari/${OWN}`)).not.toBe(404);
     expect(config.matcher).toContain("/cari/:path*");
+  });
+});
+
+describe("anonymous Cari routes redirect before the id gate", () => {
+  it("sends every /cari path to /masuk with a 307", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+    for (const path of [
+      "/cari",
+      "/cari/riwayat",
+      "/cari/33333333-3333-4333-8333-333333333333",
+      "/cari/not-a-uuid",
+    ]) {
+      const response = await proxy(request(path));
+      expect(response.status, path).toBe(307);
+      expect(new URL(response.headers.get("location") ?? "").pathname, path).toBe("/masuk");
+      expect(response.headers.get("x-middleware-rewrite"), path).toBeNull();
+    }
+  });
+
+  it("keeps the flag-off unknown-route 404 for anonymous callers", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "0");
+    const response = await proxy(request("/cari/not-a-uuid"));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("content-type")).toContain("text/plain");
   });
 });

@@ -34,6 +34,7 @@ export async function redirectHome(request: NextRequest, lookup: SessionLookup =
 
 const PROTECTED_PREFIXES = [
   "/dasbor",
+  "/cari",
   "/sebutan",
   "/perlu-perhatian",
   "/belum-yakin",
@@ -179,11 +180,16 @@ export async function cariIdGate(
 export async function proxy(request: NextRequest) {
   const gated = cariGate(request);
   if (gated) return gated;
+  // Flag-off is decided first above. With the flag on, a signed-out /cari
+  // request gets the same 307 as /dasbor before the detail id gate, so an
+  // anonymous malformed id cannot learn the expected format.
+  const signedOut = await redirectSignedOut(request);
+  if (signedOut.headers.get("location")) return signedOut;
   const missing = await cariIdGate(request);
   if (missing) return missing;
   const provider = await providerAdminGate(request);
   if (provider) return provider;
-  return redirectSignedOut(request);
+  return signedOut;
 }
 
 export const config = {
