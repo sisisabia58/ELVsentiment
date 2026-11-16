@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+from sentiment_monitor import instant_search
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.instant_search import (
     ROUTE_TIMEOUT_SECONDS,
@@ -363,9 +364,10 @@ def test_runner_marks_slow_source_unavailable_at_deadline(db):
     assert db.execute("select count(*) as n from instant_search_results where search_id=%s", (job.id,))[0]["n"] == 0
 
 
-def test_deadline_path_joins_started_route_threads_with_a_bound(db):
+def test_deadline_path_joins_started_route_threads_with_a_bound(db, monkeypatch):
     from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
 
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     started = threading.Event()
     release = threading.Event()
 
