@@ -218,6 +218,7 @@ def insert_posts(conn: Any, job: InstantSearchJob, posts: Iterable[CanonicalPost
             values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (search_id, platform, external_id) do nothing
+            returning id
             """,
             (
                 str(uuid.uuid4()),
@@ -245,7 +246,7 @@ def insert_posts(conn: Any, job: InstantSearchJob, posts: Iterable[CanonicalPost
                 item.collected_at,
             ),
         )
-        inserted += int(getattr(cursor, "rowcount", 0) or 0)
+        inserted += len(cursor or ())
     return inserted
 
 
@@ -267,6 +268,7 @@ def insert_comments(
             select %s, %s, %s, %s, platform, %s, %s, %s, %s, %s, %s, %s, %s, %s, now()
             from instant_search_results where id = %s
             on conflict (search_id, result_id, external_id) do nothing
+            returning id
             """,
             (
                 str(uuid.uuid4()),
@@ -285,7 +287,7 @@ def insert_comments(
                 result_id,
             ),
         )
-        inserted += int(getattr(cursor, "rowcount", 0) or 0)
+        inserted += len(cursor or ())
     return inserted
 
 
@@ -351,11 +353,11 @@ def finish_search(
 
 
 def expire_old_searches(conn: Any, now: Any) -> int:
-    cursor = conn.execute(
-        "delete from instant_searches where retention_expires_at <= %s",
+    rows = conn.execute(
+        "delete from instant_searches where retention_expires_at <= %s returning id",
         (now,),
     )
-    return int(getattr(cursor, "rowcount", 0) or 0)
+    return len(rows or ())
 
 
 _PLATFORM_ORDER = (
