@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SnapshotResult } from "@/monitor/search/load";
 import { ResultsList } from "./results-list";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function result(overrides: Partial<SnapshotResult>): SnapshotResult {
   return {
@@ -115,6 +118,28 @@ describe("ResultsList", () => {
       />,
     );
     fireEvent.error(screen.getByAltText("Pratinjau hasil"));
+    expect(screen.queryByAltText("Pratinjau hasil")).toBeNull();
+    expect(screen.getByTestId("thumb-placeholder").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("replaces a thumbnail that failed before hydration", () => {
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(0);
+    render(
+      <ResultsList
+        results={[
+          result({
+            id: "r1",
+            platform: "tiktok",
+            externalId: "video-1",
+            thumbnailUrl: "https://example.invalid/thumb/broken-before-hydration.jpg",
+          }),
+        ]}
+        commentsByResult={{}}
+        sortMode="relevance"
+        now={new Date("2026-11-16T10:00:00Z")}
+      />,
+    );
     expect(screen.queryByAltText("Pratinjau hasil")).toBeNull();
     expect(screen.getByTestId("thumb-placeholder").getAttribute("aria-hidden")).toBe("true");
   });

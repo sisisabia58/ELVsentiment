@@ -45,6 +45,9 @@ function ResultCard(props: {
   const result = props.result;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const comments = props.comments.slice(0, 2);
+  function checkThumbnail(image: HTMLImageElement | null) {
+    if (image?.complete && image.naturalWidth === 0) setThumbnailFailed(true);
+  }
   const remaining = Math.max(0, (result.replies ?? 0) - comments.length);
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
@@ -67,6 +70,7 @@ function ResultCard(props: {
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
+                ref={checkThumbnail}
                 src={result.thumbnailUrl}
                 alt="Pratinjau hasil"
                 loading="lazy"
