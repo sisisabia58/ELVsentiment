@@ -1,6 +1,7 @@
 import { customerIdFromSessionToken } from "@/auth/session";
 import { readSessionToken } from "@/auth/request-session";
 import { withClient } from "@/db/pg";
+import { cariSekarangEnabled } from "@/monitor/search/feature";
 import { loadSearchSnapshot } from "@/monitor/search/load";
 
 function errorResponse(status: number, error: string): Response {
@@ -11,6 +12,7 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+  if (!cariSekarangEnabled()) return errorResponse(404, "not_found");
   const token = await readSessionToken();
   if (!token) return errorResponse(401, "unauthenticated");
   const { id } = await context.params;

@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { openSession, registerOwner } from "@/auth/accounts";
 import { applyMigration, pgliteQueryable, withCustomer, type Queryable } from "@/db/migrate";
 
@@ -47,6 +47,14 @@ beforeAll(async () => {
   }
 });
 
+beforeEach(() => {
+  vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function call(id: string) {
   return GET(new Request(`http://localhost/api/cari/${id}`), {
     params: Promise.resolve({ id }),
@@ -54,6 +62,14 @@ function call(id: string) {
 }
 
 describe("GET /api/cari/[id]", () => {
+  it("returns the same 404 as a foreign id while the feature flag is off", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "");
+    hoisted.token = ownerToken;
+    const response = await call(SEARCH);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "not_found" });
+  });
+
   it("returns 401 for a signed-out caller", async () => {
     hoisted.token = undefined;
     const response = await call(SEARCH);
