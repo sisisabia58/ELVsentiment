@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -79,10 +79,9 @@ describe("/pengaturan/provider page", () => {
     expect(mocks.frame).not.toHaveBeenCalled();
   });
 
-  it("keeps the non-admin message inside the app frame", async () => {
+  it("is a not-found for a signed-in non-admin", async () => {
     mocks.platformAdmin.mockResolvedValue(null);
-    render(await ProviderPageBody());
-    expect(screen.getByText(/tidak berwenang/i)).toBeTruthy();
-    expect(mocks.frame).toHaveBeenCalledTimes(1);
+    await expect(ProviderPageBody()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.frame).not.toHaveBeenCalled();
   });
 });

@@ -26,6 +26,7 @@ export async function ProviderPageBody() {
     if (!admin) return { authorized: false as const };
     return { authorized: true as const, rows: await loadProviderSettingRows(db) };
   });
+  if (!data.authorized) notFound();
 
   async function save(input: ProviderSettingActionInput) {
     "use server";
@@ -39,13 +40,7 @@ export async function ProviderPageBody() {
         subtitle="Mengatur penyedia untuk pencarian langsung dan komentar. Perubahan langsung berlaku."
       />
       <div className="mt-6 max-w-3xl">
-        {data.authorized ? (
-          <ProviderSettingsForm rows={data.rows} onSave={save} />
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Anda tidak berwenang mengubah penyedia pencarian.
-          </p>
-        )}
+        <ProviderSettingsForm rows={data.rows} onSave={save} />
       </div>
     </Frame>
   );

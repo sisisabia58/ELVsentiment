@@ -1,10 +1,16 @@
 // @vitest-environment node
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { config, proxy } from "./proxy";
+import { config, providerAdminGate, proxy } from "./proxy";
 
 function request(path: string): NextRequest {
   return new NextRequest(`http://127.0.0.1:43123${path}`);
+}
+
+function signedIn(path: string): NextRequest {
+  return new NextRequest(`http://127.0.0.1:43123${path}`, {
+    headers: { cookie: "sm_session=synthetic-session-token" },
+  });
 }
 
 async function status(path: string): Promise<number> {
@@ -45,5 +51,31 @@ describe("flag-off Cari routes answer a real 404", () => {
     expect(config.matcher).toContain("/cari");
     expect(config.matcher).toContain("/cari/:path*");
     expect(config.matcher).toContain("/pengaturan/provider");
+  });
+});
+
+describe("provider settings admin gate", () => {
+  it("returns 404 to a signed-in non-admin", async () => {
+    const response = await providerAdminGate(signedIn("/pengaturan/provider"), async () => false);
+    expect(response?.status).toBe(404);
+  });
+
+  it("lets a platform admin through", async () => {
+    const response = await providerAdminGate(signedIn("/pengaturan/provider"), async () => true);
+    expect(response).toBeNull();
+  });
+
+  it("leaves an unusable session to the page's normal sign-in redirect", async () => {
+    const response = await providerAdminGate(signedIn("/pengaturan/provider"), async () => null);
+    expect(response).toBeNull();
+  });
+
+  it("ignores other paths and signed-out callers", async () => {
+    expect(
+      await providerAdminGate(request("/cari"), async () => false),
+    ).toBeNull();
+    expect(
+      await providerAdminGate(request("/pengaturan/provider"), async () => false),
+    ).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { homeDestination, SESSION_COOKIE } from "@/auth/home-redirect";
 import { customerIdFromSessionToken } from "@/auth/session";
+import { platformAdminForSession, sessionTokenHash } from "@/auth/admin";
 import { withClient } from "@/db/pg";
 import { cariSekarangEnabled } from "@/monitor/search/feature";
 
@@ -64,22 +65,55 @@ export function isCariPath(pathname: string): boolean {
   return pathname === "/cari" || pathname.startsWith("/cari/");
 }
 
-// notFound() inside <Suspense> runs after the PPR shell streamed, so the status
-// was 200. The flag is decided here, before any HTML, for a real 404.
-export function cariGate(request: NextRequest): NextResponse | null {
-  if (cariSekarangEnabled()) return null;
-  const pathname = request.nextUrl.pathname;
-  if (!isCariPath(pathname) && pathname !== "/pengaturan/provider") return null;
+function notFoundResponse(): NextResponse {
   return new NextResponse("Not Found", {
     status: 404,
     headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
+// notFound() inside <Suspense> runs after the PPR shell streamed, so the status
+// was 200. The flag is decided here, before any HTML, for a real 404.
+export function cariGate(request: NextRequest): NextResponse | null {
+  if (cariSekarangEnabled()) return null;
+  const pathname = request.nextUrl.pathname;
+  if (!isCariPath(pathname) && pathname !== "/pengaturan/provider") return null;
+  return notFoundResponse();
+}
+
+type AdminLookup = (token: string) => Promise<boolean | null>;
+
+async function lookupPlatformAdmin(token: string): Promise<boolean | null> {
+  try {
+    return await withClient(async (db) => {
+      const customerId = await customerIdFromSessionToken(db, token);
+      const admin = await platformAdminForSession(db, customerId, sessionTokenHash(token));
+      return admin !== null;
+    });
+  } catch {
+    return null;
+  }
+}
+
+// A signed-in non-admin gets a real 404 here, before the PPR shell streams.
+// An unusable session is left to the page's normal sign-in redirect.
+export async function providerAdminGate(
+  request: NextRequest,
+  lookup: AdminLookup = lookupPlatformAdmin,
+): Promise<NextResponse | null> {
+  if (request.nextUrl.pathname !== "/pengaturan/provider") return null;
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  if ((await lookup(token)) !== false) return null;
+  return notFoundResponse();
+}
+
 // Next.js calls proxy(request, event). The event is not a session lookup.
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const gated = cariGate(request);
   if (gated) return gated;
+  const provider = await providerAdminGate(request);
+  if (provider) return provider;
   return redirectSignedOut(request);
 }
 
