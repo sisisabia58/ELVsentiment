@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { config, providerAdminGate, proxy } from "./proxy";
+import { cariIdGate, config, providerAdminGate, proxy } from "./proxy";
 
 function request(path: string): NextRequest {
   return new NextRequest(`http://127.0.0.1:43123${path}`);
@@ -77,5 +77,45 @@ describe("provider settings admin gate", () => {
     expect(
       await providerAdminGate(request("/pengaturan/provider"), async () => false),
     ).toBeNull();
+  });
+});
+
+describe("cari detail id gate", () => {
+  const OWN = "33333333-3333-4333-8333-333333333333";
+
+  it("returns a real 404 for a malformed id before any lookup", async () => {
+    let called = false;
+    const response = await cariIdGate(request("/cari/not-a-uuid"), async () => {
+      called = true;
+      return true;
+    });
+    expect(response?.status).toBe(404);
+    expect(called).toBe(false);
+  });
+
+  it("returns a real 404 for a uuid that is not this session's search", async () => {
+    const response = await cariIdGate(signedIn(`/cari/${OWN}`), async () => false);
+    expect(response?.status).toBe(404);
+  });
+
+  it("lets the owner's uuid through", async () => {
+    const response = await cariIdGate(signedIn(`/cari/${OWN}`), async () => true);
+    expect(response).toBeNull();
+  });
+
+  it("does not gate the history page, multi-segment paths, or signed-out callers", async () => {
+    expect(await cariIdGate(signedIn("/cari/riwayat"), async () => false)).toBeNull();
+    expect(await cariIdGate(signedIn(`/cari/${OWN}/x`), async () => false)).toBeNull();
+    expect(await cariIdGate(request(`/cari/${OWN}`), async () => false)).toBeNull();
+  });
+
+  it("falls through when a lookup cannot decide", async () => {
+    expect(await cariIdGate(signedIn(`/cari/${OWN}`), async () => null)).toBeNull();
+  });
+
+  it("is wired into the proxy for /cari/<uuid>", async () => {
+    vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
+    expect(await status(`/cari/${OWN}`)).not.toBe(404);
+    expect(config.matcher).toContain("/cari/:path*");
   });
 });

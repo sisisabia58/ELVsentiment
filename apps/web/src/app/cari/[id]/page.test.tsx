@@ -69,10 +69,11 @@ describe("/cari/[id] route", () => {
     await expect(CariDetailPageBody({ id: "a".repeat(5000) })).rejects.toThrow("NEXT_NOT_FOUND");
   });
 
-  it("renders the empty state for a foreign or unknown id without leaking data", async () => {
+  it("is a not-found for a foreign or unknown id without leaking data", async () => {
     state.flag = true;
     const id = "44444444-4444-4444-8444-444444444444";
-    await expect(CariDetailPageBody({ id })).resolves.toBeTruthy();
+    await expect(CariDetailPageBody({ id })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(state.loadSearchSnapshot).toHaveBeenCalledWith(expect.anything(), expect.any(String), id);
+    expect(state.order.at(-1)).toBe("notFound");
   });
 });

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { homeDestination, SESSION_COOKIE } from "@/auth/home-redirect";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { platformAdminForSession, sessionTokenHash } from "@/auth/admin";
+import { withCustomer } from "@/db/migrate";
 import { withClient } from "@/db/pg";
 import { cariSekarangEnabled } from "@/monitor/search/feature";
 
@@ -108,10 +109,65 @@ export async function providerAdminGate(
   return notFoundResponse();
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// /cari/<one segment> other than the history page. Multi-segment paths and the
+// list page keep their normal handling.
+function cariDetailSegment(pathname: string): string | null {
+  const prefix = "/cari/";
+  if (!pathname.startsWith(prefix)) return null;
+  const segment = pathname.slice(prefix.length);
+  if (!segment || segment.includes("/") || segment === "riwayat") return null;
+  return segment;
+}
+
+type SearchLookup = (token: string, searchId: string) => Promise<boolean | null>;
+
+async function lookupOwnedSearch(token: string, searchId: string): Promise<boolean | null> {
+  try {
+    return await withClient(async (db) => {
+      const customerId = await customerIdFromSessionToken(db, token);
+      return await withCustomer(db, customerId, async () => {
+        const found = await db.query<{ id: string }>(
+          "select id from instant_searches where id = $1 and customer_id = $2 limit 1",
+          [searchId, customerId],
+        );
+        return found.rows.length > 0;
+      });
+    });
+  } catch {
+    return null;
+  }
+}
+
+// notFound() inside the PPR/Suspense tree leaves the HTTP status at 200. Decide
+// here, before the shell streams: a malformed id is a real 404, and a UUID that
+// is not this session's search is a real 404 too. An unusable session or a
+// lookup error is left to the page's normal handling.
+export async function cariIdGate(
+  request: NextRequest,
+  lookup: SearchLookup = lookupOwnedSearch,
+): Promise<NextResponse | null> {
+  const segment = cariDetailSegment(request.nextUrl.pathname);
+  if (!segment) return null;
+  if (!UUID_PATTERN.test(segment)) return notFoundResponse();
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  let owned: boolean | null;
+  try {
+    owned = await lookup(token, segment);
+  } catch {
+    return null;
+  }
+  return owned === false ? notFoundResponse() : null;
+}
+
 // Next.js calls proxy(request, event). The event is not a session lookup.
 export async function proxy(request: NextRequest) {
   const gated = cariGate(request);
   if (gated) return gated;
+  const missing = await cariIdGate(request);
+  if (missing) return missing;
   const provider = await providerAdminGate(request);
   if (provider) return provider;
   return redirectSignedOut(request);
