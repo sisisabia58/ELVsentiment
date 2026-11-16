@@ -256,6 +256,8 @@ def fetch_scrapeatlas_json(
         raise ScrapeAtlasError(
             "malformed_json",
             http_status=http_status,
+            credits_charged=charged,
+            credits_remaining=remaining,
             body_length=body_length,
             latency_ms=latency_ms,
         ) from None
@@ -263,6 +265,8 @@ def fetch_scrapeatlas_json(
         raise ScrapeAtlasError(
             "malformed_envelope",
             http_status=http_status,
+            credits_charged=charged,
+            credits_remaining=remaining,
             body_length=body_length,
             latency_ms=latency_ms,
         )

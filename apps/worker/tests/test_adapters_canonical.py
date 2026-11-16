@@ -323,3 +323,18 @@ def test_bad_record_does_not_roll_back_another_search_or_the_ledger(prod_db):
         limits=None,
         fetcher=bad,
     ) == 0
+
+
+@pytest.mark.parametrize("platform", list(LIST_KEY))
+@pytest.mark.parametrize("body,detail", [(b"{not json", "malformed_json"), (b"[1,2,3]", "malformed_envelope")])
+def test_malformed_bodies_still_ledger_the_paid_credit(prod_db, platform, body, detail):
+    adapter, store, status, source, rows = run_case(prod_db, platform, body)
+    assert store == "ok", adapter
+    assert adapter.get("state") == "failed", adapter
+    assert adapter.get("detail") == detail, adapter
+    ledger = prod_db.admin.execute(
+        "select credits_charged, safe_detail from search_credit_ledger where platform = %s",
+        (platform,),
+    ).fetchall()
+    assert ledger, (platform, adapter)
+    assert ledger[0]["credits_charged"] == 1, ledger
