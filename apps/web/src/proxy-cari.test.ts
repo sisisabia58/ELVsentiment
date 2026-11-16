@@ -96,7 +96,7 @@ describe("provider settings admin gate", () => {
 describe("cari detail id gate", () => {
   const OWN = "33333333-3333-4333-8333-333333333333";
 
-  it("returns a styled 404 for a malformed id before any lookup", async () => {
+  it("returns a self-contained HTML 404 for a malformed id before any lookup", async () => {
     let called = false;
     const response = await cariIdGate(signedIn("/cari/not-a-uuid"), async () => {
       called = true;
@@ -104,15 +104,21 @@ describe("cari detail id gate", () => {
     });
     expect(response?.status).toBe(404);
     expect(called).toBe(false);
-    expect(response?.headers.get("content-type") ?? "").not.toContain("text/plain");
-    expect(response?.headers.get("x-middleware-rewrite") ?? "").toContain("/cari-tidak-ditemukan");
+    expect(response?.headers.get("content-type")).toContain("text/html");
+    expect(response?.headers.get("x-middleware-rewrite")).toBeNull();
+    const body = await response?.text();
+    expect(body).toContain("Pencarian tidak ditemukan.");
+    expect(body).toContain('href="/cari"');
   });
 
-  it("returns a styled 404 for a uuid that is not this session's search", async () => {
+  it("returns a self-contained HTML 404 for a uuid that is not this session's search", async () => {
     const response = await cariIdGate(signedIn(`/cari/${OWN}`), async () => false);
     expect(response?.status).toBe(404);
-    expect(response?.headers.get("content-type") ?? "").not.toContain("text/plain");
-    expect(response?.headers.get("x-middleware-rewrite") ?? "").toContain("/cari-tidak-ditemukan");
+    expect(response?.headers.get("content-type")).toContain("text/html");
+    expect(response?.headers.get("x-middleware-rewrite")).toBeNull();
+    const body = await response?.text();
+    expect(body).toContain("Pencarian tidak ditemukan.");
+    expect(body).toContain('href="/cari"');
   });
 
   it("lets the owner's uuid through", async () => {
@@ -168,11 +174,14 @@ describe("anonymous Cari routes redirect before the id gate", () => {
     expect(new URL(response.headers.get("location") ?? "").pathname).toBe("/masuk");
   });
 
-  it("serves the styled 404 for a signed-in direct hit on the internal card route", async () => {
+  it("serves the self-contained 404 card for a signed-in direct hit without a rewrite", async () => {
     vi.stubEnv("CARI_SEKARANG_ENABLED", "1");
     const response = await cariInternalNotFoundGate(request("/cari-tidak-ditemukan"));
     expect(response?.status).toBe(404);
-    expect(response?.headers.get("content-type") ?? "").not.toContain("text/plain");
-    expect(response?.headers.get("x-middleware-rewrite") ?? "").toContain("/cari-tidak-ditemukan");
+    expect(response?.headers.get("content-type")).toContain("text/html");
+    expect(response?.headers.get("x-middleware-rewrite")).toBeNull();
+    const body = await response?.text();
+    expect(body).toContain("Pencarian tidak ditemukan.");
+    expect(body).toContain('href="/cari"');
   });
 });

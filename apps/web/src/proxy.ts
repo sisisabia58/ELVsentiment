@@ -77,23 +77,53 @@ function notFoundResponse(): NextResponse {
 
 const CARI_NOT_FOUND_PATH = "/cari-tidak-ditemukan";
 
-// Keep the real 404 status but render the app-styled card: rewrite to a small
-// internal page. The flag-off gate above still returns the plain unknown-route
-// response, so the feature is not revealed when it is disabled.
-function cariNotFoundResponse(request: NextRequest): NextResponse {
-  const url = request.nextUrl.clone();
-  url.pathname = CARI_NOT_FOUND_PATH;
-  const response = NextResponse.rewrite(url, { status: 404 });
-  response.headers.set("cache-control", "no-store");
-  return response;
+// A rewrite back into a matched route re-enters Proxy, so the old
+// rewrite-to-/cari-tidak-ditemukan looped forever on a real prod build.
+// Return the 404 card directly instead: no rewrite, no PPR stream, no loop.
+const CARI_NOT_FOUND_HTML = `<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Pencarian tidak ditemukan.</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background: #f6f7f9; color: #111827; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: 100%; max-width: 520px; background: #fff; border: 1px solid #e5e7eb;
+    border-radius: 16px; padding: 40px 24px; text-align: center; box-shadow: 0 8px 30px rgba(17,24,39,.06); }
+  h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  p { margin: 8px auto 0; max-width: 360px; color: #6b7280; font-size: 14px; line-height: 1.6; }
+  a { display: inline-block; margin-top: 24px; color: #2563eb; font-size: 14px; font-weight: 500; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pencarian tidak ditemukan.</h1>
+  <p>Pencarian ini tidak ada atau bukan milik akun Anda. Coba cari lagi dari halaman Cari sekarang.</p>
+  <a href="/cari">Kembali ke Cari sekarang</a>
+</main>
+</body>
+</html>`;
+
+function cariNotFoundResponse(): NextResponse {
+  return new NextResponse(CARI_NOT_FOUND_HTML, {
+    status: 404,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
-// A direct visit to the internal card route (signed in, flag on) must still
-// answer 404, not a 200 page. Rewriting to itself keeps the status; Proxy is
-// not re-run for a rewrite, so this cannot loop.
+// A direct visit to the internal card route (signed in, flag on) must answer
+// 404, not a 200 page. It also must not rewrite into the matcher.
 export function cariInternalNotFoundGate(request: NextRequest): NextResponse | null {
   if (request.nextUrl.pathname !== CARI_NOT_FOUND_PATH) return null;
-  return cariNotFoundResponse(request);
+  return cariNotFoundResponse();
 }
 
 // notFound() inside <Suspense> runs after the PPR shell streamed, so the status
@@ -179,7 +209,7 @@ export async function cariIdGate(
 ): Promise<NextResponse | null> {
   const segment = cariDetailSegment(request.nextUrl.pathname);
   if (!segment) return null;
-  if (!UUID_PATTERN.test(segment)) return cariNotFoundResponse(request);
+  if (!UUID_PATTERN.test(segment)) return cariNotFoundResponse();
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   let owned: boolean | null;
@@ -188,7 +218,7 @@ export async function cariIdGate(
   } catch {
     return null;
   }
-  return owned === false ? cariNotFoundResponse(request) : null;
+  return owned === false ? cariNotFoundResponse() : null;
 }
 
 // Next.js calls proxy(request, event). The event is not a session lookup.
