@@ -1,6 +1,8 @@
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from sentiment_monitor.limits import load_limits
 from sentiment_monitor.x_cost import (
     GLOBAL_CUSTOMER_ID,
@@ -78,6 +80,12 @@ def test_limits_file_has_the_conservative_defaults():
     assert limits.threads_rolling_24h_reserve < limits.threads_rolling_24h_platform
     overridden = load_limits(Path("config/limits.json"), {"X_MONTHLY_GLOBAL_POST_READS": "100"})
     assert overridden.x_monthly_global_post_reads == 100
+    assert limits.cari_daily_search_limit == 20
+    assert load_limits(Path("config/limits.json"), {"CARI_DAILY_SEARCH_LIMIT": "3"}).cari_daily_search_limit == 3
+    with pytest.raises(ValueError):
+        load_limits(Path("config/limits.json"), {"CARI_DAILY_SEARCH_LIMIT": "0"})
+    with pytest.raises(ValueError):
+        load_limits(Path("config/limits.json"), {"CARI_DAILY_SEARCH_LIMIT": "2.5"})
 
 
 def test_x_customer_cap_reads_postgres_and_does_not_fetch():

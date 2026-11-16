@@ -7,5 +7,6 @@
   "manual_min_interval_seconds": 900,
   "max_jobs_per_tick": 5,
   "worker_poll_seconds": 20,
-  "worker_heartbeat_stale_seconds": 90
+  "worker_heartbeat_stale_seconds": 90,
+  "cari_daily_search_limit": 20
 }

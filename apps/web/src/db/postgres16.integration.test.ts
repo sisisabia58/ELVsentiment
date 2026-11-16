@@ -9,6 +9,7 @@ import { authenticateOwner, openSession, registerOwner } from "../auth/accounts"
 import { runNowAction } from "../app/dasbor/actions";
 import { saveVariantsAction } from "../app/onboarding/actions";
 import { createProject } from "../projects/handlers";
+import { createInstantSearch } from "../monitor/search/mutations";
 import { type Queryable, withCustomer } from "./migrate";
 import { enableRoleLogin, MIGRATION_ADVISORY_LOCK, migrate, sha256 } from "./production-migrate.mjs";
 
@@ -545,6 +546,46 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
     } finally {
       await app.end();
       await worker.end();
+    }
+  });
+
+  it("enforces the instant-search daily cap race-safely under the web pool", async () => {
+    await migrate(db, { sqlDir: SQL_DIR });
+    await enableRoleLogin(db, { appPassword: APP_PASSWORD, workerPassword: WORKER_PASSWORD });
+    const login = loginConfig("app_user", APP_PASSWORD);
+    process.env.DATABASE_URL = `postgresql://app_user:${encodeURIComponent(APP_PASSWORD)}@${login.host}:${login.port}/${DB_NAME}`;
+    const { endPool, withClient } = await import("./pg");
+    try {
+      const owner = await withClient((client) =>
+        registerOwner(client, { email: "cap@example.com", password: "sandi-panjang" }),
+      );
+      const input = {
+        query: "barayam",
+        intent: "phrase" as const,
+        filters: { dateWindow: "7d" as const, sort: "relevance" as const, language: "all" as const },
+      };
+      const now = new Date("2026-11-16T10:00:00Z");
+      const results = await Promise.all([
+        withClient((client) => createInstantSearch(client, owner.customerId, input, now, { cariDailySearchLimit: 1 })),
+        withClient((client) => createInstantSearch(client, owner.customerId, input, now, { cariDailySearchLimit: 1 })),
+      ]);
+      expect(results.filter((result) => result.ok)).toHaveLength(1);
+      expect(results.filter((result) => !result.ok && result.error === "daily_limit")).toHaveLength(1);
+      const count = await withClient((client) =>
+        withCustomer(client, owner.customerId, () =>
+          client.query<{ n: number }>("select count(*)::int as n from instant_searches"),
+        ),
+      );
+      expect(count.rows[0].n).toBe(1);
+      const sources = await withClient((client) =>
+        withCustomer(client, owner.customerId, () =>
+          client.query<{ n: number }>("select count(*)::int as n from instant_search_sources"),
+        ),
+      );
+      expect(sources.rows[0].n).toBe(7);
+    } finally {
+      await endPool();
+      delete process.env.DATABASE_URL;
     }
   });
 

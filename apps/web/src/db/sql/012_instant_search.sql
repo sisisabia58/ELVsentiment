@@ -241,6 +241,10 @@ grant insert on instant_search_questions to app_user;
 create policy instant_search_questions_insert on instant_search_questions
   for insert to app_user with check (customer_id = current_setting('app.customer_id', true)::uuid);
 
+grant insert on instant_search_sources to app_user;
+create policy instant_search_sources_insert on instant_search_sources
+  for insert to app_user with check (customer_id = current_setting('app.customer_id', true)::uuid);
+
 grant select, insert, update on gemini_gate to worker_role;
 alter table gemini_gate enable row level security;
 alter table gemini_gate force row level security;

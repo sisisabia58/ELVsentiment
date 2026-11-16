@@ -15,6 +15,7 @@ class Limits:
     max_jobs_per_tick: int
     worker_poll_seconds: int
     worker_heartbeat_stale_seconds: int
+    cari_daily_search_limit: int
 
 
 def load_limits(path: Path, env: dict[str, str] | None = None) -> Limits:
@@ -35,9 +36,12 @@ def load_limits(path: Path, env: dict[str, str] | None = None) -> Limits:
         max_jobs_per_tick=value("MAX_JOBS_PER_TICK", "max_jobs_per_tick"),
         worker_poll_seconds=value("WORKER_POLL_SECONDS", "worker_poll_seconds"),
         worker_heartbeat_stale_seconds=value("WORKER_HEARTBEAT_STALE_SECONDS", "worker_heartbeat_stale_seconds"),
+        cari_daily_search_limit=value("CARI_DAILY_SEARCH_LIMIT", "cari_daily_search_limit"),
     )
     if limits.threads_rolling_24h_reserve > limits.threads_rolling_24h_platform:
         raise ValueError("threads_reserve")
     if not 15 <= limits.worker_poll_seconds <= 30:
         raise ValueError("worker_poll_seconds")
+    if limits.cari_daily_search_limit < 1:
+        raise ValueError("cari_daily_search_limit")
     return limits
