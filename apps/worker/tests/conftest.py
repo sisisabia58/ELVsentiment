@@ -141,6 +141,7 @@ def db(instant_database):
         psycopg.connect(instant_database, autocommit=False, row_factory=dict_row)
     )
     conn.execute("delete from instant_searches")
+    conn.execute("delete from search_credit_ledger")
     conn.execute("delete from customers where id = %s", (CUSTOMER,))
     conn.execute("insert into customers (id, customer_id, created_at) values (%s, %s, now())", (CUSTOMER, CUSTOMER))
     conn.execute(
