@@ -314,15 +314,28 @@ def fetch_scrapecreators_json(
     return FetchedJSON(data, http_status, body_length=body_length)
 
 
+def _epoch_to_iso(value: int | float) -> str | None:
+    number = float(value)
+    # Providers mix seconds and milliseconds; values past ~year 5138 are ms.
+    if abs(number) >= 1e11:
+        number /= 1000.0
+    try:
+        return datetime.fromtimestamp(number, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def unix_to_iso(value: Any) -> str | None:
     if value is None or value == "":
         return None
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _epoch_to_iso(value)
     if isinstance(value, str):
         stripped = value.strip()
-        if stripped.isdigit():
-            return datetime.fromtimestamp(float(stripped), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if stripped.isascii() and stripped.isdigit():
+            return _epoch_to_iso(int(stripped))
         return stripped
     return None
 
