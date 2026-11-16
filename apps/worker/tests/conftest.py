@@ -7,6 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
+from psycopg import sql
 from psycopg.rows import dict_row
 
 SQL_DIR = Path(__file__).resolve().parents[2] / "web" / "src" / "db" / "sql"
@@ -27,7 +28,29 @@ def _db_url(dbname: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, f"/{dbname}", parts.query, parts.fragment))
 
 
+def _drop_leftover_databases(admin) -> None:
+    """Drop sm_* databases left behind by the web PG suite.
+
+    The worker fixture reuses the cluster-level app_user/worker_role names, so
+    any leftover objects owned by them in another database block the role drop.
+    """
+    rows = admin.execute(
+        "select datname from pg_database "
+        "where datistemplate = false and datname like %s "
+        "and datname <> current_database()",
+        ("sm\\_%",),
+    ).fetchall()
+    for (name,) in rows:
+        admin.execute(
+            "select pg_terminate_backend(pid) from pg_stat_activity "
+            "where datname = %s and pid <> pg_backend_pid()",
+            (name,),
+        )
+        admin.execute(sql.SQL("drop database if exists {}").format(sql.Identifier(name)))
+
+
 def _reset_roles(admin) -> None:
+    _drop_leftover_databases(admin)
     admin.execute(
         "select pg_terminate_backend(pid) from pg_stat_activity "
         "where datname = %s and pid <> pg_backend_pid()",
