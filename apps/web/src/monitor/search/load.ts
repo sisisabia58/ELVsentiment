@@ -261,6 +261,13 @@ export async function loadSearchSnapshot(
       collectedAt: iso(result.collected_at) ?? new Date(0).toISOString(),
     }));
 
+    const resultCountRows = await db.query<{ n: number | string }>(
+      `select count(*)::int as n from instant_search_results
+       where search_id = $1 and customer_id = $2`,
+      [searchId, customerId],
+    );
+    const storedResultCount = int(resultCountRows.rows[0]?.n);
+
     const commentRows = await db.query<{
       id: string;
       result_id: string;
@@ -366,7 +373,7 @@ export async function loadSearchSnapshot(
       totals: {
         sources: sources.length,
         done: sources.filter((source) => source.state === "answered").length,
-        results: sources.reduce((sum, source) => sum + source.resultCount, 0),
+        results: storedResultCount,
         credits: int(row.credits_used),
       },
       results,

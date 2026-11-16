@@ -102,6 +102,29 @@ function finishedSnapshot(): SearchSnapshot {
   };
 }
 
+function failedSnapshot(errorCode: string): SearchSnapshot {
+  const running = snapshot();
+  return {
+    ...running,
+    search: {
+      ...running.search,
+      status: "failed",
+      errorCode,
+      startedAt: null,
+      finishedAt: "2026-11-16T10:00:40Z",
+      credits: 0,
+    },
+    totals: { sources: 8, done: 0, results: 0, credits: 0 },
+    results: [],
+    sources: running.sources.map((source) => ({
+      ...source,
+      state: "failed",
+      resultCount: 0,
+      creditsCharged: null,
+    })),
+  };
+}
+
 describe("SearchDetail", () => {
   it("shows the command receipt, progress before completion, and results after", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
@@ -123,6 +146,43 @@ describe("SearchDetail", () => {
     expect(screen.queryByText(/ScrapeAtlas/i)).toBeNull();
     expect(screen.queryByText(/ScrapeCreators/i)).toBeNull();
     expect(screen.queryByText(/scrapeatlas/i)).toBeNull();
+  });
+
+  it("shows a clear Indonesian deadline message with no bogus elapsed or credits", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    render(<SearchDetail initialSnapshot={failedSnapshot("deadline")} />);
+    expect(
+      screen.getByText("Waktu pencarian habis sebelum semua sumber menjawab."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/dtk/)).toBeNull();
+    expect(screen.queryByText(/kredit/)).toBeNull();
+    expect(screen.queryByText(/300 dtk/)).toBeNull();
+  });
+
+  it("maps other failed searches to Indonesian copy", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    render(<SearchDetail initialSnapshot={failedSnapshot("all_sources_failed")} />);
+    expect(
+      screen.getByText("Tidak ada sumber yang berhasil menjawab. Coba lagi sebentar lagi."),
+    ).toBeTruthy();
+  });
+
+  it("shows only the known result count and credits", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const done = finishedSnapshot();
+    done.sources = done.sources.map((source) => ({ ...source, creditsCharged: 1 }));
+    done.totals = { sources: 8, done: 7, results: 2, credits: 99 };
+    render(<SearchDetail initialSnapshot={done} />);
+    expect(screen.getByText(/2 hasil/)).toBeTruthy();
+    expect(screen.getByText("2 kredit")).toBeTruthy();
+  });
+
+  it("uses the server-provided now for a running search instead of the wall clock", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    render(
+      <SearchDetail initialSnapshot={snapshot()} now="2026-11-16T10:00:31Z" />,
+    );
+    expect(screen.getByText(/31 dtk/)).toBeTruthy();
   });
 
   it("renders a finished partial search without pretending every source answered", () => {

@@ -15,7 +15,7 @@ export async function CariDetailPageBody({ id }: { id: string }) {
   await connection();
   if (!cariSekarangEnabled()) notFound();
   if (!isUuid(id)) notFound();
-  const { customerId, workspace } = await requireWorkspace(undefined);
+  const { customerId, now, workspace } = await requireWorkspace(undefined);
   const snapshot = await withClient((db) => loadSearchSnapshot(db, customerId, id));
   if (!snapshot) {
     return (
@@ -34,7 +34,7 @@ export async function CariDetailPageBody({ id }: { id: string }) {
   }
   return (
     <Frame active="/cari" workspace={workspace} logout={<LogoutForm />}>
-      <SearchDetail initialSnapshot={snapshot} />
+      <SearchDetail initialSnapshot={snapshot} now={now.toISOString()} />
     </Frame>
   );
 }

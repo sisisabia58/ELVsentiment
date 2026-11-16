@@ -72,10 +72,39 @@ describe("ProgressPanel", () => {
     expect(screen.getByText("Tidak tersedia")).toBeTruthy();
     expect(screen.getByText("Gagal")).toBeTruthy();
     expect(screen.getByText(/4\/8/)).toBeTruthy();
-    expect(screen.getByText(/1 kredit/)).toBeTruthy();
+    expect(screen.queryByText(/kredit/)).toBeNull();
     expect(screen.getByText(/43 hasil/)).toBeTruthy();
-    expect(screen.getByText("Komentar")).toBeTruthy();
-    expect(screen.getByText("Ringkasan AI")).toBeTruthy();
+    expect(screen.queryByText("Komentar")).toBeNull();
+    expect(screen.queryByText("Ringkasan AI")).toBeNull();
+  });
+
+  it("shows only the known ledger credits, and nothing when unknown", () => {
+    const known = {
+      ...snapshotWithStates,
+      sources: snapshotWithStates.sources.map((source, index) => ({
+        ...source,
+        creditsCharged: index < 2 ? 2 : null,
+      })),
+    };
+    render(<ProgressPanel snapshot={known} now={new Date("2026-11-16T10:00:14Z")} />);
+    expect(screen.getByText(/4 kredit/)).toBeTruthy();
+  });
+
+  it("hides elapsed time for a finished search that never started", () => {
+    render(
+      <ProgressPanel
+        snapshot={snapshot({
+          search: {
+            ...snapshot().search,
+            status: "failed",
+            startedAt: null,
+            finishedAt: "2026-11-16T10:00:40Z",
+          },
+        })}
+        now={new Date("2026-11-16T10:00:40Z")}
+      />,
+    );
+    expect(screen.queryByText(/dtk/)).toBeNull();
   });
 
   it("shows the finished summary and never renders provider credit numbers", () => {
@@ -95,7 +124,7 @@ describe("ProgressPanel", () => {
     );
     expect(screen.getByText(/8\/8/)).toBeTruthy();
     expect(screen.queryByText(/12 kredit/)).toBeNull();
-    expect(screen.getByText(/1 kredit/)).toBeTruthy();
+    expect(screen.queryByText(/kredit/)).toBeNull();
   });
 });
 

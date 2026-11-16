@@ -137,8 +137,21 @@ describe("loadSearchSnapshot", () => {
     for (const [platform, state, count] of states) {
       await insertSource(db, SEARCH, CUSTOMER, platform, state, count);
     }
+    await insertResult(db, SEARCH, CUSTOMER, {
+      id: "77777777-7777-4777-8777-777777777777",
+      externalId: "stored-1",
+      publishedAt: "2026-11-15T09:00:00Z",
+      rank: 1,
+    });
+    await insertResult(db, SEARCH, CUSTOMER, {
+      id: "88888888-8888-4888-8888-888888888888",
+      externalId: "stored-2",
+      publishedAt: "2026-11-15T10:00:00Z",
+      rank: 2,
+    });
     const snapshot = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
-    expect(snapshot?.totals).toEqual({ sources: 8, done: 4, results: 43, credits: 12 });
+    // 43 is the stale sum of source result_count; the header must use rows.
+    expect(snapshot?.totals).toEqual({ sources: 8, done: 4, results: 2, credits: 12 });
     expect(snapshot?.search.status).toBe("running");
     expect(snapshot?.sources.map((row) => row.platform)).toEqual([
       "threads",

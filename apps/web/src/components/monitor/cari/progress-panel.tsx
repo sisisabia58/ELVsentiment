@@ -2,6 +2,11 @@ import { Check, Loader2 } from "lucide-react";
 import { cn } from "cn";
 import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
+import { elapsedSeconds, knownCredits } from "./snapshot-format";
+
+// Komentar and Ringkasan AI belong to M4/M5. Keep them out of the progress
+// panel until those milestones ship.
+const SHOW_UPCOMING_STEPS = false;
 
 const STATE_LABEL: Record<string, string> = {
   answered: "Selesai",
@@ -10,13 +15,6 @@ const STATE_LABEL: Record<string, string> = {
   unavailable: "Tidak tersedia",
   failed: "Gagal",
 };
-
-function elapsedSeconds(snapshot: SearchSnapshot, now: Date): number {
-  const start = snapshot.search.startedAt ?? snapshot.search.createdAt;
-  const end = snapshot.search.finishedAt ?? now.toISOString();
-  const value = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
-  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-}
 
 function DotMap(props: { total: number; done: number }) {
   const dots: Array<{ x: number; y: number; on: boolean }> = [];
@@ -122,6 +120,8 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
   const max = Math.max(1, ...snapshot.sources.map((source) => source.resultCount));
   const finished = ["succeeded", "partial", "failed"].includes(snapshot.search.status);
   const running = !finished;
+  const elapsed = elapsedSeconds(snapshot, now);
+  const credits = knownCredits(snapshot);
 
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -143,8 +143,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
             </div>
             <div>
               <p className="text-[20px] font-semibold tabular-nums text-foreground">
-                {elapsedSeconds(snapshot, now)}{" "}
-                <span className="text-[13px] font-medium">dtk</span>
+                {elapsed === null ? "—" : `${elapsed} dtk`}
               </p>
               <p className="text-[11px] text-muted-foreground">{running ? "berjalan" : "selesai"}</p>
             </div>
@@ -160,9 +159,11 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
               )}
               {running ? `Mencari ${total} sumber` : `${total} sumber`}
             </h2>
-            <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-[11.5px] font-medium text-foreground">
-              1 kredit
-            </span>
+            {credits !== null ? (
+              <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-[11.5px] font-medium text-foreground">
+                {credits} kredit
+              </span>
+            ) : null}
           </div>
           <div className="mt-4 space-y-2.5">
             {snapshot.sources.map((source) => (
@@ -171,7 +172,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
           </div>
         </div>
       </div>
-      <ol className="grid border-t border-border sm:grid-cols-3">
+      <ol className={cn("grid border-t border-border", SHOW_UPCOMING_STEPS && "sm:grid-cols-3")}>
         <li className="flex items-center gap-3 px-5 py-3.5">
           <span
             className={cn(
@@ -188,24 +189,28 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
             </p>
           </div>
         </li>
-        <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-          <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-            2
-          </span>
-          <div>
-            <p className="text-[13px] font-semibold text-foreground">Komentar</p>
-            <p className="text-[11.5px] text-muted-foreground">Menunggu · ambil balasan teratas</p>
-          </div>
-        </li>
-        <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-          <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-            3
-          </span>
-          <div>
-            <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
-            <p className="text-[11.5px] text-muted-foreground">Menunggu · ±10 detik</p>
-          </div>
-        </li>
+        {SHOW_UPCOMING_STEPS ? (
+          <>
+            <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+              <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
+                2
+              </span>
+              <div>
+                <p className="text-[13px] font-semibold text-foreground">Komentar</p>
+                <p className="text-[11.5px] text-muted-foreground">Menunggu · ambil balasan teratas</p>
+              </div>
+            </li>
+            <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+              <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
+                3
+              </span>
+              <div>
+                <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
+                <p className="text-[11.5px] text-muted-foreground">Menunggu · ±10 detik</p>
+              </div>
+            </li>
+          </>
+        ) : null}
       </ol>
     </section>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Clock, MessageSquareText, Search, Sparkles } from "lucide-react";
@@ -20,6 +20,7 @@ import { PlatformTile } from "./platform-tile";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
+import { elapsedSeconds, knownCredits } from "./snapshot-format";
 import { useSearchPoll } from "./use-search-poll";
 
 export type SearchHistoryRow = {
@@ -31,6 +32,14 @@ export type SearchHistoryRow = {
   status: string;
   createdAt: string;
 };
+
+const FAILED_SEARCH_COPY: Record<string, string> = {
+  deadline: "Waktu pencarian habis sebelum semua sumber menjawab.",
+  all_sources_failed: "Tidak ada sumber yang berhasil menjawab. Coba lagi sebentar lagi.",
+  storage_failed: "Hasil pencarian gagal disimpan. Coba lagi sebentar lagi.",
+};
+
+const FAILED_SEARCH_FALLBACK = "Pencarian gagal. Coba lagi sebentar lagi.";
 
 const ERROR_COPY: Record<string, string> = {
   disabled: "Cari sekarang belum tersedia.",
@@ -83,11 +92,16 @@ function filterSummary(filters: SearchSnapshot["search"]["filters"]): string {
   return parts.join(" · ");
 }
 
-function receiptElapsed(snapshot: SearchSnapshot): number {
-  const start = snapshot.search.startedAt ?? snapshot.search.createdAt;
-  const end = snapshot.search.finishedAt ?? new Date().toISOString();
-  const seconds = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
-  return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+// Server HTML and the first client render must agree. Seed the clock from the
+// server-provided `now` and only start ticking after mount.
+function useNow(initialIso: string | undefined): Date {
+  const [now, setNow] = useState(() => new Date(initialIso ?? 0));
+  useEffect(() => {
+    if (!initialIso) setNow(new Date());
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, [initialIso]);
+  return now;
 }
 
 function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComment[]> {
@@ -98,15 +112,31 @@ function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComm
   return grouped;
 }
 
-export function SearchDetail(props: { initialSnapshot: SearchSnapshot }) {
+export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string }) {
   const { snapshot, stale } = useSearchPoll(
     props.initialSnapshot.search.id,
     props.initialSnapshot,
   );
+  const now = useNow(props.now);
   const search = snapshot.search;
   const running = search.status === "queued" || search.status === "running";
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
+  const elapsed = elapsedSeconds(snapshot, now);
+  const credits = knownCredits(snapshot);
+  const receipt = running
+    ? [
+        "Sedang berjalan",
+        `${done} dari ${total} sumber selesai`,
+        `${snapshot.totals.results} hasil sejauh ini`,
+      ]
+    : [`${done} dari ${total} sumber menjawab`, `${snapshot.totals.results} hasil`];
+  if (!running && elapsed !== null) receipt.push(`${elapsed} dtk`);
+  if (credits !== null) receipt.push(`${credits} kredit`);
+  const failureCopy =
+    !running && search.errorCode
+      ? FAILED_SEARCH_COPY[search.errorCode] ?? FAILED_SEARCH_FALLBACK
+      : null;
   return (
     <div className="mt-5">
       <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -116,16 +146,22 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot }) {
           <span className="text-muted-foreground">{filterSummary(search.filters)}</span>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
-          <p className="font-mono text-[12.5px] text-muted-foreground">
-            {running
-              ? `Sedang berjalan · ${done} dari ${total} sumber selesai · ${snapshot.totals.results} hasil sejauh ini`
-              : `${done} dari ${total} sumber menjawab · ${snapshot.totals.results} hasil · ${receiptElapsed(snapshot)} dtk · 1 kredit`}
-          </p>
-          <span className="rounded-full bg-surface-subtle px-2 py-0.5 font-sans text-[11.5px] font-medium text-foreground">
-            1 kredit
-          </span>
+          <p className="font-mono text-[12.5px] text-muted-foreground">{receipt.join(" · ")}</p>
+          {credits !== null ? (
+            <span className="rounded-full bg-surface-subtle px-2 py-0.5 font-sans text-[11.5px] font-medium text-foreground">
+              {credits} kredit
+            </span>
+          ) : null}
         </div>
       </section>
+      {failureCopy ? (
+        <p
+          role="alert"
+          className="mt-2 rounded-lg border border-negatif/30 bg-negatif-bg px-3 py-2 text-[13px] text-negatif"
+        >
+          {failureCopy}
+        </p>
+      ) : null}
       {stale ? (
         <p className="mt-2 text-[12px] text-muted-foreground" role="status">
           Koneksi terputus. Menampilkan hasil terakhir.
@@ -133,7 +169,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot }) {
       ) : null}
       {running ? (
         <div className="mt-5">
-          <ProgressPanel snapshot={snapshot} />
+          <ProgressPanel snapshot={snapshot} now={now} />
         </div>
       ) : null}
       {snapshot.results.length > 0 ? (
@@ -142,6 +178,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot }) {
             results={snapshot.results}
             commentsByResult={commentsByResult(snapshot)}
             sortMode={search.filters.sort}
+            now={now}
           />
         </div>
       ) : null}

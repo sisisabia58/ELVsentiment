@@ -55,12 +55,20 @@ function ResultCard(props: {
     <article className="border-b border-border pb-4 last:border-b-0 last:pb-0">
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
-          <h3 className="text-[14.5px] font-semibold leading-6 text-foreground">{heading}</h3>
+          <h3 className="line-clamp-4 break-words text-[14.5px] font-semibold leading-6 text-foreground">
+            {heading}
+          </h3>
           {result.title && result.text && result.text !== result.title ? (
-            <p className="mt-1 text-[13px] leading-5 text-muted-foreground">{result.text}</p>
+            <p className="mt-1 line-clamp-4 break-words text-[13px] leading-5 text-muted-foreground">
+              {result.text}
+            </p>
           ) : null}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
-            {handle ? <span className="font-mono text-foreground">{handle.startsWith("@") ? handle : `@${handle}`}</span> : null}
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
+            {handle ? (
+              <span className="min-w-0 max-w-full break-all font-mono text-foreground">
+                {handle.startsWith("@") ? handle : `@${handle}`}
+              </span>
+            ) : null}
             <Engagement result={result} />
             <span>{result.publishedAt ? formatRelative(result.publishedAt, props.now) : "Tanggal tidak diketahui"}</span>
           </div>

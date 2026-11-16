@@ -144,6 +144,32 @@ describe("ResultsList", () => {
     expect(screen.getByTestId("thumb-placeholder").getAttribute("aria-hidden")).toBe("true");
   });
 
+  it("wraps a long handle and clamps long result text at narrow widths", () => {
+    const handle = "pengguna_tanpa_spasi_" + "x".repeat(200);
+    const longText = "kata ".repeat(120);
+    render(
+      <ResultsList
+        results={[
+          result({
+            id: "r1",
+            platform: "tiktok",
+            externalId: "video-1",
+            title: longText,
+            text: longText,
+            authorHandle: handle,
+          }),
+        ]}
+        commentsByResult={{}}
+        sortMode="relevance"
+        now={new Date("2026-11-16T10:00:00Z")}
+      />,
+    );
+    const handleNode = screen.getByText(`@${handle}`);
+    expect(handleNode.className).toContain("break-all");
+    const heading = screen.getByRole("heading", { level: 3 });
+    expect(heading.className).toContain("line-clamp-4");
+  });
+
   it("shows the placeholder when a result has no thumbnail", () => {
     render(
       <ResultsList
