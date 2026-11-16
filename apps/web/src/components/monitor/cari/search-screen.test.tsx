@@ -167,6 +167,14 @@ describe("SearchDetail", () => {
     ).toBeTruthy();
   });
 
+  it("still explains a failed search whose error_code is missing", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const failed = failedSnapshot("placeholder");
+    failed.search.errorCode = null;
+    render(<SearchDetail initialSnapshot={failed} />);
+    expect(screen.getByText("Pencarian gagal. Coba lagi sebentar lagi.")).toBeTruthy();
+  });
+
   it("shows only the known result count and credits", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const done = finishedSnapshot();

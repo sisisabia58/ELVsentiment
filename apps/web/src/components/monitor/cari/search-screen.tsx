@@ -133,8 +133,8 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   if (!running && elapsed !== null) receipt.push(`${elapsed} dtk`);
   if (credits !== null) receipt.push(`${credits} kredit`);
   const failureCopy =
-    !running && search.errorCode
-      ? FAILED_SEARCH_COPY[search.errorCode] ?? FAILED_SEARCH_FALLBACK
+    !running && (search.errorCode !== null || search.status === "failed")
+      ? (search.errorCode ? FAILED_SEARCH_COPY[search.errorCode] : null) ?? FAILED_SEARCH_FALLBACK
       : null;
   return (
     <div className="mt-5">
