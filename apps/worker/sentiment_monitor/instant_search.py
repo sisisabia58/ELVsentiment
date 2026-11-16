@@ -584,3 +584,28 @@ def run_instant_search(
     ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
     _apply_ranks(conn, job, ranked)
     finish_search(conn, job, "failed")
+
+
+def run_instant_search_cycle(
+    conn: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    limits: Any,
+) -> int:
+    del limits
+    processed = 0
+    seen: set[str] = set()
+    try:
+        while processed < 2:
+            job = claim_instant_search(conn, "instant-search-worker")
+            if job is None:
+                break
+            if job.id in seen:
+                break
+            seen.add(job.id)
+            run_instant_search(conn, job, env=env, now=now)
+            processed += 1
+    finally:
+        expire_old_searches(conn, now)
+    return processed

@@ -6,6 +6,7 @@ from urllib.parse import quote
 import pytest
 
 from sentiment_monitor.backup import describe_backup
+from sentiment_monitor.instant_search import run_instant_search_cycle
 from sentiment_monitor.limits import load_limits
 from sentiment_monitor.scheduler import (
     _failure_detail,
@@ -3028,3 +3029,78 @@ def test_parser_failure_uses_actual_http_status(tmp_path):
     assert "outcome=failed" in line
     assert "http_status=200" in line
     assert "credits_charged=2" in line
+
+
+def test_search_cycle_claims_and_runs_one_queued_search(monkeypatch):
+    calls = []
+    expired = []
+
+    class SearchJob:
+        id = "search-1"
+
+    claims = iter([SearchJob(), None])
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search.claim_instant_search",
+        lambda conn, worker: next(claims),
+    )
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search.run_instant_search",
+        lambda *a, **k: calls.append(1),
+    )
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search.expire_old_searches",
+        lambda conn, now: expired.append(now) or 0,
+    )
+    processed = run_instant_search_cycle(
+        object(), env={}, now=datetime.now(timezone.utc), limits=load_limits(Path("config/limits.json"), {})
+    )
+    assert processed == 1
+    assert calls == [1]
+    assert len(expired) == 1
+
+
+def test_search_cycle_never_runs_the_same_claimed_id_twice(monkeypatch):
+    calls = []
+
+    class SearchJob:
+        id = "search-1"
+
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search.claim_instant_search",
+        lambda conn, worker: SearchJob(),
+    )
+    monkeypatch.setattr(
+        "sentiment_monitor.instant_search.run_instant_search",
+        lambda *a, **k: calls.append(k.get("job").id if "job" in k else a[1].id),
+    )
+    monkeypatch.setattr("sentiment_monitor.instant_search.expire_old_searches", lambda conn, now: 0)
+    assert run_instant_search_cycle(
+        object(), env={}, now=datetime.now(timezone.utc), limits=load_limits(Path("config/limits.json"), {})
+    ) == 1
+    assert calls == ["search-1"]
+
+
+def test_serve_logs_a_safe_instant_search_cycle_failure(tmp_path, monkeypatch):
+    world = LoopWorld(jobs=[], variants=[], cursor=None)
+    lines = []
+    monotonic, sleep, _state = _idle_clock(1)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("synthetic-key prompt body")
+
+    monkeypatch.setattr("sentiment_monitor.scheduler.run_instant_search_cycle", explode)
+    with pytest.raises(SystemExit):
+        serve(
+            world.connect,
+            sleep,
+            load_limits(Path("config/limits.json"), {}),
+            "worker-1",
+            _policy_root(tmp_path, False),
+            lambda *_args, **_kwargs: ([], None),
+            lambda *_args: ([], None),
+            log=lines.append,
+            monotonic=monotonic,
+        )
+    assert lines[0] == "instant_search_cycle_failed"
+    assert "synthetic-key" not in "\n".join(lines)
+    assert "prompt" not in "\n".join(lines)

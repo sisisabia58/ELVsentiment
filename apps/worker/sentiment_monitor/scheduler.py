@@ -12,6 +12,7 @@ import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
+from sentiment_monitor.instant_search import run_instant_search_cycle
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
 from sentiment_monitor.sources.routes import scrapecreators_request_count
@@ -1294,6 +1295,16 @@ def serve(
                 except Exception as error:
                     _log_job_finalize_failed(log, job, error)
                     fail_job("storage_failed")
+        try:
+            _call(
+                connect,
+                lambda conn: run_instant_search_cycle(
+                    conn, env=os.environ, now=datetime.now(timezone.utc), limits=limits
+                ),
+                log_error=False,
+            )
+        except Exception:
+            _safe_log(log, lambda: format_log("instant_search_cycle_failed"))
         now = monotonic()
         if last_logged is None or now - last_logged >= interval:
             _safe_log(log, lambda: format_log(f"worker heartbeat id={worker_id}"))
