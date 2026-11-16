@@ -99,17 +99,30 @@ def resolve_chain(
     return tuple(chain)
 
 
+def _comments_supported() -> tuple[ProviderId, ...]:
+    # The comments target is one global routing row, so it is valid when the
+    # provider is supported for at least one comments-capable platform.
+    return tuple(
+        dict.fromkeys(
+            provider
+            for providers in COMMENTS_CAPABILITIES.values()
+            for provider in providers
+        )
+    )
+
+
 def validate_choice(
     platform: str,
     provider: str,
     fallback_provider: str | None,
     fallback_on_failure: bool,
+    mode: ProviderMode = "keyword",
 ) -> None:
     if provider == "off":
         if fallback_on_failure:
             raise ValueError("unsupported_provider")
         return
-    supported = supported_providers(platform)
+    supported = _comments_supported() if platform == "comments" else supported_providers(platform, mode)
     if provider not in supported:
         raise ValueError("unsupported_provider")
     if fallback_on_failure and fallback_provider is None:

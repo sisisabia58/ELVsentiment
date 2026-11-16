@@ -39,6 +39,34 @@ def test_invalid_fallback_unknown_platform_and_off_rows_are_ignored_or_applied()
     assert settings["web"].provider == "off"
 
 
+def test_comments_scrapeatlas_row_loads_instead_of_falling_back():
+    rows = [
+        {
+            "platform": "comments",
+            "provider": "scrapeatlas",
+            "fallback_provider": "scrapeatlas",
+            "fallback_on_failure": True,
+        },
+    ]
+    settings = load_provider_settings(FakeConn(rows))
+    assert settings["comments"].provider == "scrapeatlas"
+    assert settings["comments"].fallback_on_failure is True
+
+
+def test_unsupported_comments_provider_row_is_still_rejected():
+    rows = [
+        {
+            "platform": "comments",
+            "provider": "scrapecreators",
+            "fallback_provider": None,
+            "fallback_on_failure": False,
+        },
+    ]
+    settings = load_provider_settings(FakeConn(rows))
+    assert settings["comments"].provider == "scrapeatlas"
+    assert settings["comments"].fallback_on_failure is False
+
+
 def test_fallback_enabled_without_provider_is_ignored():
     rows = [
         {"platform": "threads", "provider": "scrapecreators", "fallback_provider": None, "fallback_on_failure": True},

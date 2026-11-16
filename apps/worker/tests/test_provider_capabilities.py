@@ -77,6 +77,21 @@ def test_fallback_is_ignored_when_disabled_or_unsupported():
     assert resolve_chain("youtube", unsupported) == ("scrapeatlas",)
 
 
+def test_comments_target_validates_against_comments_capabilities():
+    validate_choice("comments", "scrapeatlas", None, False)
+    validate_choice("comments", "scrapeatlas", "scrapeatlas", True)
+    with pytest.raises(ValueError, match="unsupported_provider"):
+        validate_choice("comments", "scrapecreators", None, False)
+    with pytest.raises(ValueError, match="unsupported_provider"):
+        validate_choice("comments", "official_x", None, False)
+    with pytest.raises(ValueError, match="unsupported_provider"):
+        validate_choice("comments", "scrapeatlas", "scrapecreators", True)
+    # Keyword targets keep their own matrix.
+    with pytest.raises(ValueError, match="unsupported_provider"):
+        validate_choice("instagram", "scrapeatlas", None, False)
+    validate_choice("instagram", "scrapecreators", None, False)
+
+
 def test_comments_mode_and_off_platforms():
     assert supported_providers("threads", "comments") == ("scrapeatlas",)
     assert supported_providers("youtube", "comments") == ("scrapeatlas",)
