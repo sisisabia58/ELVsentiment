@@ -6,6 +6,7 @@ plain RowListConnection used by the older tests.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 import uuid
 
 from sentiment_monitor import instant_search
@@ -693,3 +694,107 @@ def test_one_failing_row_insert_keeps_its_sibling_posts(prod_db, monkeypatch):
     assert view["counts"].get("youtube") == 2, view
     assert source["safe_detail"] in instant_search.SAFE_DETAILS, view
     assert source["safe_detail"] not in ("storage", "other"), view
+
+
+def _poll_once(prod_db, fetcher, *, deadline_seconds=instant_search.SEARCH_DEADLINE_SECONDS, max_workers=8):
+    from concurrent.futures import ThreadPoolExecutor
+
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    in_flight: set[Any] = set()
+    instant_search.run_instant_search_poll(
+        prod_db.connect,
+        env={},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        submit=executor.submit,
+        in_flight=in_flight,
+        settings=dict(DEFAULT_SETTINGS),
+        fetcher=fetcher,
+        deadline_seconds=deadline_seconds,
+    )
+    for future in list(in_flight):
+        future.result()
+    executor.shutdown(wait=False, cancel_futures=True)
+
+
+def test_seven_platform_routes_run_in_one_wave(prod_db):
+    import time
+
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
+    fetcher, calls = _seven_platform_fetch(delay=0.4)
+
+    started = time.monotonic()
+    _poll_once(prod_db, fetcher)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.7, elapsed
+    assert sorted(calls) == sorted(
+        ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"]
+    )
+    view = prod_db.view(search_id)
+    assert view["search"]["status"] == "succeeded", view
+    assert view["ledger"] == 7, view
+    assert view["counts"] == {
+        "threads": 3,
+        "tiktok": 3,
+        "instagram": 3,
+        "youtube": 3,
+        "reddit": 3,
+        "facebook": 3,
+        "linkedin": 3,
+    }, view
+
+
+def test_search_finishes_by_its_own_deadline_not_claim_plus_budget(prod_db, monkeypatch):
+    import time
+
+    monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 0.3)
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=1.2)
+    calls: list[str] = []
+
+    def slow(platform, keyword, settings, **kwargs):
+        calls.append(platform)
+        time.sleep(3)
+        return PlatformFetch(
+            platform, "scrapeatlas", [_post(platform, f"{platform}-1")], [_call(platform, "")], "answered", "ok", 5
+        )
+
+    started = time.monotonic()
+    _poll_once(prod_db, slow, deadline_seconds=40)
+    elapsed = time.monotonic() - started
+    assert len(calls) == 7
+    assert elapsed < 2.5, elapsed
+    view = prod_db.view(search_id)
+    assert view["search"]["status"] in ("partial", "failed"), view
+    assert view["search"]["error_code"] != "storage_failed", view
+    assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
+
+
+def test_hung_route_does_not_delay_finish_search(prod_db, monkeypatch):
+    import time
+
+    monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 1.0)
+    prod_db.admin.execute("delete from instant_searches")
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=0.5)
+    finished: list[float] = []
+    original_finish = instant_search.finish_search
+
+    def recording_finish(conn, job, status, **kwargs):
+        finished.append(time.monotonic())
+        return original_finish(conn, job, status, **kwargs)
+
+    def fetch(platform, keyword, settings, **kwargs):
+        time.sleep(2)
+        return _fast_fetch(platform, keyword, settings, **kwargs)
+
+    monkeypatch.setattr(instant_search, "finish_search", recording_finish)
+    started = time.monotonic()
+    _poll_once(prod_db, fetch, deadline_seconds=40)
+    elapsed = time.monotonic() - started
+    assert finished, "finish_search was never called"
+    assert finished[0] - started < 0.9, finished[0] - started
+    assert elapsed < 2.0, elapsed
+    view = prod_db.view(search_id)
+    assert view["search"]["status"] in ("partial", "failed"), view
+    assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view

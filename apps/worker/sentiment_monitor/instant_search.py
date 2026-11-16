@@ -33,8 +33,9 @@ from sentiment_monitor.providers.settings import load_provider_settings
 
 ROUTE_TIMEOUT_SECONDS = 20
 SEARCH_DEADLINE_SECONDS = 40
-MAX_CONCURRENCY = 6
-MAX_INFLIGHT = 4
+# Seven launch platforms: one search's routes must fit in a single wave.
+MAX_CONCURRENCY = 7
+MAX_INFLIGHT = 8
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
 
@@ -658,6 +659,23 @@ def _handle_result(
         )
 
 
+def _remaining_seconds(
+    job: InstantSearchJob,
+    deadline_seconds: float,
+    started: datetime,
+) -> float:
+    """Use whichever is sooner: the caller's budget or the row's deadline_at."""
+    limit = max(0.0, float(deadline_seconds))
+    value = job.deadline_at
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        remaining = (value - started).total_seconds()
+        if remaining < limit:
+            limit = remaining
+    return limit
+
+
 def run_instant_search(
     connect: Any,
     job: InstantSearchJob,
@@ -687,77 +705,98 @@ def run_instant_search(
             )
         )
 
-    executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
+    executor = ThreadPoolExecutor(max_workers=max(MAX_CONCURRENCY, len(sources)))
     futures: dict[Any, tuple[str, tuple[str, ...]]] = {}
     all_posts: list[CanonicalPost] = []
     pending: set[Any] = set()
     try:
-        for platform, chain in sources:
-            tx.run(
-                lambda conn, platform=platform, chain=chain: set_source_state(
-                    conn, job, platform, "searching", provider=chain[0], attempted_providers=chain
+        # The row's own deadline_at is the budget, not a fresh 40 s from claim
+        # time: a search claimed late must still finish by its promised time.
+        remaining = _remaining_seconds(job, deadline_seconds, datetime.now(timezone.utc))
+        if remaining <= 0:
+            for platform, chain in sources:
+                tx.run(
+                    lambda conn, platform=platform, chain=chain: set_source_state(
+                        conn,
+                        job,
+                        platform,
+                        "unavailable",
+                        provider=chain[0],
+                        attempted_providers=chain,
+                        safe_detail="deadline",
+                    )
                 )
-            )
-            future = executor.submit(
-                _fetch_one,
-                fetcher,
-                platform,
-                Keyword(job.query, job.intent),
-                settings,
-                env=env,
-                collected_at=collected_at,
-                date_window_days=date_window_days,
-            )
-            futures[future] = (platform, chain)
-        pending = set(futures)
-        deadline = clock() + deadline_seconds
-        while pending:
-            remaining = deadline - clock()
-            if remaining <= 0:
-                break
-            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
-            if not done:
-                break
-            for future in done:
-                platform, chain = futures[future]
-                try:
-                    result = future.result()
-                except Exception:
-                    tx.run(lambda conn, platform=platform, chain=chain: _failed_state(conn, job, platform, chain))
-                    continue
-                try:
-                    _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
-                except Exception:
-                    # Belt and braces: _handle_result isolates itself, but one
-                    # platform must never abort the remaining done futures.
-                    _mark_source_failed(tx, job, platform, chain)
-        for future in pending:
-            platform, chain = futures[future]
-            future.cancel()
-            tx.run(
-                lambda conn, platform=platform, chain=chain: set_source_state(
-                    conn,
-                    job,
+        else:
+            for platform, chain in sources:
+                tx.run(
+                    lambda conn, platform=platform, chain=chain: set_source_state(
+                        conn, job, platform, "searching", provider=chain[0], attempted_providers=chain
+                    )
+                )
+                future = executor.submit(
+                    _fetch_one,
+                    fetcher,
                     platform,
-                    "unavailable",
-                    provider=chain[0],
-                    attempted_providers=chain,
-                    safe_detail="deadline",
+                    Keyword(job.query, job.intent),
+                    settings,
+                    env=env,
+                    collected_at=collected_at,
+                    date_window_days=date_window_days,
                 )
-            )
+                futures[future] = (platform, chain)
+            pending = set(futures)
+            deadline = clock() + remaining
+            while pending:
+                left = deadline - clock()
+                if left <= 0:
+                    break
+                done, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
+                if not done:
+                    break
+                for future in done:
+                    platform, chain = futures[future]
+                    try:
+                        result = future.result()
+                    except Exception:
+                        tx.run(lambda conn, platform=platform, chain=chain: _failed_state(conn, job, platform, chain))
+                        continue
+                    try:
+                        _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
+                    except Exception:
+                        # Belt and braces: _handle_result isolates itself, but one
+                        # platform must never abort the remaining done futures.
+                        _mark_source_failed(tx, job, platform, chain)
+            for future in pending:
+                platform, chain = futures[future]
+                future.cancel()
+                tx.run(
+                    lambda conn, platform=platform, chain=chain: set_source_state(
+                        conn,
+                        job,
+                        platform,
+                        "unavailable",
+                        provider=chain[0],
+                        attempted_providers=chain,
+                        safe_detail="deadline",
+                    )
+                )
+        # Finish first: a straggler route must not hold the search in
+        # 'searching' past its deadline while we join its thread.
+        ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
+        tx.run(lambda conn: _apply_ranks(conn, job, ranked))
+        tx.run(lambda conn: finish_search(conn, job, "failed"))
     finally:
         # cancel() cannot stop a task that already started. Wait only for the
         # per-route bound, then stop waiting entirely: late results are
         # discarded and must not hold the worker thread hostage.
         for future in pending:
             future.cancel()
+        still_running: set[Any] = set()
         if pending:
-            wait(pending, timeout=ROUTE_TIMEOUT_SECONDS)
-        executor.shutdown(wait=False, cancel_futures=True)
-
-    ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
-    tx.run(lambda conn: _apply_ranks(conn, job, ranked))
-    tx.run(lambda conn: finish_search(conn, job, "failed"))
+            _, still_running = wait(pending, timeout=ROUTE_TIMEOUT_SECONDS)
+        # Join the pool only when every straggler has already finished. A route
+        # that is still hung must not hold shutdown (or the worker) hostage.
+        executor.shutdown(wait=not still_running, cancel_futures=True)
 
 
 FAIL_DEADLINE_SQL = """
