@@ -1,0 +1,64 @@
+{
+  "success": true,
+  "status": "partial",
+  "coverage": {
+    "source": "public_web",
+    "complete": false,
+    "warnings": [
+      "single_window"
+    ],
+    "order": "newest_first"
+  },
+  "posts": [
+    {
+      "pk": "4031016795939312063",
+      "code": "DfxDGstmJG_",
+      "caption": {
+        "text": "Barayam mencong udah paling de best se-ciledug.. boleh muter² nyoba aybaput.. ttp juara nya BARAYAM MENCONG kaaa 🤤🤤"
+      },
+      "user": {
+        "username": "antylutchu",
+        "full_name": "Prasetya Purwanti Putri"
+      },
+      "taken_at": 1794754670,
+      "like_count": 0,
+      "text_post_app_info": {
+        "direct_reply_count": 0,
+        "repost_count": 0,
+        "quote_count": 0
+      },
+      "image_versions2": {
+        "candidates": [
+          {
+            "url": "https://example.invalid/threads/0.jpg"
+          }
+        ]
+      }
+    },
+    {
+      "pk": "4030997317760006322",
+      "code": "Dfw-rQPoziy",
+      "caption": {
+        "text": "Aku open jastip oleh² jogja ya. Ready rabu siang. Bisa kirim sekalian ayam bawang putih barayam pusat. Yg berminat dm ya kak"
+      },
+      "user": {
+        "username": "fentiar93",
+        "full_name": "Fenti Ariyanti"
+      },
+      "taken_at": 1794752348,
+      "like_count": 0,
+      "text_post_app_info": {
+        "direct_reply_count": 0,
+        "repost_count": 0,
+        "quote_count": 0
+      },
+      "image_versions2": {
+        "candidates": [
+          {
+            "url": "https://example.invalid/threads/1.jpg"
+          }
+        ]
+      }
+    }
+  ]
+}

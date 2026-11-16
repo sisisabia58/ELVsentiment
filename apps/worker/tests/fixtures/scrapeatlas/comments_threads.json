@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "complete": true,
+    "warnings": [],
+    "order": "ranked"
+  },
+  "comments": [
+    {
+      "pk": "4030612816976767305",
+      "text": "Anter cipondoh mau gak ka",
+      "user": {
+        "username": "vivuyy14"
+      },
+      "taken_at": 1794706512,
+      "like_count": 0
+    },
+    {
+      "pk": "4030622084912742637",
+      "text": "Halo kak. Pengiriman via gosend. Aku dm ya kak",
+      "user": {
+        "username": "fentiar93"
+      },
+      "taken_at": 1794707616,
+      "like_count": 0
+    }
+  ]
+}

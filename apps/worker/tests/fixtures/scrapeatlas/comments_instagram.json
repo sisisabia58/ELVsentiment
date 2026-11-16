@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "complete": true,
+    "warnings": [],
+    "order": "ranked"
+  },
+  "comments": [
+    {
+      "id": "18118177721120596",
+      "text": "ditunggu di margo ya 😔",
+      "user": {
+        "username": "naatashaa8"
+      },
+      "created_at": "2026-11-15T06:46:25.000Z",
+      "comment_like_count": 0,
+      "child_comment_count": null
+    },
+    {
+      "id": "17894208165616343",
+      "text": "omg finallyy",
+      "user": {
+        "username": "cocodisty"
+      },
+      "created_at": "2026-11-15T06:02:39.000Z",
+      "comment_like_count": 0,
+      "child_comment_count": null
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "source": "public_web",
+    "complete": true,
+    "warnings": [],
+    "order": "ranked"
+  },
+  "posts": [
+    {
+      "id": "34557795923834391",
+      "text": "हार्दिक बधाई तथा सफल कार्यकालको शुभकामना, नवयुवा पुस्ताका प्रतिनिधि इलाम क्षेत्र नं. १/2 मेरो गृह जिल्ला इलामका दुबै युवा नेताहरूलाई हार्दिक बधाई शुभ कामना.आखिर परिवर्तन देशले खोजेको नै रै छ भन्ने प्रमाणित भयो.नोट म स्वतन्त्र कलाकार हु है 🙏",
+      "url": "https://www.facebook.com/aimkbaral/posts/pfbid08pYiLVxQ4sG4w5vDZ5ryRsCRWKyfZ99QNKHtuVYdztqQJ6SoqNyX1YZLEyezAxdrl",
+      "author": {
+        "name": "Yam Baral"
+      },
+      "publishTime": 1773072560,
+      "reactionCount": 56,
+      "commentCount": 7,
+      "videoViewCount": null,
+      "images": [
+        {
+          "url": "https://example.invalid/facebook/0.jpg"
+        }
+      ],
+      "mediaAttachments": [],
+      "topComments": []
+    },
+    {
+      "id": "998744335993302",
+      "text": "El Gobierno ejecutará 110 intervenciones, de las cuales 24 son proyectos de inversión y 86 actividades en beneficio de las comunidades nativas de Junín, Pasco, Huánuco, Cusco y Ayacucho en el 2026.",
+      "url": "https://www.facebook.com/diariooficialelperuano/posts/pfbid02LKpXoaVCyUzN893MiNKZkmwvAu4NgBpe1V7yQ3U7smpK5xrxztwQGizaUBVjvGbel",
+      "author": {
+        "name": "Diario El Peruano"
+      },
+      "publishTime": 1777607244,
+      "reactionCount": 6,
+      "commentCount": 0,
+      "videoViewCount": null,
+      "images": [
+        {
+          "url": "https://example.invalid/facebook/1.jpg"
+        }
+      ],
+      "mediaAttachments": [],
+      "topComments": []
+    }
+  ],
+  "cursor": null
+}

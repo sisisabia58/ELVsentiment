@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "complete": true,
+    "warnings": [],
+    "order": "ranked"
+  },
+  "comments": [
+    {
+      "id": "Y29tbWVudDoxNzExMzU3Nzc0MzUzNjYzXzIyMTEzNDk3NjYyNjIzMDc=",
+      "text": "Iya iyaaalah sebelum jual 1000 porsi ya awalnya dari 1 porsi dulu🤣",
+      "author": {
+        "name": "Dul Aglao"
+      },
+      "created_at": "2026-10-21T11:33:42.000Z",
+      "reply_count": 0,
+      "reaction_count": 3
+    },
+    {
+      "id": "Y29tbWVudDoxNzExMzU3Nzc0MzUzNjYzXzEwNzM3ODA1MzIzMTg0OTc=",
+      "text": "Potongan ayam nya kecil,\nSambel kaya sambel manta di potong kecil2x plus lobak atau bengkuang di siram minyak panas.\n\nRasa enak tp kaga istimewa banget x biasa aja masih enakan ayam pop padang sama bebek goreng bebek carok 😅",
+      "author": {
+        "name": "Omay Jaksel"
+      },
+      "created_at": "2026-10-22T23:30:11.000Z",
+      "reply_count": 0,
+      "reaction_count": 0
+    }
+  ]
+}

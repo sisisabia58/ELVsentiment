@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "source": "public_api",
+    "complete": true,
+    "warnings": [],
+    "order": "relevance"
+  },
+  "videos": [],
+  "shorts": [
+    {
+      "id": "K4ZON-evUxo",
+      "url": "https://www.youtube.com/watch?v=K4ZON-evUxo",
+      "title": "REVIEWING THE VIRAL BARAYAM... #shorts #feedshorts #barayam #foodie #fyp",
+      "thumbnail": "https://example.invalid/youtube/s0.jpg",
+      "channel": null,
+      "viewCountInt": 4800,
+      "publishedTime": null
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "source": "public_api",
+    "complete": true,
+    "warnings": [
+      "search_filters_ignored"
+    ],
+    "order": "relevance"
+  },
+  "item_list": [
+    {
+      "id": "7702423576569253140",
+      "desc": "Foodies ada yang udah coba ayam goreng bawang putih baru punya nya Ko @nexcarlos yang baru di Rawamangun ini?👀 📍Barayam @barayam.id  Jl. Wisma Jaya No.225, RT.4/RW.11, Kel. Rawamangun, Kec. Pulo Gadung, Jakarta Timur (Sebelah Ex. Apotik Sahabat Sehat) ⏰Setiap Hari, jam 10.00-22.00 WIB",
+      "createTime": 1793360245,
+      "author": {
+        "uniqueId": "rawamangunfoodies",
+        "nickname": "Rawamangun Foodies"
+      },
+      "stats": {
+        "diggCount": 1251,
+        "commentCount": 27,
+        "shareCount": 1173,
+        "playCount": 57800
+      },
+      "video": {
+        "cover": "https://example.invalid/tiktok/0.jpg"
+      }
+    },
+    {
+      "id": "7705742014972759304",
+      "desc": "Heran kenapa nex carlos sampe invest ke sini ?? 📍Barayam Tanjung Duren Jakarta Barat #ayamgoreng #ayambawangputih #kulinerjakarta #kulinertanjungduren ",
+      "createTime": 1750000000,
+      "author": {
+        "uniqueId": "ajosmakanapa",
+        "nickname": "Ajosmakanapa"
+      },
+      "stats": {
+        "diggCount": 755,
+        "commentCount": 8,
+        "shareCount": 376,
+        "playCount": 27500
+      },
+      "video": {
+        "cover": "https://example.invalid/tiktok/1.jpg"
+      }
+    }
+  ],
+  "has_more": 1,
+  "cursor": 10
+}

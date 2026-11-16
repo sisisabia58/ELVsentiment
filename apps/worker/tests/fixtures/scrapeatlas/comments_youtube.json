@@ -1,0 +1,35 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "complete": true,
+    "warnings": [],
+    "order": "ranked"
+  },
+  "comments": [
+    {
+      "id": "UgxEdK51ix-YwkqApNN4AaABAg",
+      "content": "Nunggu lebih dari 3 dekade ternyata takdirnya buat menangin TROPHY FIFA YANG ASLI. Bukan trophy tarkam mafia 😂",
+      "author": {
+        "name": "@bbonggi4554"
+      },
+      "publishedTime": "2026-11-11T16:27:42.056Z",
+      "engagement": {
+        "likes": 10,
+        "replies": 0
+      }
+    },
+    {
+      "id": "Ugx7SQYvh08qBLJl9yp4AaABAg",
+      "content": "Baru kali ini lihat presiden FIFA menonton Indonesia",
+      "author": {
+        "name": "@EdiGibran-i5r"
+      },
+      "publishedTime": "2026-10-15T16:27:42.056Z",
+      "engagement": {
+        "likes": 29,
+        "replies": 1
+      }
+    }
+  ]
+}

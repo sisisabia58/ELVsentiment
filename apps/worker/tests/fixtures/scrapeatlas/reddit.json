@@ -1,0 +1,34 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "complete": true,
+    "warnings": [],
+    "order": "relevance"
+  },
+  "posts": [
+    {
+      "id": "1p3r0uy",
+      "title": "When Kabaddi becomes a battlefield: Bison, caste and the underdog spirit",
+      "selftext": null,
+      "author": "manram_collective",
+      "permalink": "/r/SocialfFilmmakers/comments/1p3r0uy/when_kabaddi_becomes_a_battlefield_bison_caste/",
+      "created_at_iso": "2025-11-22T11:30:31.724Z",
+      "score": 76,
+      "num_comments": 25,
+      "thumbnail": "https://example.invalid/reddit/0.jpg"
+    },
+    {
+      "id": "1r9x0lc",
+      "title": "controversial post regarding barbarik/khatu shyam",
+      "selftext": null,
+      "author": null,
+      "permalink": "/r/mahabharata/comments/1r9x0lc/controversial_post_regarding_barbarikkhatu_shyam/",
+      "created_at_iso": "2026-02-20T14:37:01.042Z",
+      "score": 17,
+      "num_comments": 20,
+      "thumbnail": "https://example.invalid/reddit/1.jpg"
+    }
+  ],
+  "after": null
+}

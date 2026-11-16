@@ -1,0 +1,44 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "source": "public_api",
+    "complete": true,
+    "warnings": [],
+    "order": "relevance"
+  },
+  "videos": [
+    {
+      "id": "TC6pMy8VT0M",
+      "url": "https://www.youtube.com/watch?v=TC6pMy8VT0M",
+      "title": "SORRY NEX CARLOS! GUE CUMA JUJUR SAMA USAHA LO! - SUARA KONSUMEN UNTUK BARAYAM",
+      "thumbnail": "https://example.invalid/youtube/v1.jpg",
+      "channel": {
+        "title": "Mamank Kuliner",
+        "handle": "MamankKuliner"
+      },
+      "viewCountInt": 1313830,
+      "publishedTime": "2026-10-25T16:24:34.450Z"
+    }
+  ],
+  "shorts": [
+    {
+      "id": "K4ZON-evUxo",
+      "url": "https://www.youtube.com/watch?v=K4ZON-evUxo",
+      "title": "REVIEWING THE VIRAL BARAYAM... #shorts #feedshorts #barayam #foodie #fyp",
+      "thumbnail": "https://example.invalid/youtube/s0.jpg",
+      "channel": null,
+      "viewCountInt": 4800,
+      "publishedTime": null
+    },
+    {
+      "id": "opbSH36sYqc",
+      "url": "https://www.youtube.com/watch?v=opbSH36sYqc",
+      "title": "ayam goreng bawang putih viral Barayam",
+      "thumbnail": "https://example.invalid/youtube/s1.jpg",
+      "channel": null,
+      "viewCountInt": 1300000,
+      "publishedTime": null
+    }
+  ]
+}

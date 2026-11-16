@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "status": "success",
+  "coverage": {
+    "complete": true,
+    "warnings": [],
+    "order": "ranked"
+  },
+  "comments": [
+    {
+      "cid": "7668155931641791252",
+      "text": "tim yg ngk suka beli mkn yg viral2 apa LG yg antri2 ngk cocok d gue",
+      "user": {
+        "uniqueId": "ervinavina657"
+      },
+      "create_time": 1785381704,
+      "digg_count": 5161
+    },
+    {
+      "cid": "7668966835719308040",
+      "text": "padahal resepnya uda di share sm yg empunya resep.. 😭 36rb sekilo di iris jadi 10 lo guede2 dan uda puass",
+      "user": {
+        "uniqueId": "mamakaka999"
+      },
+      "create_time": 1785570496,
+      "digg_count": 2078
+    }
+  ]
+}
