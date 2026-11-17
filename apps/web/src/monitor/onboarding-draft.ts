@@ -216,13 +216,18 @@ export function resolveOnboardingState(input: {
         ? input.draft
         : null;
     if (prefill) {
-      return {
-        step: 1,
+      // A fresh open (no langkah) starts at step 1 with the prefilled fields.
+      // Once the wizard writes langkah, follow it. Ignoring langkah sent every
+      // Lanjut past step 2 back to step 1.
+      const next = {
+        step: parseOnboardingStep(input.langkah) ?? 1,
         brand: prefill.brand,
         keywords: prefill.keywords.length > 0 ? prefill.keywords : [prefill.brand],
         sources: workingSources(prefill.sources, input.credentials),
         schedule: prefill.schedule,
       };
+      const allowed = allowedOnboardingStep({ ...next, credentials: input.credentials });
+      return { ...next, step: Math.min(next.step, allowed) };
     }
     const step = Math.min(parseOnboardingStep(input.langkah) ?? 1, allowedOnboardingStep({ ...blank, credentials: input.credentials }));
     return { ...blank, step };
