@@ -13,7 +13,7 @@ import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
-from sentiment_monitor.instant_search import MAX_INFLIGHT, run_instant_search_poll
+from sentiment_monitor.instant_search import MAX_INFLIGHT, run_instant_search_poll, run_question_cycle
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
 from sentiment_monitor.sources.routes import scrapecreators_request_count
@@ -963,6 +963,15 @@ def start_instant_search_worker(
                     )
                 except Exception:
                     _safe_log(log, lambda: format_log("instant_search_cycle_failed"))
+                try:
+                    def ask(conn):
+                        return run_question_cycle(
+                            conn, env=os.environ, now=datetime.now(timezone.utc)
+                        )
+
+                    _call(connect, ask, log_error=False)
+                except Exception:
+                    _safe_log(log, lambda: format_log("instant_question_cycle_failed"))
         finally:
             for future in in_flight:
                 future.cancel()

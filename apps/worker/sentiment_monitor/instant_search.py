@@ -16,10 +16,14 @@ import uuid
 
 from sentiment_monitor.gemini import GeminiError, create_gemini
 from sentiment_monitor.instant_ai import (
+    QUESTION_MAX_OUTPUT_TOKENS,
+    QUESTION_SCHEMA,
     SUMMARY_MAX_OUTPUT_TOKENS,
     SUMMARY_SCHEMA,
     SummaryInput,
+    build_question_prompt,
     build_summary_prompt,
+    validate_answer,
     validate_summary,
 )
 from sentiment_monitor.intent import Keyword
@@ -1526,6 +1530,160 @@ def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, An
             )
         except Exception:
             pass
+
+
+_QUESTION_DETAILS = SAFE_DETAILS | frozenset({"empty_answer", "off", "error"})
+
+
+def _question_detail(value: str) -> str:
+    if value in _QUESTION_DETAILS or _HTTP_STATUS_PATTERN.fullmatch(value):
+        return value
+    return "error"
+
+
+def _fail_question(conn: Any, question_id: str, detail: str, now: datetime) -> None:
+    conn.execute(
+        "update instant_search_questions set status = 'failed', answer = null, "
+        "safe_detail = %s, answered_at = %s where id = %s",
+        (_question_detail(detail), now, question_id),
+    )
+
+
+def _load_question_job(conn: Any, search_id: str, customer_id: str) -> InstantSearchJob | None:
+    rows = conn.execute(
+        "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
+        "language_filter, deadline_at from instant_searches where id = %s and customer_id = %s",
+        (search_id, customer_id),
+    ) or []
+    if not rows:
+        return None
+    return _job_from_row(rows[0])
+
+
+def _answer_question(
+    conn: Any,
+    row: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    llm: Any,
+) -> str:
+    question_id = str(_row_value(row, "id", 0))
+    search_id = str(_row_value(row, "search_id", 1))
+    customer_id = str(_row_value(row, "customer_id", 2))
+    question = _row_value(row, "question", 3)
+    try:
+        provider = _ai_provider(env)
+        if provider == "off":
+            _fail_question(conn, question_id, "off", now)
+            return "failed"
+        job = _load_question_job(conn, search_id, customer_id)
+        if job is None:
+            _fail_question(conn, question_id, "not_found", now)
+            return "failed"
+        prepared = _load_summary_input(conn, job)
+        if prepared is None:
+            data, refs = SummaryInput(job.id, job.query, [], []), {}
+        else:
+            data, refs, _platforms = prepared
+        client = llm if llm is not None else create_gemini(_client_env(env, provider), conn)
+        system, user = build_question_prompt(data, str(question or ""))
+        generated = client.generate_json(
+            system=system,
+            user=user,
+            schema=QUESTION_SCHEMA,
+            purpose="question",
+            max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
+        )
+        answer = validate_answer(getattr(generated, "data", None), refs)
+        if not answer.answer:
+            _fail_question(conn, question_id, "empty_answer", now)
+            return "failed"
+        conn.execute(
+            """
+            update instant_search_questions
+               set status = 'done',
+                   answer = %s,
+                   citations = %s::jsonb,
+                   model = %s,
+                   cost_usd = %s,
+                   safe_detail = null,
+                   answered_at = %s
+             where id = %s
+            """,
+            (
+                answer.answer,
+                json.dumps(answer.citations),
+                str(getattr(generated, "model", None) or "unknown"),
+                float(getattr(generated, "cost_usd", 0) or 0),
+                now,
+                question_id,
+            ),
+        )
+        return "done"
+    except GeminiError as error:
+        _fail_question(conn, question_id, error.code, now)
+        return "failed"
+    except Exception:
+        _fail_question(conn, question_id, "error", now)
+        return "failed"
+
+
+def run_question_cycle(
+    conn: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    limit: int = 2,
+    llm: Any = None,
+) -> int:
+    """Answer queued questions. A failure never changes the search status."""
+    conn.execute(
+        """
+        update instant_search_questions
+           set status = 'failed', safe_detail = 'deadline', answered_at = %s
+         where status = 'running'
+           and created_at <= %s - interval '10 minutes'
+        """,
+        (now, now),
+    )
+    bounded = max(0, min(2, int(limit)))
+    if bounded == 0:
+        return 0
+    rows = conn.execute(
+        """
+        with claimed as (
+            select id
+            from instant_search_questions
+            where status = 'queued'
+            order by created_at, id
+            limit %s
+            for update skip locked
+        )
+        update instant_search_questions as question
+           set status = 'running'
+          from claimed
+         where question.id = claimed.id
+        returning question.id, question.search_id, question.customer_id, question.question
+        """,
+        (bounded,),
+    ) or []
+    done = 0
+    failed = 0
+    for row in rows:
+        outcome = _answer_question(conn, row, env=env, now=now, llm=llm)
+        if outcome == "done":
+            done += 1
+        else:
+            failed += 1
+    if rows:
+        _info(
+            "questions",
+            questions_claimed=len(rows),
+            questions_done=done,
+            questions_failed=failed,
+        )
+    return len(rows)
 
 
 def run_instant_search_cycle(

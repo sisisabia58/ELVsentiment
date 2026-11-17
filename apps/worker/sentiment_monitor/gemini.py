@@ -407,7 +407,25 @@ class DemoGemini:
     model = "demo"
 
     def generate_json(self, **kwargs: Any) -> GeminiResult:
-        del kwargs
+        if kwargs.get("purpose") == "question":
+            user = kwargs.get("user") if isinstance(kwargs.get("user"), str) else ""
+            citations: list[str] = []
+            for match in re.finditer(r'"(?:id)":"((?:result|comment):[^"]+)"', user):
+                ref = match.group(1)
+                if ref not in citations:
+                    citations.append(ref)
+                if len(citations) == 3:
+                    break
+            return GeminiResult(
+                {
+                    "answer": "Dari hasil yang tersimpan, ini yang paling sering disebut.",
+                    "citations": citations,
+                },
+                "demo",
+                0,
+                0,
+                0.0,
+            )
         return GeminiResult(json.loads(json.dumps(_DEMO_SUMMARY)), "demo", 0, 0, 0.0)
 
 
