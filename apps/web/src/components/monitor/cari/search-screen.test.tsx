@@ -185,6 +185,7 @@ describe("SearchDetail", () => {
     expect(screen.getByText(/7 dari 8 sumber menjawab/)).toBeTruthy();
     expect(screen.getByText("Hasil")).toBeTruthy();
     expect(screen.getByText(/antrean barayam/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pantau sebagai proyek" })).toBeTruthy();
   });
 
   it("never names a raw provider to the end user", () => {

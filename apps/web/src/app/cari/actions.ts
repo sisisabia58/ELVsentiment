@@ -7,6 +7,8 @@ import type { SearchLimits } from "@/monitor/search/limits";
 import { createInstantSearch } from "@/monitor/search/mutations";
 import { cariSekarangEnabled, type Env } from "@/monitor/search/feature";
 import { isUuid } from "@/monitor/search/load";
+import { buildOnboardingFields } from "@/monitor/search/present";
+import { ALL_SOURCES, type OnboardingDraftFields } from "@/monitor/onboarding-draft";
 
 export type StartSearchResult =
   | { ok: true; searchId: string }
@@ -111,5 +113,44 @@ export async function retryQuestionForCustomer(input: {
     );
     if (!updated.rows[0]) return { ok: false, error: "not_found" };
     return { ok: true, questionId: updated.rows[0].id };
+  });
+}
+
+export type MonitorProjectResult =
+  | { ok: true; href: "/onboarding?baru=1"; fields: OnboardingDraftFields }
+  | { ok: false; error: string };
+
+export async function monitorAsProjectForCustomer(input: {
+  db: Queryable;
+  customerId: string;
+  searchId: string;
+  env?: Env;
+}): Promise<MonitorProjectResult> {
+  if (!cariSekarangEnabled(input.env ?? process.env)) {
+    return { ok: false, error: "disabled" };
+  }
+  if (!isUuid(input.searchId)) return { ok: false, error: "not_found" };
+  return withCustomer(input.db, input.customerId, async () => {
+    const owned = await input.db.query<{ query_text: string }>(
+      "select query_text from instant_searches where id = $1 and customer_id = $2",
+      [input.searchId, input.customerId],
+    );
+    const query = owned.rows[0]?.query_text;
+    if (!query) return { ok: false, error: "not_found" };
+    const sourceRows = await input.db.query<{ platform: string }>(
+      `select platform from instant_search_sources
+        where search_id = $1 and customer_id = $2 and state = 'answered'
+        order by platform`,
+      [input.searchId, input.customerId],
+    );
+    const fields = buildOnboardingFields(
+      { query, platforms: sourceRows.rows.map((row) => row.platform) },
+      [...ALL_SOURCES],
+    );
+    return {
+      ok: true,
+      href: "/onboarding?baru=1",
+      fields: { projectId: null, step: 1, ...fields },
+    };
   });
 }

@@ -208,6 +208,22 @@ export function resolveOnboardingState(input: {
     schedule: { mode: "off" as const, intervalHours: 6 },
   };
   if (input.fresh) {
+    const prefill =
+      input.draft &&
+      input.draft.customerId === input.customerId &&
+      input.draft.projectId === null &&
+      input.draft.brand.trim().length > 0
+        ? input.draft
+        : null;
+    if (prefill) {
+      return {
+        step: 1,
+        brand: prefill.brand,
+        keywords: prefill.keywords.length > 0 ? prefill.keywords : [prefill.brand],
+        sources: workingSources(prefill.sources, input.credentials),
+        schedule: prefill.schedule,
+      };
+    }
     const step = Math.min(parseOnboardingStep(input.langkah) ?? 1, allowedOnboardingStep({ ...blank, credentials: input.credentials }));
     return { ...blank, step };
   }

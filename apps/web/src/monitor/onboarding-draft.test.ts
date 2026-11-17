@@ -117,6 +117,37 @@ describe("onboarding draft", () => {
     ).toMatchObject({ step: 1, brand: "", keywords: [], sources: ["threads"] });
   });
 
+  it("keeps a new-project draft when a fresh wizard opens", () => {
+    const saved = draft({
+      projectId: null,
+      step: 2,
+      brand: "barayam",
+      keywords: ["barayam"],
+      sources: ["threads", "tiktok"],
+    });
+    expect(
+      resolveOnboardingState({
+        fresh: true,
+        langkah: null,
+        draft: saved,
+        customerId: customerA,
+        existing: {
+          projectId: "mine",
+          brandName: "lama",
+          keywords: ["lama"],
+          sources: ["x"],
+          schedule,
+        },
+        credentials: { x: true, threads: true, tiktok: true },
+      }),
+    ).toMatchObject({
+      step: 1,
+      brand: "barayam",
+      keywords: ["barayam"],
+      sources: ["threads", "tiktok"],
+    });
+  });
+
   it("hides a draft with no project from a different signed-in customer", () => {
     const saved = draft({ projectId: null, brand: "rahasia merek", keywords: ["rahasia"] });
     expect(

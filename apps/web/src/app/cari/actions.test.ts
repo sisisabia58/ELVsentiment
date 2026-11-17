@@ -2,7 +2,12 @@ import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { applyMigration, pgliteQueryable, type Queryable } from "@/db/migrate";
 import { DEFAULT_FILTERS } from "@/monitor/search/filters";
-import { askQuestionForCustomer, retryQuestionForCustomer, startSearchForCustomer } from "./actions";
+import {
+  askQuestionForCustomer,
+  monitorAsProjectForCustomer,
+  retryQuestionForCustomer,
+  startSearchForCustomer,
+} from "./actions";
 
 const CUSTOMER = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-11-16T10:00:00Z");
@@ -288,5 +293,47 @@ describe("askQuestionForCustomer", () => {
       "select status, user_credits, safe_detail, answer from instant_search_questions",
     );
     expect(rows.rows).toEqual([{ status: "queued", user_credits: 1, safe_detail: null, answer: null }]);
+  });
+});
+
+describe("monitorAsProjectForCustomer", () => {
+  it("returns the onboarding prefill for the owner and refuses another customer", async () => {
+    const db = await seededDb();
+    const started = await startSearchForCustomer({
+      db,
+      customerId: CUSTOMER,
+      query: "barayam",
+      filters: DEFAULT_FILTERS,
+      env: { CARI_SEKARANG_ENABLED: "1" },
+      limits,
+      now: NOW,
+    });
+    if (!started.ok) throw new Error("search");
+    await db.query(
+      "update instant_search_sources set state = 'answered' where search_id = $1 and platform in ('threads', 'youtube')",
+      [started.searchId],
+    );
+    const ready = await monitorAsProjectForCustomer({
+      db,
+      customerId: CUSTOMER,
+      searchId: started.searchId,
+      env: { CARI_SEKARANG_ENABLED: "1" },
+    });
+    expect(ready.ok).toBe(true);
+    if (ready.ok) {
+      expect(ready.href).toBe("/onboarding?baru=1");
+      expect(ready.fields.brand).toBe("barayam");
+      expect(ready.fields.keywords).toEqual(["barayam"]);
+      expect(ready.fields.sources).toEqual(["threads"]);
+      expect(ready.fields.schedule).toEqual({ mode: "off", intervalHours: 6 });
+    }
+    expect(
+      await monitorAsProjectForCustomer({
+        db,
+        customerId: "22222222-2222-4222-8222-222222222222",
+        searchId: started.searchId,
+        env: { CARI_SEKARANG_ENABLED: "1" },
+      }),
+    ).toEqual({ ok: false, error: "not_found" });
   });
 });

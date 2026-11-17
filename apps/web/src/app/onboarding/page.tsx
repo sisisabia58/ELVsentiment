@@ -26,7 +26,7 @@ async function OnboardingGate({ fresh, langkah, draftRaw }: { fresh: boolean; la
   const initial = resolveOnboardingState({
     fresh,
     langkah,
-    draft: fresh ? null : parseOnboardingDraft(draftRaw),
+    draft: parseOnboardingDraft(draftRaw),
     customerId,
     existing,
     credentials,
