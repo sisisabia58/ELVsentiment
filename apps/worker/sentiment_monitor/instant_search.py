@@ -369,6 +369,8 @@ def insert_comments(
     inserted = 0
     for item in comments:
         item = sanitize_comment(item)
+        if not str(item.text or "").strip():
+            continue
         cursor = conn.execute(
             """
             insert into instant_search_comments

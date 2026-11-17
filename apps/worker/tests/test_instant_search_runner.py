@@ -248,6 +248,8 @@ def test_insert_posts_and_comments_drop_collisions_and_keep_canonical_fields(db)
         raw_ref="fixture:c-1",
     )
     assert insert_comments(db, job, result_id, [comment, comment]) == 1
+    blank = replace(comment, external_id="c-blank", text="  ", raw_ref="fixture:c-blank")
+    assert insert_comments(db, job, result_id, [blank]) == 0
 
 
 def test_expire_old_searches_deletes_expired_and_cascades(db):

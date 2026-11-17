@@ -127,6 +127,37 @@ describe("ResultsList", () => {
     expect(screen.getByText("Paling cocok")).toBeTruthy();
   });
 
+  it("does not present a LinkedIn reply count as collected replies", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "linkedin", replies: 8 })]}
+        commentsByResult={{}}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("Balasan tidak diambil")).toBeTruthy();
+    expect(screen.queryByText("8 balasan")).toBeNull();
+    expect(screen.queryByLabelText(/contoh balasan/i)).toBeNull();
+  });
+
+  it("hides a reply row whose text is empty", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
+        commentsByResult={{
+          r1: [
+            { ...comments.r1[0], platform: "facebook", text: "enak" },
+            { ...comments.r1[1], id: "c-empty", platform: "facebook", text: "   " },
+          ],
+        }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("enak")).toBeTruthy();
+    expect(screen.getByText("3 balasan")).toBeTruthy();
+    expect(screen.getAllByText(/▲/)).toHaveLength(1);
+  });
+
   it("replaces a broken thumbnail with an aria-hidden platform placeholder", () => {
     render(
       <ResultsList

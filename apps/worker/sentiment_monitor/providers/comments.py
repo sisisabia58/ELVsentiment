@@ -201,7 +201,15 @@ def fetch_comments(
     latency_ms = int((time.monotonic() - started) * 1000)
     raw_comments = payload.get("comments")
     items = raw_comments if isinstance(raw_comments, list) else []
-    comments = [_comment(platform, item) for item in items if isinstance(item, dict)]
+    comments = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        comment = _comment(platform, item)
+        # A sticker or photo reply can arrive with no text. Skip it so the
+        # card does not render an empty row.
+        if comment.text.strip():
+            comments.append(comment)
     status = payload.get("status")
     call = RouteCall(
         provider="scrapeatlas",

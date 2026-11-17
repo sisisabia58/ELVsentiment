@@ -6,6 +6,7 @@ import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
 import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
 import type { SnapshotComment, SnapshotResult } from "@/monitor/search/load";
+import { supportedProviders } from "@/monitor/search/platforms";
 import { PLATFORM_ORDER, PlatformTile, platformName } from "./platform-tile";
 
 const compact = new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 });
@@ -14,8 +15,18 @@ export function formatCompact(value: number): string {
   return compact.format(value).replace(/\u00a0/g, " ");
 }
 
+function commentsCollected(platform: string): boolean {
+  return supportedProviders(platform, "comments").length > 0;
+}
+
+function visibleComments(comments: SnapshotComment[]): SnapshotComment[] {
+  return comments.filter((comment) => comment.text.trim().length > 0).slice(0, 3);
+}
+
 function Engagement(props: { result: SnapshotResult }) {
   const result = props.result;
+  const replies = result.replies;
+  const collected = commentsCollected(result.platform);
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
       {result.views != null ? (
@@ -27,8 +38,11 @@ function Engagement(props: { result: SnapshotResult }) {
           <span>{formatCompact(result.likes)}</span>
         </span>
       ) : null}
-      {result.replies != null ? (
-        <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">{formatCompact(result.replies)} balasan</span>
+      {collected && replies != null ? (
+        <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">{formatCompact(replies)} balasan</span>
+      ) : null}
+      {!collected && replies != null && replies > 0 ? (
+        <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">Balasan tidak diambil</span>
       ) : null}
       {result.shares != null ? (
         <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">{formatCompact(result.shares)} bagikan</span>
@@ -44,7 +58,7 @@ function ResultCard(props: {
 }) {
   const result = props.result;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const comments = props.comments.slice(0, 3);
+  const comments = visibleComments(props.comments);
   function checkThumbnail(image: HTMLImageElement | null) {
     if (image?.complete && image.naturalWidth === 0) setThumbnailFailed(true);
   }
