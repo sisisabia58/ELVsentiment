@@ -576,6 +576,74 @@ def test_runner_fetches_comments_for_at_most_three_posts_per_platform(db):
     assert ledger == 18
 
 
+def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    calls: list[str] = []
+    viral = replace(
+        post("threads", "viral"),
+        text="minuman lain",
+        views=1_000_000,
+        replies=50,
+    )
+    quiet = replace(post("threads", "quiet"), text="barayam sepi", views=1, replies=0)
+    shown = replace(post("threads", "shown"), text="barayam enak", views=2, replies=4)
+    unknown = replace(post("threads", "unknown"), text="barayam juga", views=0, replies=None)
+
+    def fetcher(platform, *args, **kwargs):
+        del args, kwargs
+        if platform != "threads":
+            return PlatformFetch(platform, "scrapeatlas", [], [], "unavailable", "unavailable", 10)
+        return PlatformFetch(
+            platform, "scrapeatlas", [viral, quiet, shown, unknown], [], "answered", "ok", 10
+        )
+
+    def comment_fetch(platform, item, **kwargs):
+        del platform, kwargs
+        calls.append(item.external_id)
+        return CommentFetch(
+            post_id=item.external_id,
+            comments=[canonical_comment(item.external_id)],
+            call=RouteCall("scrapeatlas", "threads", "comments", "success", 200, 1, 40, 5, "ok"),
+            state="answered",
+            safe_detail="ok",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db,
+        job,
+        env={},
+        now=datetime.now(timezone.utc),
+        settings={
+            "threads": DEFAULT_SETTINGS["threads"],
+            "comments": DEFAULT_SETTINGS["comments"],
+        },
+        fetcher=fetcher,
+        comment_fetcher=comment_fetch,
+    )
+    assert calls == ["shown", "unknown", "viral"]
+    attached = db.execute(
+        """
+        select r.external_id
+        from instant_search_comments c
+        join instant_search_results r on r.id = c.result_id
+        where c.search_id = %s
+        order by r.rank
+        """,
+        (job.id,),
+    )
+    assert [row["external_id"] for row in attached] == ["shown", "unknown", "viral"]
+    ranks = db.execute(
+        """
+        select external_id, rank from instant_search_results
+        where search_id = %s order by rank
+        """,
+        (job.id,),
+    )
+    assert [row["external_id"] for row in ranks] == ["shown", "quiet", "unknown", "viral"]
+
+
 def test_comment_failure_keeps_the_posts_and_the_search_status(db):
     def comment_fetch(platform, post, **kwargs):
         del kwargs

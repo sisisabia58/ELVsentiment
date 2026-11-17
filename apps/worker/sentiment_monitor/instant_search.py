@@ -1014,11 +1014,13 @@ def run_instant_search(
                     skip_reasons.append("comment_budget")
                     _info(job.id, platform=platform, comments="skipped", reason="comment_budget")
                     return
-                ranked_posts = sorted(
-                    posts,
-                    key=lambda item: (item.views or 0) + 3 * (item.likes or 0) + 2 * (item.replies or 0) + 2 * (item.shares or 0),
-                    reverse=True,
-                )[:TOP_POSTS_FOR_COMMENTS]
+                # Match the order the results list shows for this sort. A post
+                # that already says it has zero replies is skipped so the next
+                # visible post can use the slot. An unknown count stays eligible.
+                visible = sort_posts(posts, job.sort_mode)
+                ranked_posts = [
+                    item for item in visible if item.replies is None or item.replies > 0
+                ][:TOP_POSTS_FOR_COMMENTS]
                 ids = tx.run(lambda conn: _comment_result_ids(conn, job, platform))
                 started = 0
                 for post in ranked_posts:
