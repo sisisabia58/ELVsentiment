@@ -7,12 +7,21 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
+import json
 import logging
 import os
 import re
 import time
 import uuid
 
+from sentiment_monitor.gemini import GeminiError, create_gemini
+from sentiment_monitor.instant_ai import (
+    SUMMARY_MAX_OUTPUT_TOKENS,
+    SUMMARY_SCHEMA,
+    SummaryInput,
+    build_summary_prompt,
+    validate_summary,
+)
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
     MAX_EXTERNAL_ID_LENGTH,
@@ -928,6 +937,7 @@ def run_instant_search(
     comment_fetcher: Any = None,
     clock: Any = time.monotonic,
     deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
+    llm: Any = None,
 ) -> None:
     tx = _Transactions(connect)
     if settings is None:
@@ -1179,6 +1189,7 @@ def run_instant_search(
             comment_detail=comment_detail,
         )
         tx.run(lambda conn: finish_search(conn, job, "failed"))
+        _summarize_collected(tx, job, env=env, now=now, llm=llm)
     finally:
         # cancel() cannot stop a task that already started. Wait only for the
         # per-route bound, then stop waiting entirely: late results are
@@ -1212,6 +1223,261 @@ update instant_search_sources
 """
 
 
+def _ai_provider(env: Mapping[str, Any]) -> str:
+    raw = env.get("CARI_AI_PROVIDER") if isinstance(env, Mapping) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raw = os.environ.get("CARI_AI_PROVIDER", "demo")
+    if not isinstance(raw, str) or not raw.strip():
+        return "demo"
+    return raw.strip().lower()
+
+
+def _set_summary_status(conn: Any, job: InstantSearchJob, status: str, stance: str | None = None) -> None:
+    _set_customer(conn, job.customer_id)
+    if stance is None:
+        conn.execute(
+            "update instant_searches set summary_status = %s where id = %s and customer_id = %s",
+            (status, job.id, job.customer_id),
+        )
+        return
+    conn.execute(
+        "update instant_searches set summary_status = %s, overall_stance = %s "
+        "where id = %s and customer_id = %s",
+        (status, stance, job.id, job.customer_id),
+    )
+
+
+def _load_summary_input(conn: Any, job: InstantSearchJob) -> tuple[SummaryInput, dict[str, str], set[str]] | None:
+    rows = conn.execute(
+        """
+        select id, platform, author_name, author_handle, text, title, published_at
+        from instant_search_results
+        where search_id = %s and customer_id = %s
+        order by rank asc nulls last, collected_at desc
+        limit 50
+        """,
+        (job.id, job.customer_id),
+    ) or []
+    if not rows:
+        return None
+    result_ids = {str(_row_value(row, "id", 0)) for row in rows}
+    comments = [
+        row
+        for row in (
+            conn.execute(
+                """
+                select id, result_id, author_name, author_handle, text
+                from instant_search_comments
+                where search_id = %s and customer_id = %s
+                """,
+                (job.id, job.customer_id),
+            )
+            or []
+        )
+        if str(_row_value(row, "result_id", 1)) in result_ids
+    ]
+    refs: dict[str, str] = {}
+    platforms: set[str] = set()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        result_id = str(_row_value(row, "id", 0))
+        platform = str(_row_value(row, "platform", 1) or "")
+        text = str(_row_value(row, "text", 4) or "")
+        title = _row_value(row, "title", 5)
+        stored = text if not title else f"{title}\n{text}"
+        refs[f"result:{result_id}"] = stored
+        platforms.add(platform)
+        published = _row_value(row, "published_at", 6)
+        results.append(
+            {
+                "id": f"result:{result_id}",
+                "result_id": result_id,
+                "platform": platform,
+                "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2) or "",
+                "published_at": _iso_db(published),
+                "text": text,
+                "title": title,
+            }
+        )
+    comment_rows: list[dict[str, Any]] = []
+    for row in comments:
+        comment_id = str(_row_value(row, "id", 0))
+        text = str(_row_value(row, "text", 4) or "")
+        refs[f"comment:{comment_id}"] = text
+        comment_rows.append(
+            {
+                "id": f"comment:{comment_id}",
+                "result_id": f"result:{_row_value(row, 'result_id', 1)}",
+                "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2) or "",
+                "text": text,
+            }
+        )
+    return (
+        SummaryInput(job.id, job.query, results, comment_rows),
+        refs,
+        platforms,
+    )
+
+
+def _store_summary(conn: Any, job: InstantSearchJob, output: Any, result: Any) -> None:
+    _set_customer(conn, job.customer_id)
+    conn.execute(
+        """
+        insert into instant_search_ai
+          (search_id, customer_id, overall_summary, overall_stance, platform_summaries,
+           quotes, themes, model, input_tokens, output_tokens, cost_usd)
+        values (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+        on conflict (search_id) do update
+        set overall_summary = excluded.overall_summary,
+            overall_stance = excluded.overall_stance,
+            platform_summaries = excluded.platform_summaries,
+            quotes = excluded.quotes,
+            themes = excluded.themes,
+            model = excluded.model,
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cost_usd = excluded.cost_usd
+        """,
+        (
+            job.id,
+            job.customer_id,
+            output.overall_summary,
+            output.overall_stance,
+            json.dumps(output.platforms, ensure_ascii=False),
+            json.dumps(output.quotes, ensure_ascii=False),
+            json.dumps(output.themes, ensure_ascii=False),
+            str(getattr(result, "model", None) or "unknown"),
+            int(getattr(result, "input_tokens", 0) or 0),
+            int(getattr(result, "output_tokens", 0) or 0),
+            float(getattr(result, "cost_usd", 0) or 0),
+        ),
+    )
+    _set_summary_status(conn, job, "done", output.overall_stance)
+
+
+def _client_env(env: Mapping[str, Any], provider: str) -> dict[str, Any]:
+    client_env = dict(env)
+    client_env["CARI_AI_PROVIDER"] = provider
+    for name in (
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
+        "GEMINI_MAX_RPM",
+        "GEMINI_INPUT_USD_PER_MTOK",
+        "GEMINI_OUTPUT_USD_PER_MTOK",
+    ):
+        if name not in client_env:
+            value = os.environ.get(name)
+            if value is not None:
+                client_env[name] = value
+    return client_env
+
+
+def _prepare_summary(conn: Any, job: InstantSearchJob, env: Mapping[str, Any]) -> tuple[Any, dict[str, str], set[str], dict[str, Any]] | None:
+    provider = _ai_provider(env)
+    if provider == "off":
+        _set_summary_status(conn, job, "skipped")
+        return None
+    prepared = _load_summary_input(conn, job)
+    if prepared is None:
+        _set_summary_status(conn, job, "skipped")
+        return None
+    data, refs, platforms = prepared
+    _set_summary_status(conn, job, "running")
+    return data, refs, platforms, _client_env(env, provider)
+
+
+def summarize_search(
+    conn: Any,
+    job: InstantSearchJob,
+    *,
+    llm: Any = None,
+    settings: Any = None,
+    now: datetime,
+    env: Mapping[str, Any] | None = None,
+) -> None:
+    """Write the summary. A model failure never changes the search status."""
+    del settings, now
+    try:
+        prepared = _prepare_summary(conn, job, env or {})
+    except Exception:
+        _set_summary_status(conn, job, "failed")
+        return
+    if prepared is None:
+        return
+    data, refs, platforms, client_env = prepared
+    try:
+        if llm is None:
+            llm = create_gemini(client_env)
+        system, user = build_summary_prompt(data)
+        generated = llm.generate_json(
+            system=system,
+            user=user,
+            schema=SUMMARY_SCHEMA,
+            purpose="summary",
+            max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+        output = validate_summary(generated.data, refs, platforms)
+        _store_summary(conn, job, output, generated)
+    except GeminiError:
+        _set_summary_status(conn, job, "failed")
+    except Exception:
+        _set_summary_status(conn, job, "failed")
+
+
+def _summarize_collected(
+    tx: _Transactions,
+    job: InstantSearchJob,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    llm: Any,
+) -> None:
+    """Commit 'running' before the model call. Never raise into the search runner."""
+    del now
+    try:
+        prepared = tx.run(lambda conn: _prepare_summary(conn, job, env))
+    except Exception:
+        if tx.shared is not None:
+            _rollback_quiet(tx.shared)
+        try:
+            tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+        return
+    if prepared is None:
+        return
+    data, refs, platforms, client_env = prepared
+    try:
+        client = llm if llm is not None else create_gemini(client_env, tx.connect)
+        system, user = build_summary_prompt(data)
+        generated = client.generate_json(
+            system=system,
+            user=user,
+            schema=SUMMARY_SCHEMA,
+            purpose="summary",
+            max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+        output = validate_summary(generated.data, refs, platforms)
+    except Exception:
+        try:
+            tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+        return
+    try:
+        tx.run(lambda conn: _store_summary(conn, job, output, generated))
+    except Exception:
+        if tx.shared is not None:
+            _rollback_quiet(tx.shared)
+        try:
+            tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+
+
 def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
     # A queued search past its deadline can never be claimed, and a running
     # search that missed its deadline by more than the grace window was left by
@@ -1219,6 +1485,19 @@ def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
     # UI stops polling them forever. The 60 s grace avoids racing an in-flight
     # runner that is still shutting its route threads down.
     conn.execute(FAIL_DEADLINE_SQL, (now, now, now, now))
+    # A summary left 'running' after the search already finished was abandoned
+    # by a crashed worker. Mark it failed so the page stops waiting. This does
+    # not change the search status.
+    conn.execute(
+        """
+        update instant_searches
+           set summary_status = 'failed'
+         where summary_status = 'running'
+           and finished_at is not null
+           and finished_at <= %s - interval '3 minutes'
+        """,
+        (now,),
+    )
 
 
 def _fail_unfinished_sources(conn: Any, job: InstantSearchJob) -> None:

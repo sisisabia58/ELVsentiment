@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 import threading
 import time
@@ -9,6 +10,7 @@ import pytest
 
 from sentiment_monitor import instant_search
 from sentiment_monitor.intent import Keyword
+from sentiment_monitor.gemini import GeminiError, GeminiResult, ScriptedGemini
 from sentiment_monitor.instant_search import (
     ROUTE_TIMEOUT_SECONDS,
     claim_instant_search,
@@ -21,6 +23,7 @@ from sentiment_monitor.instant_search import (
     run_instant_search_cycle,
     search_status,
     set_source_state,
+    summarize_search,
 )
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
 from sentiment_monitor.providers.comments import CommentFetch
@@ -785,6 +788,102 @@ def test_comment_calls_do_not_start_after_the_comment_budget(db, monkeypatch):
     )[0]["n"]
     assert stored >= 1
     assert comments == 0
+
+
+class FailingGemini:
+    def generate_json(self, **kwargs):
+        raise GeminiError("http_500")
+
+
+def test_summary_failure_leaves_search_succeeded_but_marks_summary_failed(db):
+    job = claim_instant_search(db, "worker-1")
+    set_source_state(db, job, "youtube", "answered", result_count=1, credits_charged=1, latency_ms=10)
+    insert_posts(db, job, [post("youtube", "vid-1")])
+    finish_search(db, job, "succeeded")
+    summarize_search(db, job, llm=FailingGemini(), now=datetime.now(timezone.utc))
+    search = db.execute("select status, summary_status, error_code from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["summary_status"] == "failed"
+    assert search["error_code"] is None
+
+
+def test_summary_is_skipped_without_results_or_when_ai_is_off(db):
+    job = claim_instant_search(db, "worker-1")
+    finish_search(db, job, "succeeded")
+    called = []
+
+    class Spy:
+        def generate_json(self, **kwargs):
+            called.append(1)
+            return GeminiResult({"overall_summary": "x"}, "scripted", 0, 0, 0)
+
+    summarize_search(db, job, llm=Spy(), now=datetime.now(timezone.utc))
+    assert called == []
+    assert db.execute("select summary_status from instant_searches where id=%s", (job.id,))[0]["summary_status"] == "skipped"
+
+
+def test_summary_is_skipped_when_the_provider_is_off(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    called = []
+
+    class Spy:
+        def generate_json(self, **kwargs):
+            called.append(1)
+            raise AssertionError("off must not call the model")
+
+    summarize_search(
+        db, job, llm=Spy(), now=datetime.now(timezone.utc), env={"CARI_AI_PROVIDER": "off"},
+    )
+    assert called == []
+    search = db.execute("select status, summary_status from instant_searches where id=%s", (job.id,))[0]
+    assert search["summary_status"] == "skipped"
+
+
+def test_summary_keeps_only_a_verbatim_quote(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [replace(post("threads", "th-1"), text="ayam ini enak banget")])
+    finish_search(db, job, "succeeded")
+    result_id = db.execute(
+        "select id from instant_search_results where search_id=%s", (job.id,)
+    )[0]["id"]
+    client = ScriptedGemini([
+        GeminiResult(
+            data={
+                "overall_summary": "Ringkasan.",
+                "overall_stance": "campuran",
+                "platforms": [{
+                    "platform": "threads", "stance": "campuran",
+                    "summary": "Campuran.", "quote_id": f"result:{result_id}",
+                }],
+                "quotes": [
+                    {"type": "pujian", "text": "enak banget", "ref_id": f"result:{result_id}",
+                     "platform": "threads", "author": "rina"},
+                    {"type": "keluhan", "text": "bukan kutipan", "ref_id": f"result:{result_id}",
+                     "platform": "threads", "author": "rina"},
+                ],
+                "themes": [],
+            },
+            model="scripted",
+            input_tokens=3,
+            output_tokens=2,
+            cost_usd=0,
+        )
+    ])
+    summarize_search(db, job, llm=client, now=datetime.now(timezone.utc))
+    search = db.execute("select status, summary_status, overall_stance from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["summary_status"] == "done"
+    assert search["overall_stance"] == "campuran"
+    stored = db.execute("select quotes, cost_usd from instant_search_ai where search_id=%s", (job.id,))[0]
+    quotes = stored["quotes"]
+    if isinstance(quotes, str):
+        quotes = json.loads(quotes)
+    assert quotes == [{
+        "type": "pujian", "text": "enak banget", "ref_id": f"result:{result_id}",
+        "platform": "threads", "author": "rina",
+    }]
+    assert stored["cost_usd"] == 0
 
 
 def test_runner_passes_the_route_timeout_to_each_fetch(db):
