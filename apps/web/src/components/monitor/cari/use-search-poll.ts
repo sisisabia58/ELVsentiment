@@ -19,7 +19,11 @@ export function useSearchPoll(
     setSnapshot(initialSnapshot);
     setStale(false);
   }
-  const finished = FINISHED.has(snapshot.search.status) && snapshot.search.summaryStatus !== "running";
+  const questionOpen = snapshot.questions.some(
+    (question) => question.status === "queued" || question.status === "running",
+  );
+  const finished =
+    FINISHED.has(snapshot.search.status) && snapshot.search.summaryStatus !== "running" && !questionOpen;
 
   useEffect(() => {
     if (finished) return;

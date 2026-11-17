@@ -130,6 +130,7 @@ describe("SearchDetail", () => {
     };
     render(<SearchDetail initialSnapshot={done} />);
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
+    expect(screen.queryByText("Tanya hasil ini")).toBeNull();
     expect(screen.queryByText("kutipan-rahasia")).toBeNull();
     expect(screen.queryByText("Bagaimana percakapannya")).toBeNull();
     expect(screen.getByText("antrean barayam ciledug tadi malem")).toBeTruthy();
@@ -148,6 +149,7 @@ describe("SearchDetail", () => {
     };
     render(<SearchDetail initialSnapshot={done} aiEnabled />);
     expect(screen.getAllByText("Ringkasan AI").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tanya hasil ini")).toBeTruthy();
     expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
     const body = document.body.textContent ?? "";
     expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));

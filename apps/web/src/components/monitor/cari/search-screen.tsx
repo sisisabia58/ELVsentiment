@@ -19,6 +19,7 @@ import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-for
 import { PlatformTile } from "./platform-tile";
 import { AiSummary } from "./ai-summary";
 import { ConversationBreakdown } from "./conversation-breakdown";
+import { AskPanel } from "./ask-panel";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
@@ -136,6 +137,16 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
       <div className="min-w-0 lg:order-1">
         {results}
         {snapshot.ai && snapshot.results.length > 0 ? <ConversationBreakdown snapshot={snapshot} /> : null}
+        <div className="mt-5">
+          <AskPanel
+            searchId={snapshot.search.id}
+            questions={snapshot.questions}
+            suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Platform mana yang paling ramai?"]}
+            results={snapshot.results}
+            comments={snapshot.comments}
+            resultCount={snapshot.totals.results}
+          />
+        </div>
       </div>
     </div>
   );

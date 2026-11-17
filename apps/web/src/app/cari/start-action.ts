@@ -4,7 +4,9 @@ import { withSessionDeps } from "@/auth/request-session";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { readSearchLimits } from "@/monitor/search/limits";
 import {
+  askQuestionForCustomer,
   startSearchForCustomer,
+  type AskQuestionResult,
   type StartSearchInput,
   type StartSearchResult,
 } from "./actions";
@@ -29,6 +31,27 @@ export async function startSearchAction(
       env: process.env,
       limits: readSearchLimits(),
       now: new Date(),
+    });
+  });
+}
+
+export async function askQuestionAction(
+  searchId: string,
+  question: string,
+): Promise<AskQuestionResult> {
+  return withSessionDeps(async (deps) => {
+    let customerId: string;
+    try {
+      customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
+    } catch {
+      return { ok: false as const, error: "unauthenticated" };
+    }
+    return askQuestionForCustomer({
+      db: deps.db,
+      customerId,
+      searchId,
+      question,
+      env: process.env,
     });
   });
 }
