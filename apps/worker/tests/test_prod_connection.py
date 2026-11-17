@@ -290,9 +290,14 @@ def test_instant_search_worker_thread_starts_and_stops(monkeypatch):
 def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
     import time
 
+    # The cycle budget is 0.2s, under the production launch floor. Drop the
+    # floor so this test actually starts the hung fetch and joins it.
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 0.5)
+    launched: list[str] = []
 
     def hung(platform, keyword, settings, **kwargs):
+        launched.append(platform)
         if platform == "youtube":
             time.sleep(3)
         return _fast_fetch(platform, keyword, settings, **kwargs)
@@ -308,6 +313,8 @@ def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
     )
     elapsed = time.monotonic() - started
     assert processed == 1
+    assert launched, "the cycle returned before any route was launched"
+    assert "youtube" in launched
     assert elapsed < 0.2 + 0.5 + 0.5, elapsed
     view = prod_db.view(prod_db.search)
     assert view["search"]["status"] in ("partial", "failed"), view
@@ -796,10 +803,14 @@ def test_search_finishes_by_its_own_deadline_not_claim_plus_budget(prod_db, monk
 def test_hung_route_does_not_delay_finish_search(prod_db, monkeypatch):
     import time
 
+    # The search's own deadline is 0.5s, under the production launch floor.
+    # Drop the floor so the hung fetch starts and the join still bounds the cycle.
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 1.0)
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=0.5)
     finished: list[float] = []
+    launched: list[str] = []
     original_finish = instant_search.finish_search
 
     def recording_finish(conn, job, status, **kwargs):
@@ -807,6 +818,7 @@ def test_hung_route_does_not_delay_finish_search(prod_db, monkeypatch):
         return original_finish(conn, job, status, **kwargs)
 
     def fetch(platform, keyword, settings, **kwargs):
+        launched.append(platform)
         time.sleep(2)
         return _fast_fetch(platform, keyword, settings, **kwargs)
 
@@ -815,6 +827,7 @@ def test_hung_route_does_not_delay_finish_search(prod_db, monkeypatch):
     _poll_once(prod_db, fetch, deadline_seconds=40)
     elapsed = time.monotonic() - started
     assert finished, "finish_search was never called"
+    assert launched, "finish ran without launching a route"
     assert finished[0] - started < 0.9, finished[0] - started
     assert elapsed < 2.0, elapsed
     view = prod_db.view(search_id)
