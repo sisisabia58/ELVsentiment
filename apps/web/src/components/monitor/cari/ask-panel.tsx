@@ -55,11 +55,12 @@ export function AskPanel(props: {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState(props.questions);
-  const waiting = items.some((item) => item.status === "queued" || item.status === "running");
-
-  useEffect(() => {
+  const [source, setSource] = useState(props.questions);
+  if (props.questions !== source) {
+    setSource(props.questions);
     setItems(props.questions);
-  }, [props.questions]);
+  }
+  const waiting = items.some((item) => item.status === "queued" || item.status === "running");
 
   useEffect(() => {
     if (!waiting) return;
