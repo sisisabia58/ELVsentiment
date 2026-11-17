@@ -132,6 +132,8 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
           resultCount={snapshot.totals.results}
           commentCount={snapshot.comments.length}
           platformCounts={counts}
+          results={snapshot.results}
+          comments={snapshot.comments}
         />
       </aside>
       <div className="min-w-0 lg:order-1">

@@ -966,7 +966,10 @@ def start_instant_search_worker(
                 try:
                     def ask(conn):
                         return run_question_cycle(
-                            conn, env=os.environ, now=datetime.now(timezone.utc)
+                            conn,
+                            env=os.environ,
+                            now=datetime.now(timezone.utc),
+                            connect=connect,
                         )
 
                     _call(connect, ask, log_error=False)

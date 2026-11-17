@@ -272,6 +272,46 @@ def _response_json(payload: Mapping[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _with_property_ordering(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Gemini's responseSchema accepts an object once its properties are ordered.
+
+    The live model documents propertyOrdering as the field that makes this
+    OpenAPI subset valid. Summary and questions share this builder so the
+    question body cannot drift into a shape the summary call does not use.
+    """
+    copied: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "properties" and isinstance(value, Mapping):
+            ordered: dict[str, Any] = {}
+            for name, child in value.items():
+                ordered[str(name)] = _with_property_ordering(child) if isinstance(child, Mapping) else child
+            copied["properties"] = ordered
+            copied["propertyOrdering"] = list(ordered)
+        elif key == "items" and isinstance(value, Mapping):
+            copied["items"] = _with_property_ordering(value)
+        else:
+            copied[key] = value
+    return copied
+
+
+def build_generation_body(
+    *,
+    system: str,
+    user: str,
+    schema: Mapping[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    return {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _with_property_ordering(schema),
+            "maxOutputTokens": max_output_tokens,
+        },
+    }
+
+
 class GeminiClient:
     def __init__(
         self,
@@ -305,15 +345,12 @@ class GeminiClient:
             ))
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         body = json.dumps(
-            {
-                "systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "responseSchema": schema,
-                    "maxOutputTokens": max_output_tokens,
-                },
-            }
+            build_generation_body(
+                system=system,
+                user=user,
+                schema=schema,
+                max_output_tokens=max_output_tokens,
+            )
         ).encode("utf-8")
         request = urllib.request.Request(
             url,

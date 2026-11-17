@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { askQuestionAction } from "@/app/cari/start-action";
+import { askQuestionAction, retryQuestionAction } from "@/app/cari/start-action";
 import type { SnapshotComment, SnapshotQuestion, SnapshotResult } from "@/monitor/search/load";
 import { platformName } from "./platform-tile";
 
@@ -11,6 +11,23 @@ const ERROR_COPY: Record<string, string> = {
   not_found: "Pencarian tidak ditemukan.",
   unauthenticated: "Masuk dulu untuk bertanya.",
 };
+
+const FAILURE_COPY: Record<string, string> = {
+  http_429: "Kuota Gemini sedang penuh. Coba lagi sebentar lagi.",
+  paused: "Kuota Gemini sedang dijeda. Coba lagi sebentar lagi.",
+  http_4xx: "Gemini menolak permintaan jawaban.",
+  http_5xx: "Gemini sedang gangguan. Coba lagi sebentar lagi.",
+  timeout: "Jawaban terlalu lama. Coba lagi.",
+  empty_answer: "Jawaban kosong. Coba lagi.",
+  missing_key: "Kunci Gemini belum diatur.",
+  malformed_json: "Jawaban Gemini tidak bisa dibaca.",
+  transport_error: "Gemini tidak terjangkau. Coba lagi.",
+};
+
+function failureCopy(detail: string | null | undefined): string {
+  if (detail && FAILURE_COPY[detail]) return FAILURE_COPY[detail];
+  return "Jawaban belum tersedia";
+}
 
 type Cited = { id: string; platform: string; authorHandle: string | null; authorName: string | null };
 
@@ -104,10 +121,33 @@ export function AskPanel(props: {
           status: "queued",
           answer: null,
           citations: [],
+          safeDetail: null,
           createdAt: new Date().toISOString(),
           answeredAt: null,
         },
       ]);
+    } catch {
+      setError("Pertanyaan gagal dikirim. Coba lagi.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function retry(item: SnapshotQuestion) {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await retryQuestionAction(props.searchId, item.id);
+      if (!result.ok) {
+        setError(ERROR_COPY[result.error] ?? "Pertanyaan gagal dikirim. Coba lagi.");
+        return;
+      }
+      setItems((current) =>
+        current.map((row) =>
+          row.id === item.id ? { ...row, status: "queued", answer: null, safeDetail: null, answeredAt: null } : row,
+        ),
+      );
     } catch {
       setError("Pertanyaan gagal dikirim. Coba lagi.");
     } finally {
@@ -179,11 +219,11 @@ export function AskPanel(props: {
               {open ? <p className="mt-1 text-[12.5px] text-muted-foreground">Menjawab…</p> : null}
               {failed ? (
                 <div className="mt-2">
-                  <p className="text-[13px] text-muted-foreground">Jawaban belum tersedia</p>
+                  <p className="text-[13px] text-muted-foreground">{failureCopy(item.safeDetail)}</p>
                   <button
                     type="button"
                     className="mt-2 text-[12.5px] font-medium text-primary"
-                    onClick={() => void submit(item.question)}
+                    onClick={() => void retry(item)}
                   >
                     Coba lagi
                   </button>

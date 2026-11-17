@@ -92,6 +92,7 @@ export type SnapshotQuestion = {
   status: string;
   answer: string | null;
   citations: string[];
+  safeDetail: string | null;
   createdAt: string;
   answeredAt: string | null;
 };
@@ -331,10 +332,11 @@ export async function loadSearchSnapshot(
       status: string;
       answer: string | null;
       citations: unknown;
+      safe_detail: string | null;
       created_at: string | Date;
       answered_at: string | Date | null;
     }>(
-      `select id, question, status, answer, citations, created_at, answered_at
+      `select id, question, status, answer, citations, safe_detail, created_at, answered_at
        from instant_search_questions
        where search_id = $1 and customer_id = $2
        order by created_at, id`,
@@ -346,6 +348,7 @@ export async function loadSearchSnapshot(
       status: question.status,
       answer: question.answer,
       citations: citationIds(question.citations),
+      safeDetail: question.safe_detail,
       createdAt: iso(question.created_at) ?? new Date(0).toISOString(),
       answeredAt: iso(question.answered_at),
     }));

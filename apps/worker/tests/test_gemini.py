@@ -151,3 +151,71 @@ def test_acquire_caps_the_spacing_sleep_at_sixty_seconds(db):
     db.execute("update gemini_gate set last_request_at = %s where id = 1", (now,))
     acquire_gemini_slot(db, now, 1, sleep=slept.append)
     assert slept == [pytest.approx(60.0)]
+
+
+def test_question_request_matches_the_summary_envelope():
+    from sentiment_monitor.gemini import build_generation_body
+    from sentiment_monitor.instant_ai import (
+        QUESTION_MAX_OUTPUT_TOKENS,
+        QUESTION_SCHEMA,
+        SUMMARY_MAX_OUTPUT_TOKENS,
+        SUMMARY_SCHEMA,
+    )
+
+    question = build_generation_body(
+        system="sistem",
+        user="tanya",
+        schema=QUESTION_SCHEMA,
+        max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
+    )
+    summary = build_generation_body(
+        system="sistem",
+        user="ringkas",
+        schema=SUMMARY_SCHEMA,
+        max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
+    )
+    assert set(question) == set(summary) == {"systemInstruction", "contents", "generationConfig"}
+    assert question["systemInstruction"] == {"parts": [{"text": "sistem"}]}
+    assert question["contents"] == [{"role": "user", "parts": [{"text": "tanya"}]}]
+    assert set(question["generationConfig"]) == set(summary["generationConfig"]) == {
+        "responseMimeType",
+        "responseSchema",
+        "maxOutputTokens",
+    }
+    assert question["generationConfig"]["responseMimeType"] == "application/json"
+    assert question["generationConfig"]["maxOutputTokens"] == 2048
+    assert summary["generationConfig"]["maxOutputTokens"] == 4096
+
+    schema_keys = {
+        "type",
+        "properties",
+        "items",
+        "required",
+        "enum",
+        "propertyOrdering",
+        "description",
+        "format",
+        "nullable",
+    }
+
+    def keywords(node, found=None):
+        found = set() if found is None else found
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in schema_keys:
+                    found.add(key)
+                if key == "properties" and isinstance(value, dict):
+                    for child in value.values():
+                        keywords(child, found)
+                elif key == "items":
+                    keywords(value, found)
+        return found
+
+    question_schema = question["generationConfig"]["responseSchema"]
+    summary_schema = summary["generationConfig"]["responseSchema"]
+    assert keywords(question_schema) <= keywords(summary_schema)
+    encoded = json.dumps(question_schema)
+    for banned in ("additionalProperties", "$ref", '"const"', "anyOf", "oneOf"):
+        assert banned not in encoded
+    assert question_schema["propertyOrdering"] == ["answer", "citations"]
+    assert question_schema["properties"]["citations"]["items"]["type"] == "string"

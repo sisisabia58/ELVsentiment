@@ -54,4 +54,28 @@ describe("AiSummary", () => {
     rerender(<AiSummary ai={null} summaryStatus="failed" />);
     expect(screen.getByText(/Ringkasan belum tersedia/)).toBeTruthy();
   });
+
+  it("follows the result distribution and links a quote to its source", () => {
+    const disagreed: SnapshotAi = {
+      ...aiFixture,
+      platformSummaries: [
+        { platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "comment:c1" },
+      ],
+    };
+    render(
+      <AiSummary
+        ai={disagreed}
+        resultCount={10}
+        commentCount={1}
+        platformCounts={{ threads: 10 }}
+        results={[{ id: "r1", url: "https://example.invalid/post" }]}
+        comments={[{ id: "c1", resultId: "r1" }]}
+      />,
+    );
+    expect(screen.getByText(/Positif 100%/)).toBeTruthy();
+    expect(screen.getByText(/Model menandai Campuran/)).toBeTruthy();
+    const link = screen.getByRole("link", { name: "kriuknya beda sih" });
+    expect(link.getAttribute("href")).toBe("https://example.invalid/post");
+    expect(link.getAttribute("target")).toBe("_blank");
+  });
 });

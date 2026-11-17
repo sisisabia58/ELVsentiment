@@ -78,3 +78,38 @@ export async function askQuestionForCustomer(input: {
     return { ok: true, questionId };
   });
 }
+
+export async function retryQuestionForCustomer(input: {
+  db: Queryable;
+  customerId: string;
+  searchId: string;
+  questionId: unknown;
+  env?: Env;
+}): Promise<AskQuestionResult> {
+  if (!cariSekarangEnabled(input.env ?? process.env)) {
+    return { ok: false, error: "disabled" };
+  }
+  if (!isUuid(input.searchId) || typeof input.questionId !== "string" || !isUuid(input.questionId)) {
+    return { ok: false, error: "not_found" };
+  }
+  return withCustomer(input.db, input.customerId, async () => {
+    const updated = await input.db.query<{ id: string }>(
+      `update instant_search_questions
+          set status = 'queued',
+              answer = null,
+              citations = '[]'::jsonb,
+              safe_detail = null,
+              model = null,
+              cost_usd = 0,
+              answered_at = null
+        where id = $1
+          and search_id = $2
+          and customer_id = $3
+          and status = 'failed'
+        returning id`,
+      [input.questionId, input.searchId, input.customerId],
+    );
+    if (!updated.rows[0]) return { ok: false, error: "not_found" };
+    return { ok: true, questionId: updated.rows[0].id };
+  });
+}

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SnapshotQuestion, SnapshotResult } from "@/monitor/search/load";
+import { askQuestionAction, retryQuestionAction } from "@/app/cari/start-action";
 import { AskPanel } from "./ask-panel";
 
 vi.mock("@/app/cari/start-action", () => ({
   askQuestionAction: vi.fn(async () => ({ ok: true, questionId: "q-new" })),
+  retryQuestionAction: vi.fn(async () => ({ ok: true, questionId: "q2" })),
 }));
 
 const answeredQuestion: SnapshotQuestion = {
@@ -14,6 +16,7 @@ const answeredQuestion: SnapshotQuestion = {
   status: "done",
   answer: "Keluhan utama adalah antrean.",
   citations: ["result:r1", "result:missing"],
+  safeDetail: null,
   createdAt: "2026-11-16T10:00:00Z",
   answeredAt: "2026-11-16T10:00:05Z",
 };
@@ -24,6 +27,7 @@ const failedQuestion: SnapshotQuestion = {
   status: "failed",
   answer: null,
   citations: [],
+  safeDetail: "http_429",
   createdAt: "2026-11-16T10:00:06Z",
   answeredAt: "2026-11-16T10:00:07Z",
 };
@@ -51,6 +55,10 @@ const results = [
   },
 ] satisfies SnapshotResult[];
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("AskPanel", () => {
   it("submits a question and shows 1 kredit per pertanyaan", async () => {
     render(<AskPanel searchId="s1" questions={[]} suggestions={["Apa keluhan utama?"]} />);
@@ -69,7 +77,19 @@ describe("AskPanel", () => {
       />,
     );
     expect(screen.getByText(/rizkyhdyt · Threads/)).toBeTruthy();
-    expect(screen.getByText(/Jawaban belum tersedia/)).toBeTruthy();
+    expect(screen.getByText(/Kuota Gemini sedang penuh/)).toBeTruthy();
+    expect(screen.queryByText(/Jawaban belum tersedia/)).toBeNull();
     expect(screen.queryByText(/result:missing/)).toBeNull();
+  });
+
+  it("retries the same failed question without asking a new one", async () => {
+    vi.mocked(askQuestionAction).mockClear();
+    render(
+      <AskPanel searchId="s1" questions={[failedQuestion]} suggestions={[]} results={results} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Coba lagi" }));
+    expect(retryQuestionAction).toHaveBeenCalledWith("s1", "q2");
+    expect(askQuestionAction).not.toHaveBeenCalled();
+    expect(await screen.findByText("Menjawab…")).toBeTruthy();
   });
 });

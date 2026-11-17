@@ -5,6 +5,7 @@ import { customerIdFromSessionToken } from "@/auth/session";
 import { readSearchLimits } from "@/monitor/search/limits";
 import {
   askQuestionForCustomer,
+  retryQuestionForCustomer,
   startSearchForCustomer,
   type AskQuestionResult,
   type StartSearchInput,
@@ -51,6 +52,27 @@ export async function askQuestionAction(
       customerId,
       searchId,
       question,
+      env: process.env,
+    });
+  });
+}
+
+export async function retryQuestionAction(
+  searchId: string,
+  questionId: string,
+): Promise<AskQuestionResult> {
+  return withSessionDeps(async (deps) => {
+    let customerId: string;
+    try {
+      customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
+    } catch {
+      return { ok: false as const, error: "unauthenticated" };
+    }
+    return retryQuestionForCustomer({
+      db: deps.db,
+      customerId,
+      searchId,
+      questionId,
       env: process.env,
     });
   });

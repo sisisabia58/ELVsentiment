@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { applyMigration, pgliteQueryable, type Queryable } from "@/db/migrate";
 import { DEFAULT_FILTERS } from "@/monitor/search/filters";
-import { askQuestionForCustomer, startSearchForCustomer } from "./actions";
+import { askQuestionForCustomer, retryQuestionForCustomer, startSearchForCustomer } from "./actions";
 
 const CUSTOMER = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-11-16T10:00:00Z");
@@ -250,5 +250,43 @@ describe("askQuestionForCustomer", () => {
     expect(
       (await db.query<{ n: number }>("select count(*)::int as n from instant_search_questions")).rows[0]?.n,
     ).toBe(0);
+  });
+
+  it("requeues a failed question without a second credit or a second row", async () => {
+    const db = await seededDb();
+    const started = await startSearchForCustomer({
+      db,
+      customerId: CUSTOMER,
+      query: "barayam",
+      filters: DEFAULT_FILTERS,
+      env: { CARI_SEKARANG_ENABLED: "1" },
+      limits,
+      now: NOW,
+    });
+    if (!started.ok) throw new Error("search");
+    const asked = await askQuestionForCustomer({
+      db,
+      customerId: CUSTOMER,
+      searchId: started.searchId,
+      question: "Apa keluhan utama?",
+      env: { CARI_SEKARANG_ENABLED: "1" },
+    });
+    if (!asked.ok) throw new Error("ask");
+    await db.query(
+      "update instant_search_questions set status = 'failed', safe_detail = 'http_429', answer = 'lama' where id = $1",
+      [asked.questionId],
+    );
+    const retried = await retryQuestionForCustomer({
+      db,
+      customerId: CUSTOMER,
+      searchId: started.searchId,
+      questionId: asked.questionId,
+      env: { CARI_SEKARANG_ENABLED: "1" },
+    });
+    expect(retried).toEqual({ ok: true, questionId: asked.questionId });
+    const rows = await db.query<{ status: string; user_credits: number; safe_detail: string | null; answer: string | null }>(
+      "select status, user_credits, safe_detail, answer from instant_search_questions",
+    );
+    expect(rows.rows).toEqual([{ status: "queued", user_credits: 1, safe_detail: null, answer: null }]);
   });
 });

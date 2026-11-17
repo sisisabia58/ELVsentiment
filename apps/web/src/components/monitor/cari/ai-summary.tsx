@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { SnapshotAi } from "@/monitor/search/load";
+import type { SnapshotAi, SnapshotComment, SnapshotResult } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
+import { quoteHref } from "./quote-source";
 import { StanceChip } from "./stance-chip";
 
 const STANCE_LABEL: Record<string, string> = {
@@ -45,12 +46,42 @@ function summaryParagraphs(text: string): string[] {
   return blocks.length > 0 ? blocks : [text];
 }
 
+function majorityFromCounts(
+  platforms: PlatformSummary[],
+  counts: Record<string, number> | undefined,
+): { stance: string; percent: number } | null {
+  if (!counts) return null;
+  const totals = new Map<string, number>();
+  for (const item of platforms) {
+    if (!item.platform || !item.stance || !(item.stance in STANCE_LABEL)) continue;
+    const count = counts[item.platform] ?? 0;
+    if (count <= 0) continue;
+    totals.set(item.stance, (totals.get(item.stance) ?? 0) + count);
+  }
+  const classified = [...totals.values()].reduce((sum, value) => sum + value, 0);
+  if (classified <= 0) return null;
+  const [stance, count] = [...totals.entries()].sort((left, right) => right[1] - left[1])[0];
+  return { stance, percent: Math.round((count / classified) * 100) };
+}
+
+function QuoteText(props: { text: string; href: string | null }) {
+  if (!props.href) return <span>{props.text}</span>;
+  const external = props.href.startsWith("http");
+  return (
+    <a href={props.href} {...(external ? { target: "_blank", rel: "noreferrer" } : {})}>
+      {props.text}
+    </a>
+  );
+}
+
 export function AiSummary(props: {
   ai: SnapshotAi | null;
   summaryStatus?: string;
   resultCount?: number;
   commentCount?: number;
   platformCounts?: Record<string, number>;
+  results?: Pick<SnapshotResult, "id" | "url">[];
+  comments?: Pick<SnapshotComment, "id" | "resultId">[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = props.summaryStatus ?? (props.ai ? "done" : "pending");
@@ -78,6 +109,8 @@ export function AiSummary(props: {
   const quotes = asList<Quote>(ai.quotes).filter((item) => item.text);
   const themes = asList<Theme>(ai.themes).filter((item) => item.title);
   const extra = Math.max(0, platforms.length - 3);
+  const majority = majorityFromCounts(platforms, props.platformCounts);
+  const modelLabel = ai.overallStance ? (STANCE_LABEL[ai.overallStance] ?? ai.overallStance) : null;
   return (
     <section className="rounded-[14px] border border-border bg-surface p-4 shadow-card">
       <h2 className="text-[15px] font-semibold text-foreground">Ringkasan AI</h2>
@@ -91,10 +124,21 @@ export function AiSummary(props: {
       <p className="mt-2 text-[12px] text-muted-foreground">
         Ditulis AI dari {props.resultCount ?? 0} hasil dan {props.commentCount ?? 0} komentar teratas · bisa keliru, cek kutipannya
       </p>
-      {ai.overallStance ? (
+      {majority ? (
+        <p className="mt-3 text-[13px] text-foreground">
+          <span className="font-semibold">
+            {STANCE_LABEL[majority.stance]} {majority.percent}%
+          </span>
+          {modelLabel && ai.overallStance !== majority.stance ? (
+            <span className="ml-2 text-[12px] text-muted-foreground">
+              Model menandai {modelLabel}. Angka ini dihitung dari jumlah hasil per platform.
+            </span>
+          ) : null}
+        </p>
+      ) : ai.overallStance ? (
         <div className="mt-3">
           <StanceChip stance={ai.overallStance} />
-          <span className="sr-only">{STANCE_LABEL[ai.overallStance] ?? ai.overallStance}</span>
+          <span className="sr-only">{modelLabel}</span>
         </div>
       ) : null}
       <ul className="mt-3 space-y-3">
@@ -115,7 +159,10 @@ export function AiSummary(props: {
               <p className="mt-1 text-[13px] leading-5 text-foreground">{item.summary}</p>
               {quote?.text ? (
                 <blockquote className="mt-1 border-l-2 border-border pl-2 text-[12.5px] text-muted-foreground">
-                  <span>{quote.text}</span>
+                  <QuoteText
+                    text={quote.text}
+                    href={quoteHref(quote.ref_id, props.results ?? [], props.comments ?? [])}
+                  />
                   {quote.author ? <span className="ml-1 font-mono">{quote.author}</span> : null}
                 </blockquote>
               ) : null}

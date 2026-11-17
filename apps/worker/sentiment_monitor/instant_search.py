@@ -1532,7 +1532,7 @@ def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, An
             pass
 
 
-_QUESTION_DETAILS = SAFE_DETAILS | frozenset({"empty_answer", "off", "error"})
+_QUESTION_DETAILS = SAFE_DETAILS | frozenset({"empty_answer", "off", "error", "http_4xx", "paused"})
 
 
 def _question_detail(value: str) -> str:
@@ -1567,6 +1567,7 @@ def _answer_question(
     env: Mapping[str, Any],
     now: datetime,
     llm: Any,
+    connect: Any = None,
 ) -> str:
     question_id = str(_row_value(row, "id", 0))
     search_id = str(_row_value(row, "search_id", 1))
@@ -1586,7 +1587,9 @@ def _answer_question(
             data, refs = SummaryInput(job.id, job.query, [], []), {}
         else:
             data, refs, _platforms = prepared
-        client = llm if llm is not None else create_gemini(_client_env(env, provider), conn)
+        client = llm if llm is not None else create_gemini(
+            _client_env(env, provider), connect if connect is not None else conn
+        )
         system, user = build_question_prompt(data, str(question or ""))
         generated = client.generate_json(
             system=system,
@@ -1622,10 +1625,13 @@ def _answer_question(
         )
         return "done"
     except GeminiError as error:
-        _fail_question(conn, question_id, error.code, now)
+        detail = _question_detail(error.code)
+        _fail_question(conn, question_id, detail, now)
+        _info("question", question_detail=detail)
         return "failed"
     except Exception:
         _fail_question(conn, question_id, "error", now)
+        _info("question", question_detail="error")
         return "failed"
 
 
@@ -1636,6 +1642,7 @@ def run_question_cycle(
     now: datetime,
     limit: int = 2,
     llm: Any = None,
+    connect: Any = None,
 ) -> int:
     """Answer queued questions. A failure never changes the search status."""
     conn.execute(
@@ -1671,7 +1678,7 @@ def run_question_cycle(
     done = 0
     failed = 0
     for row in rows:
-        outcome = _answer_question(conn, row, env=env, now=now, llm=llm)
+        outcome = _answer_question(conn, row, env=env, now=now, llm=llm, connect=connect)
         if outcome == "done":
             done += 1
         else:

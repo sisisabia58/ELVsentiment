@@ -965,6 +965,64 @@ def test_question_stores_known_citations_and_drops_the_rest(db):
     assert search["error_code"] is None
 
 
+def test_question_keeps_http_4xx_and_paused_and_logs_the_code(db, caplog):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    codes = (
+        ("http_4xx", "33333333-3333-4333-8333-333333333335"),
+        ("paused", "33333333-3333-4333-8333-333333333336"),
+    )
+    for code, question_id in codes:
+        _queue_question(db, "Apa keluhan utama?", question_id)
+
+        class Boom:
+            def generate_json(self, **kwargs):
+                raise GeminiError(code)
+
+        with caplog.at_level(logging.INFO):
+            run_question_cycle(
+                db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+            )
+        row = db.execute(
+            "select status, safe_detail from instant_search_questions where id=%s",
+            (question_id,),
+        )[0]
+        assert row["status"] == "failed"
+        assert row["safe_detail"] == code
+        assert f"question_detail={code}" in caplog.text
+
+
+def test_question_passes_the_connect_factory_to_gemini(db, monkeypatch):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333337")
+    seen = []
+
+    def fake_create(env, conn=None):
+        seen.append(conn)
+        return ScriptedGemini([
+            GeminiResult(
+                data={"answer": "Ada.", "citations": []},
+                model="scripted",
+                input_tokens=1,
+                output_tokens=1,
+                cost_usd=0,
+            )
+        ])
+
+    monkeypatch.setattr(instant_search, "create_gemini", fake_create)
+    factory = object()
+    run_question_cycle(
+        db,
+        env={"CARI_AI_PROVIDER": "gemini"},
+        now=datetime.now(timezone.utc),
+        connect=factory,
+    )
+    assert seen == [factory]
+
+
 def test_runner_passes_the_route_timeout_to_each_fetch(db):
     from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
 

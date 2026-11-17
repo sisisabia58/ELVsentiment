@@ -82,4 +82,20 @@ describe("ConversationBreakdown", () => {
     expect(screen.getByText(/Netral 34%/)).toBeTruthy();
     expect(screen.getByText(/bukan survei/)).toBeTruthy();
   });
+
+  it("links a quote to the result it came from", () => {
+    const withQuote: SearchSnapshot = {
+      ...doneSnapshot,
+      results: [{ ...results[0], id: "r-quote", url: "https://example.invalid/sumber" }],
+      ai: {
+        ...doneSnapshot.ai!,
+        quotes: [
+          { type: "pujian", text: "enak banget", ref_id: "result:r-quote", platform: "threads", author: "rina" },
+        ],
+      },
+    };
+    render(<ConversationBreakdown snapshot={withQuote} />);
+    const link = screen.getByRole("link", { name: "enak banget" });
+    expect(link.getAttribute("href")).toBe("https://example.invalid/sumber");
+  });
 });
