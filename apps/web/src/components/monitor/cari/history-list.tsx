@@ -6,8 +6,9 @@ import { formatRelative } from "@/monitor/format";
 import type { SearchHistoryRow } from "@/monitor/search/load";
 import { StanceChip } from "./stance-chip";
 
-export function HistoryList(props: { rows: SearchHistoryRow[]; now?: Date }) {
+export function HistoryList(props: { rows: SearchHistoryRow[]; now?: Date; aiEnabled?: boolean }) {
   const now = props.now ?? new Date();
+  const aiEnabled = props.aiEnabled ?? false;
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
@@ -28,7 +29,7 @@ export function HistoryList(props: { rows: SearchHistoryRow[]; now?: Date }) {
               <span className="hidden text-muted-foreground sm:inline">
                 {row.resultCount} hasil · {row.sourceCount} sumber
               </span>
-              {row.stance ? <StanceChip stance={row.stance} /> : null}
+                {aiEnabled && row.stance ? <StanceChip stance={row.stance} /> : null}
               <span className="w-24 text-right text-[12px] text-muted-foreground">
                 {formatRelative(row.createdAt, now)}
               </span>

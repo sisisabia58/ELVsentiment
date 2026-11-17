@@ -21,7 +21,7 @@ export async function CariPageBody() {
         title="Cari sekarang"
         subtitle="Cari merek, produk, atau topik di media sosial dan web, lalu lihat hasilnya segera."
       />
-      <SearchScreen history={history} now={now.toISOString()} />
+      <SearchScreen history={history} now={now.toISOString()} aiEnabled={workspace.cariAiEnabled} />
     </Frame>
   );
 }

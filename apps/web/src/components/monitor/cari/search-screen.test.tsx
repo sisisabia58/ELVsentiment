@@ -193,7 +193,50 @@ describe("SearchDetail", () => {
   });
 });
 
+const UNFINISHED_AI_COPY = [
+  "kutipan aslinya",
+  "kutipan asli",
+  "Dapat ringkasan AI",
+  "tanyakan apa saja",
+  "1 kredit per pertanyaan",
+  "Sikap per platform",
+  "topik utama",
+];
+
 describe("SearchScreen", () => {
+  it("hides unfinished AI summary, quote, theme, and question copy by default", () => {
+    render(
+      <SearchScreen
+        history={[
+          {
+            id: "s1",
+            query: "barayam",
+            resultCount: 8,
+            sourceCount: 7,
+            stance: "campuran",
+            status: "partial",
+            createdAt: "2026-11-16T08:00:00Z",
+          },
+        ]}
+        now="2026-11-16T10:00:00Z"
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    for (const phrase of UNFINISHED_AI_COPY) {
+      expect(text, phrase).not.toContain(phrase);
+    }
+    expect(screen.queryByText("campuran")).toBeNull();
+    expect(screen.getByText("Cari di 7 sumber")).toBeTruthy();
+    expect(screen.getByText("Baca komentar teratas")).toBeTruthy();
+  });
+
+  it("keeps the AI summary, quote, and question copy when answers are enabled", () => {
+    render(<SearchScreen history={[]} now="2026-11-16T10:00:00Z" aiEnabled />);
+    expect(screen.getByText(/lengkap dengan kutipan aslinya/)).toBeTruthy();
+    expect(screen.getByText("Dapat ringkasan AI")).toBeTruthy();
+    expect(screen.getByText(/tanyakan apa saja tentang hasilnya/)).toBeTruthy();
+  });
+
   it("describes and illustrates only the launch sources", () => {
     render(<SearchScreen history={[]} now="2026-11-16T10:00:00Z" />);
     expect(screen.getByText("7 sumber siap · hasil dalam ±30 detik")).toBeTruthy();

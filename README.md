@@ -45,7 +45,7 @@ Names only; set real values in Railway. Do not commit values.
 
 - `CARI_SEKARANG_ENABLED` — off by default. Only `1`/`true` enables the `/cari` pages, the polling route, and the nav entry.
 - `CARI_PROVIDER_MODE` — live by default. Fixture data is used only when this is explicitly `fixture`.
-- `CARI_AI_PROVIDER` — which AI provider the later AI milestones use; defaults to `demo`.
+- `CARI_AI_PROVIDER` — which AI provider the later AI milestones use; defaults to `demo`. `demo` also hides the unfinished summary, stance, quote, theme, and question UI. Any other value, such as `gemini`, shows that UI.
 - `SCRAPEATLAS_API_KEY` — ScrapeAtlas provider credential for the launch sources.
 - Platform admin is **not** an env var. After the real owner has signed up, the operator grants it once with SQL: `insert into platform_admins (user_id) select id from users where email = 'owner@example.com';` Run that as the migration/table-owner role (`MIGRATION_DATABASE_URL`), not as `app_user`. Only a live session for a row in `platform_admins` can write `/pengaturan/provider`. Revoke with `delete from platform_admins where user_id = (select id from users where email = 'owner@example.com');`.
 - `CARI_DAILY_SEARCH_LIMIT` — optional per-customer daily instant-search cap (web and worker, default 20).

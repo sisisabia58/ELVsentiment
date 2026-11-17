@@ -40,6 +40,7 @@ export function WorkspaceShell(props: {
   attention: number;
   uncertain: number;
   searchEnabled?: boolean;
+  aiEnabled?: boolean;
   admin?: boolean;
   logout?: ReactNode;
   children: ReactNode;
@@ -47,6 +48,7 @@ export function WorkspaceShell(props: {
   const [open, setOpen] = useState(false);
   const counts = { attention: props.attention, uncertain: props.uncertain };
   const searchEnabled = props.searchEnabled ?? false;
+  const aiEnabled = props.aiEnabled ?? false;
   const nav = (
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center px-4">
@@ -62,7 +64,9 @@ export function WorkspaceShell(props: {
               </span>
             </div>
             <p className="mt-1 text-[11.5px] leading-4 text-muted-foreground">
-              1 kredit per pencarian · 1 kredit per pertanyaan
+              {aiEnabled
+                ? "1 kredit per pencarian · 1 kredit per pertanyaan"
+                : "1 kredit per pencarian"}
             </p>
           </div>
         </div>
@@ -243,6 +247,7 @@ export function Frame(props: {
     projects: { id: string; name: string; initials: string }[];
     mentions: { attentionUnread: boolean; bucket: string; confirmed: boolean; corrected: boolean }[];
     cariEnabled?: boolean;
+    cariAiEnabled?: boolean;
     isAdmin?: boolean;
   };
   logout?: ReactNode;
@@ -264,6 +269,7 @@ export function Frame(props: {
       attention={attention}
       uncertain={uncertain}
       searchEnabled={props.workspace.cariEnabled ?? false}
+      aiEnabled={props.workspace.cariAiEnabled ?? false}
       admin={props.workspace.isAdmin ?? false}
       logout={props.logout}
     >

@@ -49,7 +49,7 @@ const ERROR_COPY: Record<string, string> = {
   query_too_long: "Kata kunci maksimal 160 karakter.",
 };
 
-function RecentSearches(props: { history: SearchHistoryRow[]; now: string }) {
+function RecentSearches(props: { history: SearchHistoryRow[]; now: string; aiEnabled: boolean }) {
   return (
     <section className="mt-8 rounded-[14px] border border-border bg-surface shadow-card">
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
@@ -71,7 +71,7 @@ function RecentSearches(props: { history: SearchHistoryRow[]; now: string }) {
               <span className="hidden text-muted-foreground sm:inline">
                 {row.resultCount} hasil · {row.sourceCount} sumber
               </span>
-              {row.stance ? <StanceChip stance={row.stance} /> : null}
+                {props.aiEnabled && row.stance ? <StanceChip stance={row.stance} /> : null}
               <span className="w-20 text-right text-[12px] text-muted-foreground">
                 {formatRelative(row.createdAt, new Date(props.now))}
               </span>
@@ -178,7 +178,8 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   );
 }
 
-export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }) {
+export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; aiEnabled?: boolean }) {
+  const aiEnabled = props.aiEnabled ?? false;
   const router = useRouter();
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,8 +216,9 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }
           Apa kata orang tentang merek Anda?
         </h2>
         <p className="mx-auto mt-2 max-w-xl text-[15px] leading-6 text-muted-foreground">
-          Ketik merek, produk, atau topik. Kami mencari di media sosial dan web sekarang juga, lalu merangkum apa yang
-          dibicarakan — lengkap dengan kutipan aslinya.
+          {aiEnabled
+            ? "Ketik merek, produk, atau topik. Kami mencari di media sosial dan web sekarang juga, lalu merangkum apa yang dibicarakan — lengkap dengan kutipan aslinya."
+            : "Ketik merek, produk, atau topik. Kami mencari di media sosial dan web, lalu menampilkan hasilnya."}
         </p>
       </section>
 
@@ -264,11 +266,15 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }
               title: "Baca komentar teratas",
               body: "Balasan paling disukai ikut diambil, karena reaksi orang sering ada di komentar.",
             },
-            {
-              icon: Sparkles,
-              title: "Dapat ringkasan AI",
-              body: "Sikap per platform, kutipan asli, dan topik utama — lalu tanyakan apa saja tentang hasilnya.",
-            },
+            ...(aiEnabled
+              ? [
+                  {
+                    icon: Sparkles,
+                    title: "Dapat ringkasan AI",
+                    body: "Sikap per platform, kutipan asli, dan topik utama — lalu tanyakan apa saja tentang hasilnya.",
+                  },
+                ]
+              : []),
           ].map((panel, index) => {
             const Icon = panel.icon;
             return (
@@ -283,7 +289,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string }
           })}
         </div>
 
-        <RecentSearches history={props.history} now={props.now} />
+        <RecentSearches history={props.history} now={props.now} aiEnabled={aiEnabled} />
       </section>
     </div>
   );

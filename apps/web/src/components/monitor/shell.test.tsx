@@ -30,7 +30,8 @@ describe("cari sekarang navigation", () => {
     expect(screen.getByRole("link", { name: "Cari sekarang" }).getAttribute("href")).toBe("/cari");
     expect(screen.getByRole("link", { name: "Riwayat pencarian" }).getAttribute("href")).toBe("/cari/riwayat");
     expect(screen.getByText("Kredit pencarian")).toBeTruthy();
-    expect(screen.getByText(/1 kredit per pencarian/)).toBeTruthy();
+    expect(screen.getByText("1 kredit per pencarian")).toBeTruthy();
+    expect(screen.queryByText(/per pertanyaan/)).toBeNull();
 
     rerender(
       <WorkspaceShell {...baseProps} searchEnabled={false} admin={false}>
@@ -39,6 +40,15 @@ describe("cari sekarang navigation", () => {
     );
     expect(screen.queryByText("Cari sekarang")).toBeNull();
     expect(screen.queryByText("Riwayat pencarian")).toBeNull();
+  });
+
+  it("shows the per-question credit line only when AI answers are enabled", () => {
+    render(
+      <WorkspaceShell {...baseProps} searchEnabled aiEnabled>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    expect(screen.getByText("1 kredit per pencarian · 1 kredit per pertanyaan")).toBeTruthy();
   });
 
   it("shows the provider settings link only for admins", () => {

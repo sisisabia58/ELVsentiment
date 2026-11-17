@@ -6,9 +6,31 @@ import { HistoryList } from "./history-list";
 afterEach(cleanup);
 
 describe("HistoryList", () => {
+  it("hides stance chips until AI answers are enabled", () => {
+    render(
+      <HistoryList
+        now={new Date("2026-11-16T10:00:00Z")}
+        rows={[
+          {
+            id: "s1",
+            query: "barayam",
+            resultCount: 65,
+            sourceCount: 7,
+            stance: "campuran",
+            status: "succeeded",
+            createdAt: "2026-11-16T08:00:00Z",
+          },
+        ]}
+      />,
+    );
+    expect(screen.queryByText("campuran")).toBeNull();
+    expect(screen.getByRole("link", { name: "barayam" })).toBeTruthy();
+  });
+
   it("shows query, counts, stance, relative time, and a reopen link", () => {
     render(
       <HistoryList
+        aiEnabled
         now={new Date("2026-11-16T10:00:00Z")}
         rows={[
           {

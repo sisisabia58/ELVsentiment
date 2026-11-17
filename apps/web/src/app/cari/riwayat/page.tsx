@@ -22,7 +22,7 @@ export async function RiwayatPageBody() {
         subtitle="Semua pencarian cepat Anda dalam 30 hari terakhir. Buka lagi untuk melihat hasilnya."
       />
       <div className="mt-5">
-        <HistoryList rows={rows} now={now} />
+        <HistoryList rows={rows} now={now} aiEnabled={workspace.cariAiEnabled} />
       </div>
     </Frame>
   );
