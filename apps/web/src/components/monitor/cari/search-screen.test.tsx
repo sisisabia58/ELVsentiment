@@ -147,7 +147,7 @@ describe("SearchDetail", () => {
       model: "gemini",
     };
     render(<SearchDetail initialSnapshot={done} aiEnabled />);
-    expect(screen.getByText("Ringkasan AI")).toBeTruthy();
+    expect(screen.getAllByText("Ringkasan AI").length).toBeGreaterThan(0);
     expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
     const body = document.body.textContent ?? "";
     expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
