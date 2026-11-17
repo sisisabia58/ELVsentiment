@@ -171,6 +171,37 @@ describe("loadSearchSnapshot", () => {
     ]);
   });
 
+  it("loads every stored result so the header, tabs, and history share one count", async () => {
+    const db = await migrated();
+    await insertSearch(db, SEARCH, CUSTOMER);
+    const platforms = ["threads", "tiktok", "youtube", "instagram", "facebook", "reddit", "linkedin"];
+    const stored = 51;
+    for (let index = 0; index < stored; index += 1) {
+      const suffix = index.toString(16).padStart(12, "0");
+      await insertResult(db, SEARCH, CUSTOMER, {
+        id: `44444444-4444-4444-8444-${suffix}`,
+        platform: platforms[index % platforms.length],
+        externalId: `post-${index}`,
+        publishedAt: "2026-11-15T09:00:00Z",
+        rank: index + 1,
+      });
+    }
+    // Source counters are a different number on purpose. The page must not use them.
+    await insertSource(db, SEARCH, CUSTOMER, "threads", "answered", 180);
+
+    const snapshot = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
+    const history = await loadHistory(db, CUSTOMER);
+    expect(snapshot?.results).toHaveLength(stored);
+    expect(snapshot?.totals.results).toBe(stored);
+    expect(snapshot?.totals.results).toBe(snapshot?.results.length);
+    expect(history[0]?.resultCount).toBe(stored);
+    const byPlatform = new Map<string, number>();
+    for (const result of snapshot?.results ?? []) {
+      byPlatform.set(result.platform, (byPlatform.get(result.platform) ?? 0) + 1);
+    }
+    expect([...byPlatform.values()].reduce((sum, count) => sum + count, 0)).toBe(stored);
+  });
+
   it("loads comments, AI, and questions for the search only", async () => {
     const db = await migrated();
     await insertSearch(db, SEARCH, CUSTOMER);

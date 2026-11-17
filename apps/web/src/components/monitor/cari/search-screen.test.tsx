@@ -183,6 +183,22 @@ describe("SearchDetail", () => {
     expect(screen.getByText(/31 dtk/)).toBeTruthy();
   });
 
+  it("uses the same result total in the receipt and the platform tabs", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const done = finishedSnapshot();
+    done.totals = { sources: 7, done: 7, results: 2 };
+    done.results = [
+      post({ id: "t1", platform: "threads", externalId: "th-1" }),
+      post({ id: "y1", platform: "youtube", externalId: "yt-1", title: "Video kopi" }),
+    ];
+    render(<SearchDetail initialSnapshot={done} />);
+    expect(screen.getByText(/7 dari 7 sumber menjawab · 2 hasil/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Semua 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Threads 1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /YouTube 1/ })).toBeTruthy();
+    expect(screen.queryByText(/dari 180/)).toBeNull();
+  });
+
   it("renders a finished partial search without pretending every source answered", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const partial = finishedSnapshot();

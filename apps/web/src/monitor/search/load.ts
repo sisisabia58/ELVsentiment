@@ -198,6 +198,8 @@ export async function loadSearchSnapshot(
       }))
       .sort((a, b) => (order.get(a.platform) ?? 99) - (order.get(b.platform) ?? 99));
 
+    // Every stored row is loaded. Header, history, and the result tabs all
+    // count this table, so a display LIMIT would make those numbers disagree.
     const resultRows = await db.query<{
       id: string;
       platform: string;
@@ -224,8 +226,7 @@ export async function loadSearchSnapshot(
        from instant_search_results
        where search_id = $1 and customer_id = $2
        order by (published_at is null) asc, rank asc nulls last,
-                published_at desc nulls last, collected_at desc
-       limit 50`,
+                published_at desc nulls last, collected_at desc`,
       [searchId, customerId],
     );
     const results: SnapshotResult[] = resultRows.rows.map((result) => ({
