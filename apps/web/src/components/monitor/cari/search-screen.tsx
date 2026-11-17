@@ -17,6 +17,8 @@ import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platfor
 import { startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
+import { AiSummary } from "./ai-summary";
+import { ConversationBreakdown } from "./conversation-breakdown";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
@@ -103,6 +105,42 @@ function useNow(initialIso: string | undefined): Date {
   return now;
 }
 
+function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boolean; running: boolean }) {
+  const snapshot = props.snapshot;
+  if (snapshot.results.length === 0 && !props.aiEnabled) return null;
+  const results = snapshot.results.length > 0 ? (
+    <ResultsList
+      results={snapshot.results}
+      commentsByResult={commentsByResult(snapshot)}
+      sortMode={snapshot.search.filters.sort}
+      now={props.now}
+    />
+  ) : null;
+  if (!props.aiEnabled || props.running) {
+    return results ? <div className="mt-5">{results}</div> : null;
+  }
+  const counts: Record<string, number> = {};
+  for (const result of snapshot.results) counts[result.platform] = (counts[result.platform] ?? 0) + 1;
+  const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
+  return (
+    <div className="mt-5 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-5">
+      <aside className="order-first mb-5 lg:order-2 lg:mb-0 lg:sticky lg:top-4">
+        <AiSummary
+          ai={snapshot.ai}
+          summaryStatus={summaryStatus}
+          resultCount={snapshot.totals.results}
+          commentCount={snapshot.comments.length}
+          platformCounts={counts}
+        />
+      </aside>
+      <div className="min-w-0 lg:order-1">
+        {results}
+        {snapshot.ai && snapshot.results.length > 0 ? <ConversationBreakdown snapshot={snapshot} /> : null}
+      </div>
+    </div>
+  );
+}
+
 function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComment[]> {
   const grouped: Record<string, SnapshotComment[]> = {};
   for (const comment of snapshot.comments) {
@@ -111,7 +149,7 @@ function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComm
   return grouped;
 }
 
-export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string }) {
+export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string; aiEnabled?: boolean }) {
   const { snapshot, stale } = useSearchPoll(
     props.initialSnapshot.search.id,
     props.initialSnapshot,
@@ -160,18 +198,9 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </p>
       ) : null}
       <div className="mt-5">
-        <ProgressPanel snapshot={snapshot} now={now} />
+        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={props.aiEnabled} />
       </div>
-      {snapshot.results.length > 0 ? (
-        <div className="mt-5">
-          <ResultsList
-            results={snapshot.results}
-            commentsByResult={commentsByResult(snapshot)}
-            sortMode={search.filters.sort}
-            now={now}
-          />
-        </div>
-      ) : null}
+      <SearchBody snapshot={snapshot} now={now} aiEnabled={props.aiEnabled === true} running={running} />
     </div>
   );
 }

@@ -19,7 +19,7 @@ export function useSearchPoll(
     setSnapshot(initialSnapshot);
     setStale(false);
   }
-  const finished = FINISHED.has(snapshot.search.status);
+  const finished = FINISHED.has(snapshot.search.status) && snapshot.search.summaryStatus !== "running";
 
   useEffect(() => {
     if (finished) return;

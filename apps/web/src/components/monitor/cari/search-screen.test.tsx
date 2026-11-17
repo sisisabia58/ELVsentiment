@@ -117,6 +117,42 @@ function failedSnapshot(errorCode: string): SearchSnapshot {
 }
 
 describe("SearchDetail", () => {
+  it("hides the summary until a non-demo provider is selected", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "campuran",
+      platformSummaries: [],
+      quotes: [{ text: "kutipan-rahasia" }],
+      themes: [],
+      model: "demo",
+    };
+    render(<SearchDetail initialSnapshot={done} />);
+    expect(screen.queryByText("Ringkasan AI")).toBeNull();
+    expect(screen.queryByText("kutipan-rahasia")).toBeNull();
+    expect(screen.queryByText("Bagaimana percakapannya")).toBeNull();
+    expect(screen.getByText("antrean barayam ciledug tadi malem")).toBeTruthy();
+  });
+
+  it("shows the summary beside the results and the breakdown after them", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "campuran",
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian." }],
+      quotes: [],
+      themes: [],
+      model: "gemini",
+    };
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getByText("Ringkasan AI")).toBeTruthy();
+    expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
+    const body = document.body.textContent ?? "";
+    expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
+  });
+
   it("shows the command receipt, progress before completion, and results after", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const { rerender } = render(<SearchDetail initialSnapshot={snapshot()} />);

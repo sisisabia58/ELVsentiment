@@ -115,7 +115,7 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
   );
 }
 
-export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
+export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean }) {
   const snapshot = props.snapshot;
   const now = props.now ?? new Date();
   const done = snapshot.totals.done;
@@ -197,7 +197,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
           </div>
         </div>
       </div>
-      <ol className={cn("grid border-t border-border", SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
+      <ol className={cn("grid border-t border-border", props.aiEnabled ? "sm:grid-cols-3" : SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
         <li className="flex items-center gap-3 px-5 py-3.5">
           <span
             className={cn(
@@ -237,6 +237,17 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
             <div>
               <p className="text-[13px] font-semibold text-foreground">Komentar</p>
               <p className="text-[11.5px] text-muted-foreground">{commentCopy}</p>
+            </div>
+          </li>
+        ) : null}
+        {props.aiEnabled ? (
+          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+            <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
+              3
+            </span>
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
+              <p className="text-[11.5px] text-muted-foreground">Menunggu · setelah komentar</p>
             </div>
           </li>
         ) : null}

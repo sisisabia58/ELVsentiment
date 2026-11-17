@@ -17,9 +17,9 @@ export function cariAiProvider(env: Env = process.env): string {
   return env.CARI_AI_PROVIDER?.trim() || "demo";
 }
 
-// M5/M6 UI (summary, stance, quotes, themes, Q&A, per-question credit).
-// The demo provider does not produce those answers, so the copy stays hidden
-// until a real provider is selected.
+// Summary, stance, quotes, themes, and Q&A stay off the page while the
+// provider is demo or unset. The worker may still store a zero-cost demo
+// summary; it is shown only after a non-demo provider is selected.
 export function cariAiUiEnabled(env: Env = process.env): boolean {
   return cariAiProvider(env) !== "demo";
 }
