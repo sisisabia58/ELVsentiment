@@ -270,19 +270,24 @@ def sanitize_post(post: CanonicalPost) -> CanonicalPost:
     )
 
 
+# Hangul fillers are letters (Lo), so a category check keeps them. They paint blank.
+_BLANK_LETTERS = frozenset({"\u115f", "\u1160", "\u3164", "\uffa0", "\ufffc", "\u2800"})
+
+
 def comment_has_visible_text(value: object) -> bool:
     """False for blank, whitespace, and invisible sticker placeholders.
 
     Facebook photo and sticker replies often arrive as U+FFFC, a zero-width
-    character, or spaces. Those still have a length, so a plain strip keeps
-    an author row with nothing to read.
+    character, a Hangul filler, or spaces. Those still have a length, so a
+    plain strip keeps an author row with nothing to read.
     """
     if not isinstance(value, str):
         return False
     for char in value:
-        if char in {"\ufffc", "\u2800"}:
+        if char in _BLANK_LETTERS:
             continue
-        if unicodedata.category(char)[0] in {"C", "Z"}:
+        category = unicodedata.category(char)
+        if category[0] in {"C", "Z", "M"}:
             continue
         return True
     return False

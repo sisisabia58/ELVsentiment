@@ -21,7 +21,7 @@ function commentsCollected(platform: string): boolean {
 
 // Spaces and zero-width/object-replacement characters still look blank.
 const INVISIBLE_COMMENT_CHAR =
-  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\u2800\uFEFF\uFFFC]/g;
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u115F\u1160\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFFC]/g;
 
 function commentTextIsVisible(value: string): boolean {
   return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;

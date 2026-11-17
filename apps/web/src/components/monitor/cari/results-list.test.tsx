@@ -185,6 +185,55 @@ describe("ResultsList", () => {
     expect(block.textContent).not.toContain("4");
   });
 
+  it("shows the stored Zhong Lun text and counts lainnya from the rows on screen", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3, authorName: "Rojaklah" })]}
+        commentsByResult={{
+          r1: [
+            {
+              ...comments.r1[0],
+              id: "c-miki",
+              platform: "facebook",
+              text: "Zhong Lun",
+              authorName: "Miki Yong",
+              authorHandle: "Miki Yong",
+              likes: 0,
+            },
+            {
+              ...comments.r1[0],
+              id: "c-edward",
+              platform: "facebook",
+              text: "环氧乙烷 tidak masalah",
+              authorName: "Edward Gooi",
+              authorHandle: "Edward Gooi",
+              likes: 0,
+            },
+            {
+              ...comments.r1[0],
+              id: "c-filler",
+              platform: "facebook",
+              text: "\u3164",
+              authorName: "Kosong",
+              authorHandle: "Kosong",
+              likes: 0,
+            },
+          ],
+        }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("Zhong Lun")).toBeTruthy();
+    expect(screen.getByText("Miki Yong")).toBeTruthy();
+    expect(screen.getByText("Edward Gooi")).toBeTruthy();
+    expect(screen.queryByText("Kosong")).toBeNull();
+    expect(screen.getAllByText(/▲/)).toHaveLength(2);
+    expect(screen.getByText("1 balasan lainnya")).toBeTruthy();
+    const block = screen.getByLabelText(/contoh balasan/i);
+    expect(block.textContent).toContain("3");
+    expect(block.textContent).not.toContain("4");
+  });
+
   it("does not show more reply rows than the post reports", () => {
     const rows = ["satu", "dua", "tiga", "empat"].map((text, index) => ({
       ...comments.r1[0],

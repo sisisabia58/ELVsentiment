@@ -61,6 +61,35 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _visible_comment_text(value: Any, depth: int = 0) -> str | None:
+    """First visible string, or the longest one when a field is a nested object."""
+    if depth > 3:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text if comment_has_visible_text(text) else None
+    if isinstance(value, dict):
+        found = [
+            piece
+            for key in ("message", "text", "body")
+            if (piece := _visible_comment_text(value.get(key), depth + 1))
+        ]
+        return max(found, key=len) if found else None
+    return None
+
+
+def _facebook_text(item: Mapping[str, Any]) -> str:
+    # Staging search a923bb0d stored text "Zhong Lun" (ASCII) for author Miki Yong.
+    # A longer message/body wins when the provider also sends one; a name-only
+    # `text` is real text and is kept.
+    found = [
+        piece
+        for key in ("text", "message", "body")
+        if (piece := _visible_comment_text(item.get(key)))
+    ]
+    return max(found, key=len) if found else ""
+
+
 def _has_media(item: Mapping[str, Any]) -> bool:
     for key in ("attachments", "attachment", "media", "sticker"):
         value = item.get(key)
@@ -132,7 +161,7 @@ def _comment(platform: str, item: Mapping[str, Any]) -> CanonicalComment:
         replies = _optional_int(engagement.get("replies"))
     elif platform == "facebook":
         external_id = str(item.get("id") or "")
-        text = _optional_text(item.get("text")) or ""
+        text = _facebook_text(item)
         author_handle = _optional_text(author.get("name"))
         author_name = _optional_text(author.get("name"))
         published_at = _optional_text(item.get("created_at"))
