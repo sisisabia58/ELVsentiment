@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 import math
 import re
+import unicodedata
 from typing import Iterable, Literal
 import urllib.parse
 
@@ -267,6 +268,24 @@ def sanitize_post(post: CanonicalPost) -> CanonicalPost:
         raw_ref=str(_cap_text(_clean_text(post.raw_ref) or "", MAX_RAW_REF_LENGTH)),
         routes=tuple(str(_clean_text(route)) for route in post.routes),
     )
+
+
+def comment_has_visible_text(value: object) -> bool:
+    """False for blank, whitespace, and invisible sticker placeholders.
+
+    Facebook photo and sticker replies often arrive as U+FFFC, a zero-width
+    character, or spaces. Those still have a length, so a plain strip keeps
+    an author row with nothing to read.
+    """
+    if not isinstance(value, str):
+        return False
+    for char in value:
+        if char in {"\ufffc", "\u2800"}:
+            continue
+        if unicodedata.category(char)[0] in {"C", "Z"}:
+            continue
+        return True
+    return False
 
 
 def sanitize_comment(comment: CanonicalComment) -> CanonicalComment:

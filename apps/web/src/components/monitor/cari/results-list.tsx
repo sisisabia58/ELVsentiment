@@ -19,8 +19,18 @@ function commentsCollected(platform: string): boolean {
   return supportedProviders(platform, "comments").length > 0;
 }
 
-function visibleComments(comments: SnapshotComment[]): SnapshotComment[] {
-  return comments.filter((comment) => comment.text.trim().length > 0).slice(0, 3);
+// Spaces and zero-width/object-replacement characters still look blank.
+const INVISIBLE_COMMENT_CHAR =
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\u2800\uFEFF\uFFFC]/g;
+
+function commentTextIsVisible(value: string): boolean {
+  return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;
+}
+
+function visibleComments(comments: SnapshotComment[], replyCount: number | null): SnapshotComment[] {
+  const withText = comments.filter((comment) => commentTextIsVisible(comment.text));
+  const cap = replyCount != null && replyCount >= 0 ? Math.min(3, replyCount) : 3;
+  return withText.slice(0, cap);
 }
 
 function Engagement(props: { result: SnapshotResult }) {
@@ -58,11 +68,11 @@ function ResultCard(props: {
 }) {
   const result = props.result;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const comments = visibleComments(props.comments);
+  const comments = visibleComments(props.comments, result.replies);
   function checkThumbnail(image: HTMLImageElement | null) {
     if (image?.complete && image.naturalWidth === 0) setThumbnailFailed(true);
   }
-  const remaining = Math.max(0, (result.replies ?? 0) - comments.length);
+  const remaining = result.replies == null ? 0 : Math.max(0, result.replies - comments.length);
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
   return (

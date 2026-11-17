@@ -25,6 +25,7 @@ from sentiment_monitor.providers.canonical import (
     keyword_relevance,
     post_identity,
     safe_credit,
+    comment_has_visible_text,
     sanitize_comment,
     sanitize_post,
     sort_posts,
@@ -369,7 +370,7 @@ def insert_comments(
     inserted = 0
     for item in comments:
         item = sanitize_comment(item)
-        if not str(item.text or "").strip():
+        if not comment_has_visible_text(item.text):
             continue
         cursor = conn.execute(
             """

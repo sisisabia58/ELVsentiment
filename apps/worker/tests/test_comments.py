@@ -167,6 +167,34 @@ def test_facebook_skips_replies_with_no_text():
     assert result.comments[0].text.startswith("Iya iyaaalah")
 
 
+def test_facebook_labels_a_sticker_and_drops_invisible_text():
+    payload = fixture("comments_facebook.json")
+    payload["comments"] = [
+        {"id": "blank", "text": "\u200b", "author": {"name": "Zhong Lun"}, "reaction_count": 1},
+        {
+            "id": "sticker",
+            "text": "\ufffc",
+            "author": {"name": "Miki Yong"},
+            "attachments": [{"type": "sticker", "url": "https://example.invalid/sticker.png"}],
+            "reaction_count": 2,
+        },
+        payload["comments"][0],
+    ]
+
+    def opener(request, timeout=0):
+        del request, timeout
+        return Response(payload, headers={"x-credits-charged": "1"})
+
+    result = fetch_comments(
+        "facebook", post(platform="facebook", url="https://example.invalid/post/1"),
+        settings=SETTINGS,
+        env={"SCRAPEATLAS_API_KEY": "synthetic"}, opener=opener,
+    )
+    assert [item.external_id for item in result.comments] == ["sticker", payload["comments"][2]["id"]]
+    assert result.comments[0].text == "lampiran media"
+    assert result.comments[0].author_name == "Miki Yong"
+
+
 def test_404_not_found_is_answered_with_zero_comments_and_credits():
     def opener(request, timeout=0):
         raise urllib.error.HTTPError(

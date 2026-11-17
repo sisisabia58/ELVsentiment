@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import time
 from typing import Any, Callable, Mapping
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
-from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
+from sentiment_monitor.providers.canonical import (
+    CanonicalComment,
+    CanonicalPost,
+    RouteCall,
+    comment_has_visible_text,
+)
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
 from sentiment_monitor.providers.fetch import provider_api_key
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
@@ -54,6 +59,16 @@ def _optional_text(value: Any) -> str | None:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _has_media(item: Mapping[str, Any]) -> bool:
+    for key in ("attachments", "attachment", "media", "sticker"):
+        value = item.get(key)
+        if isinstance(value, (list, dict)) and len(value) > 0:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
 
 
 def _threads_text(item: Mapping[str, Any]) -> str:
@@ -206,10 +221,12 @@ def fetch_comments(
         if not isinstance(item, dict):
             continue
         comment = _comment(platform, item)
-        # A sticker or photo reply can arrive with no text. Skip it so the
-        # card does not render an empty row.
-        if comment.text.strip():
+        # A sticker or photo reply can arrive with no visible text. Skip it,
+        # or label the attachment, so the card does not render a blank row.
+        if comment_has_visible_text(comment.text):
             comments.append(comment)
+        elif platform == "facebook" and _has_media(item):
+            comments.append(replace(comment, text="lampiran media"))
     status = payload.get("status")
     call = RouteCall(
         provider="scrapeatlas",

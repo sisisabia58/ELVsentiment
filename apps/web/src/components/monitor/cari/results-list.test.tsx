@@ -146,7 +146,7 @@ describe("ResultsList", () => {
         results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
         commentsByResult={{
           r1: [
-            { ...comments.r1[0], platform: "facebook", text: "enak" },
+            { ...comments.r1[0], platform: "facebook", text: "enak", authorName: "Sari", authorHandle: null },
             { ...comments.r1[1], id: "c-empty", platform: "facebook", text: "   " },
           ],
         }}
@@ -156,6 +156,54 @@ describe("ResultsList", () => {
     expect(screen.getByText("enak")).toBeTruthy();
     expect(screen.getByText("3 balasan")).toBeTruthy();
     expect(screen.getAllByText(/▲/)).toHaveLength(1);
+    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+  });
+
+  it("drops invisible facebook replies and keeps the lainnya count on the rows shown", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
+        commentsByResult={{
+          r1: [
+            { ...comments.r1[0], id: "c-text", platform: "facebook", text: "enak", authorName: "Sari", authorHandle: null },
+            { ...comments.r1[0], id: "c-zhong", platform: "facebook", text: "\u200b", authorName: "Zhong Lun", authorHandle: "Zhong Lun" },
+            { ...comments.r1[0], id: "c-miki", platform: "facebook", text: "\ufeff\u200c", authorName: "Miki Yong", authorHandle: "Miki Yong" },
+            { ...comments.r1[0], id: "c-object", platform: "facebook", text: "\ufffc", authorName: "Stiker", authorHandle: null },
+          ],
+        }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("enak")).toBeTruthy();
+    expect(screen.queryByText("Zhong Lun")).toBeNull();
+    expect(screen.queryByText("Miki Yong")).toBeNull();
+    expect(screen.queryByText("Stiker")).toBeNull();
+    expect(screen.getAllByText(/▲/)).toHaveLength(1);
+    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+    const block = screen.getByLabelText(/contoh balasan/i);
+    expect(block.textContent).toContain("3");
+    expect(block.textContent).not.toContain("4");
+  });
+
+  it("does not show more reply rows than the post reports", () => {
+    const rows = ["satu", "dua", "tiga", "empat"].map((text, index) => ({
+      ...comments.r1[0],
+      id: `c${index}`,
+      platform: "facebook",
+      text,
+      authorName: text,
+      authorHandle: null,
+    }));
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
+        commentsByResult={{ r1: rows }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getAllByText(/▲/)).toHaveLength(3);
+    expect(screen.queryByText("empat")).toBeNull();
+    expect(screen.queryByText(/balasan lainnya/)).toBeNull();
   });
 
   it("replaces a broken thumbnail with an aria-hidden platform placeholder", () => {
