@@ -244,6 +244,8 @@ describe("SearchScreen", () => {
     expect(screen.queryByText("campuran")).toBeNull();
     expect(screen.getByText("Cari di 7 sumber")).toBeTruthy();
     expect(screen.getByText("Baca komentar teratas")).toBeTruthy();
+    expect(screen.getByText(/Balasan pada 3 pos teratas tiap sumber/)).toBeTruthy();
+    expect(screen.queryByText(/paling disukai ikut diambil/)).toBeNull();
   });
 
   it("keeps the AI summary, quote, and question copy when answers are enabled", () => {

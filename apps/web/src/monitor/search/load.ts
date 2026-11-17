@@ -273,7 +273,7 @@ export async function loadSearchSnapshot(
               published_at, likes, replies
        from instant_search_comments
        where search_id = $1 and customer_id = $2
-       order by result_id, likes desc nulls last, collected_at`,
+       order by result_id, likes desc nulls last, published_at asc nulls last, collected_at`,
       [searchId, customerId],
     );
     const comments: SnapshotComment[] = commentRows.rows.map((comment) => ({

@@ -264,7 +264,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
             {
               icon: MessageSquareText,
               title: "Baca komentar teratas",
-              body: "Balasan paling disukai ikut diambil, karena reaksi orang sering ada di komentar.",
+              body: "Balasan pada 3 pos teratas tiap sumber ikut diambil. Kartu menampilkan sampai 3 balasan; sisanya hanya angka.",
             },
             ...(aiEnabled
               ? [

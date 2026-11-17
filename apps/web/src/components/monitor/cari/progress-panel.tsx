@@ -4,9 +4,8 @@ import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
 import { elapsedSeconds } from "./snapshot-format";
 
-// Komentar and Ringkasan AI belong to M4/M5. Keep them out of the progress
-// panel until those milestones ship.
-const SHOW_UPCOMING_STEPS = false;
+// Comments ship with this milestone. The AI summary stays hidden until it does.
+const SHOW_COMMENT_STEP = true;
 
 const STATE_LABEL: Record<string, string> = {
   answered: "Selesai",
@@ -166,7 +165,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
           </div>
         </div>
       </div>
-      <ol className={cn("grid border-t border-border", SHOW_UPCOMING_STEPS && "sm:grid-cols-3")}>
+      <ol className={cn("grid border-t border-border", SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
         <li className="flex items-center gap-3 px-5 py-3.5">
           <span
             className={cn(
@@ -183,27 +182,16 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
             </p>
           </div>
         </li>
-        {SHOW_UPCOMING_STEPS ? (
-          <>
-            <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-              <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-                2
-              </span>
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">Komentar</p>
-                <p className="text-[11.5px] text-muted-foreground">Menunggu · ambil balasan teratas</p>
-              </div>
-            </li>
-            <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-              <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-                3
-              </span>
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
-                <p className="text-[11.5px] text-muted-foreground">Menunggu · ±10 detik</p>
-              </div>
-            </li>
-          </>
+        {SHOW_COMMENT_STEP ? (
+          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+            <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
+              2
+            </span>
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">Komentar</p>
+              <p className="text-[11.5px] text-muted-foreground">Menunggu · ambil balasan teratas</p>
+            </div>
+          </li>
         ) : null}
       </ol>
     </section>

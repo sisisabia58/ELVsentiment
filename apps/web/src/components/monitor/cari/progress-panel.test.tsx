@@ -70,7 +70,8 @@ describe("ProgressPanel", () => {
     expect(screen.getByText(/4\/8/)).toBeTruthy();
     expect(screen.queryByText(/kredit/)).toBeNull();
     expect(screen.getByText(/43 hasil/)).toBeTruthy();
-    expect(screen.queryByText("Komentar")).toBeNull();
+    expect(screen.getByText("Komentar")).toBeTruthy();
+    expect(screen.getByText("Menunggu · ambil balasan teratas")).toBeTruthy();
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
   });
 

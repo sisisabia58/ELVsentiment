@@ -63,6 +63,32 @@ const comments = {
 };
 
 describe("ResultsList", () => {
+  it("shows at most three top replies and the remaining count", () => {
+    const fourComments = [0, 1, 2, 3].map((index) => ({
+      id: `c${index}`,
+      resultId: "r1",
+      platform: "threads",
+      externalId: `c-${index}`,
+      authorName: "Rina",
+      authorHandle: "rina",
+      text: `balasan ${index}`,
+      publishedAt: "2026-11-12T10:00:00Z",
+      likes: 10 - index,
+      replies: 0,
+    }));
+    render(
+      <ResultsList
+        results={[result({ id: "r1", replies: 4 })]}
+        commentsByResult={{ r1: fourComments }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getAllByText(/▲/)).toHaveLength(3);
+    expect(screen.getByText("1 balasan lainnya")).toBeTruthy();
+    expect(screen.getByLabelText(/contoh balasan/i)).toBeTruthy();
+    expect(screen.queryByText("4 hasil")).toBeNull();
+  });
+
   it("shows engagement, thumbnail, top replies, and an undated label", () => {
     const datedPost = result({
       id: "r1",

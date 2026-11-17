@@ -44,7 +44,7 @@ function ResultCard(props: {
 }) {
   const result = props.result;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const comments = props.comments.slice(0, 2);
+  const comments = props.comments.slice(0, 3);
   function checkThumbnail(image: HTMLImageElement | null) {
     if (image?.complete && image.naturalWidth === 0) setThumbnailFailed(true);
   }
@@ -102,7 +102,10 @@ function ResultCard(props: {
         </div>
       </div>
       {comments.length > 0 ? (
-        <div className="mt-3 rounded-lg border border-border bg-surface-subtle/60">
+        <div
+          className="mt-3 rounded-lg border border-border bg-surface-subtle/60"
+          aria-label="Contoh balasan teratas, bukan semua komentar"
+        >
           <p className="flex items-center gap-1.5 px-3 pt-2.5 text-[11px] font-semibold tracking-wide text-muted-foreground">
             <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
             BALASAN TERATAS
