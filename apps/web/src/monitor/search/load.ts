@@ -91,7 +91,7 @@ export type SnapshotQuestion = {
   question: string;
   status: string;
   answer: string | null;
-  citations: unknown;
+  citations: string[];
   createdAt: string;
   answeredAt: string | null;
 };
@@ -121,6 +121,12 @@ function iso(value: string | Date | null | undefined): string | null {
   if (value instanceof Date) return value.toISOString();
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function citationIds(value: unknown): string[] {
+  const parsed = json(value);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((item): item is string => typeof item === "string");
 }
 
 function json(value: unknown): unknown {
@@ -339,7 +345,7 @@ export async function loadSearchSnapshot(
       question: question.question,
       status: question.status,
       answer: question.answer,
-      citations: json(question.citations),
+      citations: citationIds(question.citations),
       createdAt: iso(question.created_at) ?? new Date(0).toISOString(),
       answeredAt: iso(question.answered_at),
     }));
