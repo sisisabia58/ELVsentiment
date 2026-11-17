@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import logging
 import threading
 import time
 import uuid
@@ -610,15 +611,84 @@ def test_comment_failure_keeps_the_posts_and_the_search_status(db):
     assert charged == 15
 
 
-def test_comment_calls_do_not_start_after_the_search_deadline(db, monkeypatch):
+def test_slow_source_does_not_block_comments_for_fast_platforms(db, monkeypatch, caplog):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
+    caplog.set_level(logging.INFO, logger="sentiment_monitor.instant_search")
+    calls: list[str] = []
+
+    def fetcher(platform, *args, **kwargs):
+        del args, kwargs
+        if platform == "reddit":
+            time.sleep(0.35)
+        return PlatformFetch(platform, "scrapeatlas", [post(platform, f"{platform}-1")], [], "answered", "ok", 10)
+
+    def comment_fetch(platform, item, **kwargs):
+        del item, kwargs
+        calls.append(platform)
+        return CommentFetch(
+            post_id=platform,
+            comments=[canonical_comment(platform)],
+            call=RouteCall("scrapeatlas", platform, "comments", "success", 200, 1, 20, 5, "ok"),
+            state="answered",
+            safe_detail="ok",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings={
+            "threads": DEFAULT_SETTINGS["threads"],
+            "reddit": DEFAULT_SETTINGS["reddit"],
+            "comments": DEFAULT_SETTINGS["comments"],
+        },
+        fetcher=fetcher,
+        comment_fetcher=comment_fetch,
+        deadline_seconds=0.12,
+    )
+    assert calls == ["threads"]
+    threads = db.execute(
+        "select state, result_count from instant_search_sources where search_id=%s and platform='threads'",
+        (job.id,),
+    )[0]
+    reddit = db.execute(
+        "select state, safe_detail, result_count from instant_search_sources where search_id=%s and platform='reddit'",
+        (job.id,),
+    )[0]
+    assert threads["state"] == "answered"
+    assert threads["result_count"] == 1
+    assert reddit["state"] == "unavailable"
+    assert reddit["safe_detail"] == "deadline"
+    assert reddit["result_count"] == 0
+    assert db.execute(
+        "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
+    )[0]["n"] == 1
+    search = db.execute(
+        "select status, error_code, comment_status from instant_searches where id=%s", (job.id,)
+    )[0]
+    assert search["status"] == "partial"
+    assert search["error_code"] is None
+    assert search["comment_status"] == "done"
+    text = caplog.text
+    assert "platform=threads" in text
+    assert "state=answered" in text
+    assert "platform=reddit" in text
+    assert "detail=deadline" in text
+    assert "comments_calls=1" in text
+    assert "comment_status=done" in text
+    assert "barayam" not in text
+
+
+def test_comment_calls_do_not_start_after_the_comment_budget(db, monkeypatch):
     monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     reads = {"n": 0}
     calls: list[str] = []
 
     def clock() -> float:
         reads["n"] += 1
-        # The first reads capture the deadline and drain the post routes.
-        # Later reads are past that deadline, so no comment call may start.
+        # The first reads capture the source deadline and drain the post routes.
+        # Later reads are past the comment budget as well, so no comment call starts.
         return 0.0 if reads["n"] <= 2 else 100.0
 
     def comment_fetch(platform, post, **kwargs):

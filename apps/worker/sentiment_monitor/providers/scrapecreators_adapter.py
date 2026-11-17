@@ -119,18 +119,23 @@ def fetch_scrapecreators_platform(
     api_key: str,
     collected_at: str,
     opener: Callable[..., Any] = safe_urlopen,
+    timeout: float | None = None,
 ) -> PlatformFetch:
     fetcher = _FETCHERS.get(platform)
     if fetcher is None:
         raise ValueError("unsupported_platform")
     started = time.monotonic()
     try:
+        extra: dict[str, Any] = {}
+        if platform == "instagram" and timeout is not None:
+            extra["timeout"] = timeout
         payload = fetcher(
             str(keyword),
             api_key,
             collected_at,
             intent=getattr(keyword, "intent", "phrase"),
             opener=opener,
+            **extra,
         )
     except ScrapeCreatorsError as error:
         latency_ms = int((time.monotonic() - started) * 1000)

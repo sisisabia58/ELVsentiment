@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
+import logging
 import os
 import re
 import time
@@ -42,13 +43,32 @@ MIN_LAUNCH_SECONDS = 8.0
 # One comment page for each of the top posts on the six comment-capable platforms.
 TOP_POSTS_FOR_COMMENTS = 3
 MAX_COMMENT_CALLS = TOP_POSTS_FOR_COMMENTS * 6
-# A comment call that cannot finish inside the search deadline is not started.
+# A comment call that cannot finish inside the comment budget is not started.
 MIN_COMMENT_SECONDS = 1.0
+# Sources may use the search deadline. Comments get this extra slice afterwards
+# so one slow source cannot starve every other platform's replies.
+COMMENT_BUDGET_SECONDS = 12.0
 # Seven launch platforms: one search's routes must fit in a single wave.
 MAX_CONCURRENCY = 7
 MAX_INFLIGHT = 8
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
+
+_log = logging.getLogger("sentiment_monitor.instant_search")
+_LOG_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def _info(search_id: str, **fields: object) -> None:
+    """One safe line. Values that are not short tokens are dropped."""
+    parts = [f"search={search_id}"]
+    for key, value in fields.items():
+        if not isinstance(key, str) or not _LOG_TOKEN.fullmatch(key):
+            continue
+        text = str(value)
+        if not _LOG_TOKEN.fullmatch(text):
+            continue
+        parts.append(f"{key}={text}")
+    _log.info(" ".join(parts))
 
 CLAIM_SQL = """
 select id, customer_id, query_text, keyword_intent, date_window, sort_mode,
@@ -638,7 +658,7 @@ def _handle_result(
                 )
             )
             all_posts.extend(kept)
-            return
+            return kept
         if state == "unavailable":
             tx.run(
                 lambda conn: set_source_state(
@@ -653,7 +673,7 @@ def _handle_result(
                     safe_detail=detail,
                 )
             )
-            return
+            return []
         tx.run(
             lambda conn: set_source_state(
                 conn,
@@ -667,6 +687,7 @@ def _handle_result(
                 safe_detail=detail,
             )
         )
+        return []
     except Exception:
         _mark_source_failed(
             tx,
@@ -677,6 +698,30 @@ def _handle_result(
             credits=credits,
             attempted=attempted,
         )
+    return []
+
+
+def _set_comment_progress(conn: Any, job: InstantSearchJob, status: str, detail: str | None) -> None:
+    _set_customer(conn, job.customer_id)
+    conn.execute(
+        "update instant_searches set comment_status = %s, comment_detail = %s "
+        "where id = %s and customer_id = %s",
+        (status, detail, job.id, job.customer_id),
+    )
+
+
+def _comment_result_ids(conn: Any, job: InstantSearchJob, platform: str) -> dict[str, str]:
+    rows = conn.execute(
+        """
+        select id, external_id from instant_search_results
+        where search_id = %s and customer_id = %s and platform = %s
+        """,
+        (job.id, job.customer_id, platform),
+    ) or []
+    found: dict[str, str] = {}
+    for row in rows:
+        found[str(_row_value(row, "external_id", 1))] = str(_row_value(row, "id", 0))
+    return found
 
 
 def _remaining_seconds(
@@ -901,11 +946,18 @@ def run_instant_search(
     futures: dict[Any, tuple[str, tuple[str, ...]]] = {}
     all_posts: list[CanonicalPost] = []
     pending: set[Any] = set()
+    comment_futures: dict[Any, tuple[str, str]] = {}
     try:
         # The row's own deadline_at is the budget, not a fresh 40 s from claim
         # time: a search claimed late must still finish by its promised time.
         remaining = _remaining_seconds(job, deadline_seconds, datetime.now(timezone.utc))
-        comment_deadline: float | None = None
+        comment_calls = 0
+        comment_rows = 0
+        skip_reasons: list[str] = []
+        comment_running = False
+        commented_platforms: set[str] = set()
+        if comment_fetcher is None:
+            comment_fetcher = _default_comment_fetcher(env, None)
         if remaining < MIN_LAUNCH_SECONDS:
             for platform, chain in sources:
                 tx.run(
@@ -919,6 +971,8 @@ def run_instant_search(
                         safe_detail="deadline",
                     )
                 )
+                _info(job.id, platform=platform, state="unavailable", results=0, latency_ms=0, detail="deadline")
+            skip_reasons.append("comment_budget")
         else:
             for platform, chain in sources:
                 tx.run(
@@ -938,10 +992,92 @@ def run_instant_search(
                 )
                 futures[future] = (platform, chain)
             pending = set(futures)
-            deadline = clock() + remaining
-            comment_deadline = deadline
+            # One clock read establishes both budgets. Comments keep a slice
+            # after the source deadline; they are not limited by it.
+            source_deadline = clock() + remaining
+            comment_deadline = source_deadline + COMMENT_BUDGET_SECONDS
+
+            def _schedule_comments(platform: str, posts: list[CanonicalPost]) -> None:
+                nonlocal comment_calls, comment_running
+                if platform in commented_platforms:
+                    return
+                commented_platforms.add(platform)
+                if resolve_chain(platform, settings, mode="comments") == ():
+                    skip_reasons.append("no_provider")
+                    _info(job.id, platform=platform, comments="skipped", reason="no_provider")
+                    return
+                if not posts:
+                    skip_reasons.append("no_posts")
+                    _info(job.id, platform=platform, comments="skipped", reason="no_posts")
+                    return
+                if comment_deadline - clock() < MIN_COMMENT_SECONDS:
+                    skip_reasons.append("comment_budget")
+                    _info(job.id, platform=platform, comments="skipped", reason="comment_budget")
+                    return
+                ranked_posts = sorted(
+                    posts,
+                    key=lambda item: (item.views or 0) + 3 * (item.likes or 0) + 2 * (item.replies or 0) + 2 * (item.shares or 0),
+                    reverse=True,
+                )[:TOP_POSTS_FOR_COMMENTS]
+                ids = tx.run(lambda conn: _comment_result_ids(conn, job, platform))
+                started = 0
+                for post in ranked_posts:
+                    if comment_calls >= MAX_COMMENT_CALLS:
+                        skip_reasons.append("call_cap")
+                        break
+                    result_id = ids.get(post.external_id)
+                    if not result_id:
+                        continue
+                    left = comment_deadline - clock()
+                    if left < MIN_COMMENT_SECONDS:
+                        skip_reasons.append("comment_budget")
+                        break
+                    timeout = max(1, min(ROUTE_TIMEOUT_SECONDS, int(left)))
+                    future = executor.submit(
+                        comment_fetcher,
+                        platform,
+                        post,
+                        settings=settings,
+                        env=env,
+                        timeout=timeout,
+                    )
+                    comment_futures[future] = (platform, result_id)
+                    comment_calls += 1
+                    started += 1
+                if started and not comment_running:
+                    tx.run(lambda conn: _set_comment_progress(conn, job, "running", None))
+                    comment_running = True
+                _info(job.id, platform=platform, comments="started", calls=started)
+
+            def _drain_comments(done: set[Any]) -> None:
+                nonlocal comment_rows
+                for future in done:
+                    meta = comment_futures.pop(future, None)
+                    if meta is None:
+                        continue
+                    platform, result_id = meta
+                    try:
+                        fetched = future.result()
+                    except Exception:
+                        _info(job.id, platform=platform, comments="failed", reason="error")
+                        continue
+                    try:
+                        def _store(conn: Any, result_id: str = result_id, fetched: Any = fetched) -> int:
+                            call = getattr(fetched, "call", None)
+                            if call is not None:
+                                record_call(conn, job, call)
+                            return insert_comments(
+                                conn, job, result_id, getattr(fetched, "comments", None) or []
+                            )
+
+                        comment_rows += int(tx.run(_store) or 0)
+                    except Exception:
+                        if tx.shared is not None:
+                            _rollback_quiet(tx.shared)
+                        _info(job.id, platform=platform, comments="failed", reason="storage")
+
             while pending:
-                left = deadline - clock()
+                left = source_deadline - clock()
                 if left <= 0:
                     break
                 done, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
@@ -953,13 +1089,28 @@ def run_instant_search(
                         result = future.result()
                     except Exception:
                         tx.run(lambda conn, platform=platform, chain=chain: _failed_state(conn, job, platform, chain))
+                        _info(job.id, platform=platform, state="failed", results=0, latency_ms=0, detail="other")
                         continue
                     try:
-                        _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
+                        kept = _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
                     except Exception:
                         # Belt and braces: _handle_result isolates itself, but one
                         # platform must never abort the remaining done futures.
                         _mark_source_failed(tx, job, platform, chain)
+                        kept = []
+                    state = getattr(result, "state", "failed")
+                    _info(
+                        job.id,
+                        platform=platform,
+                        state=state,
+                        results=len(kept or []),
+                        latency_ms=getattr(result, "latency_ms", None) or 0,
+                        detail=getattr(result, "safe_detail", None) or "other",
+                    )
+                    _schedule_comments(platform, kept or [])
+                ready = {item for item in comment_futures if item.done()}
+                if ready:
+                    _drain_comments(ready)
             for future in pending:
                 platform, chain = futures[future]
                 # A route that finishes after the deadline was still paid for.
@@ -981,46 +1132,58 @@ def run_instant_search(
                         safe_detail="deadline",
                     )
                 )
-        # Finish first: a straggler route must not hold the search in
-        # 'searching' past its deadline while we join its thread.
+                _info(job.id, platform=platform, state="unavailable", results=0, latency_ms=0, detail="deadline")
+            while comment_futures:
+                left = comment_deadline - clock()
+                if left <= 0:
+                    break
+                done, _rest = wait(set(comment_futures), timeout=left, return_when=FIRST_COMPLETED)
+                if not done:
+                    break
+                _drain_comments(done)
+            for future in list(comment_futures):
+                if tx.factory:
+                    future.add_done_callback(
+                        lambda done, job=job: _record_late_calls(connect, job, done)
+                    )
+                future.cancel()
         ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
         tx.run(lambda conn: _apply_ranks(conn, job, ranked))
-
-        def _comments_still_fit() -> bool:
-            if comment_deadline is None:
-                return False
-            return comment_deadline - clock() >= MIN_COMMENT_SECONDS
-
-        def _comment_seconds_left() -> float:
-            if comment_deadline is None:
-                return 0
-            return comment_deadline - clock()
-
+        if comment_rows:
+            comment_status, comment_detail = "done", "ok"
+        elif comment_calls:
+            comment_status, comment_detail = "skipped", "calls_failed"
+        elif "comment_budget" in skip_reasons:
+            comment_status, comment_detail = "skipped", "comment_budget"
+        elif "no_posts" in skip_reasons:
+            comment_status, comment_detail = "skipped", "no_posts"
+        elif "no_provider" in skip_reasons:
+            comment_status, comment_detail = "skipped", "no_provider"
+        else:
+            comment_status, comment_detail = "skipped", "no_posts"
         try:
-            tx.run(
-                lambda conn: fetch_top_comments(
-                    conn,
-                    job,
-                    settings=settings,
-                    env=env,
-                    comment_fetcher=comment_fetcher,
-                    allow_call=_comments_still_fit,
-                    seconds_left=_comment_seconds_left,
-                )
-            )
+            tx.run(lambda conn: _set_comment_progress(conn, job, comment_status, comment_detail))
         except Exception:
             if tx.shared is not None:
                 _rollback_quiet(tx.shared)
+        _info(
+            job.id,
+            comments_calls=comment_calls,
+            comments_inserted=comment_rows,
+            comment_status=comment_status,
+            comment_detail=comment_detail,
+        )
         tx.run(lambda conn: finish_search(conn, job, "failed"))
     finally:
         # cancel() cannot stop a task that already started. Wait only for the
         # per-route bound, then stop waiting entirely: late results are
         # discarded and must not hold the worker thread hostage.
-        for future in pending:
+        stragglers = set(pending) | set(comment_futures)
+        for future in stragglers:
             future.cancel()
         still_running: set[Any] = set()
-        if pending:
-            _, still_running = wait(pending, timeout=ROUTE_TIMEOUT_SECONDS)
+        if stragglers:
+            _, still_running = wait(stragglers, timeout=ROUTE_TIMEOUT_SECONDS)
         # Join the pool only when every straggler has already finished. A route
         # that is still hung must not hold shutdown (or the worker) hostage.
         executor.shutdown(wait=not still_running, cancel_futures=True)

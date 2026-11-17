@@ -1,5 +1,6 @@
 import io
 import json
+import time
 
 import pytest
 
@@ -500,12 +501,12 @@ def test_instagram_hashtag_page2_failure_preserves_page1_counts_and_credits():
             return Response("{not-json")
         return Response(json.dumps(page1))
 
-    with pytest.raises(ScrapeCreatorsError) as caught:
-        fetch_instagram_mentions("#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
-    error = caught.value
-    assert error.code == "malformed_json"
-    assert error.credits_charged == 2
-    assert error.counts == {"returned": 10, "parsed": 10, "deduplicated": 0}
+    result = fetch_instagram_mentions("#kopi", "key", "2026-11-08T00:00:00Z", intent="hashtag", opener=opener)
+    assert result["credits_charged"] == 2
+    assert result["counts"]["returned"] == 10
+    assert result["counts"]["parsed"] == 10
+    assert result["mentions"]
+    assert any(event["route"] == "instagram.hashtag_page2" and event["outcome"] == "failed" for event in result["route_events"])
 
 
 def test_instagram_drops_a_stale_item_only_when_the_route_has_a_window():
@@ -586,15 +587,18 @@ def test_instagram_second_route_failure_preserves_first_route_counts_and_credits
             )
         )
 
-    with pytest.raises(ScrapeCreatorsError) as caught:
-        fetch_instagram_mentions(
-            "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
-        )
-    error = caught.value
-    assert error.code == "http_500"
-    assert error.http_status == 500
-    assert error.credits_charged == 2
-    assert error.counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener
+    )
+    assert [item["external_id"] for item in result["mentions"]] == ["ig-keep"]
+    assert result["credits_charged"] == 2
+    assert result["counts"]["parsed"] == 1
+    events = result["route_events"]
+    assert [(event["route"], event["outcome"]) for event in events] == [
+        ("instagram.reels", "success"),
+        ("instagram.hashtag_from_phrase", "failed"),
+    ]
+    assert "down" not in str(events)
 
 
 class _PaidFailureResponse(io.StringIO):
@@ -755,6 +759,33 @@ def _ig_http_error(url: str, status: int, body: str) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
         url, status, "synthetic", {}, io.BytesIO(body.encode("utf-8"))
     )
+
+
+def test_instagram_hashtag_timeout_keeps_reels_and_skips_the_second_call():
+    seen = []
+
+    def opener(request, timeout=0):
+        seen.append(request.full_url)
+        if "/v2/instagram/reels/search" in request.full_url:
+            time.sleep(0.05)
+            return _StatusResponse(
+                json.dumps(
+                    {
+                        "reels": [{"pk": "ig-keep", "caption": "Kopi", "taken_at": 1794096000}],
+                        "credits_charged": 2,
+                    }
+                ),
+                status=200,
+            )
+        raise AssertionError("hashtag route started after the budget")
+
+    result = fetch_instagram_mentions(
+        "Kopi", "key", "2026-11-08T00:00:00Z", intent="phrase", opener=opener, timeout=0.01,
+    )
+    assert [item["external_id"] for item in result["mentions"]] == ["ig-keep"]
+    assert len(seen) == 1
+    assert result["route_events"][-1]["outcome"] == "failed"
+    assert result["route_events"][-1]["detail"] == "read_timeout"
 
 
 def test_instagram_route_events_cover_failed_then_success():

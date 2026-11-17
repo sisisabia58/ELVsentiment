@@ -159,11 +159,9 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
           Koneksi terputus. Menampilkan hasil terakhir.
         </p>
       ) : null}
-      {running ? (
-        <div className="mt-5">
-          <ProgressPanel snapshot={snapshot} now={now} />
-        </div>
-      ) : null}
+      <div className="mt-5">
+        <ProgressPanel snapshot={snapshot} now={now} />
+      </div>
       {snapshot.results.length > 0 ? (
         <div className="mt-5">
           <ResultsList

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Callable
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
@@ -173,6 +174,34 @@ def _literal_page_count(items: list[dict[str, Any]], keyword: Keyword) -> int:
     )
 
 
+def _mention_payload(
+    collected: list[dict[str, Any]],
+    returned: int | None,
+    parsed_total: int,
+    retained_total: int,
+    credits: list[int | None],
+    http_status: int | None,
+    route_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    mentions = dedupe_mentions(collected)
+    counts = {
+        "returned": returned,
+        "parsed": parsed_total,
+        "deduplicated": retained_total - len(mentions),
+    }
+    dropped = parsed_total - retained_total
+    if dropped > 0:
+        counts["dropped_out_of_window"] = dropped
+    return {
+        "mentions": mentions,
+        "outcome": "success",
+        "counts": counts,
+        "credits_charged": known_credits(credits),
+        "http_status": http_status,
+        "route_events": route_events,
+    }
+
+
 def fetch_instagram_mentions(
     variant: str,
     api_key: str,
@@ -180,8 +209,23 @@ def fetch_instagram_mentions(
     *,
     intent: str | None = None,
     opener: Callable[..., Any] = safe_urlopen,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     keyword = variant if isinstance(variant, Keyword) else Keyword(str(variant), intent or "phrase")
+    started = time.monotonic()
+    raw_opener = opener
+
+    def bounded_opener(request: Any, timeout: float = 30, **kwargs: Any) -> Any:
+        del timeout
+        if fetch_timeout is None:
+            return raw_opener(request, timeout=30, **kwargs)
+        left = fetch_timeout - (time.monotonic() - started)
+        if left <= 0:
+            raise TimeoutError("route_budget")
+        return raw_opener(request, timeout=min(30.0, left), **kwargs)
+
+    fetch_timeout = timeout
+    opener = bounded_opener
     routes = routes_for("instagram", keyword)
     credits: list[int | None] = []
     returned: int | None = None
@@ -193,6 +237,14 @@ def fetch_instagram_mentions(
     page2_cursor: str | None = None
     route_errors: list[ScrapeCreatorsError] = []
     route_events: list[dict[str, Any]] = []
+
+    def keep_collected() -> dict[str, Any] | None:
+        # A later route must not throw away posts an earlier route already kept.
+        if not collected:
+            return None
+        return _mention_payload(
+            collected, returned, parsed_total, retained_total, credits, http_status, route_events
+        )
 
     for route in routes:
         if route.conditional:
@@ -217,6 +269,9 @@ def fetch_instagram_mentions(
                     body_length=getattr(error, "body_length", None),
                 )
             )
+            kept = keep_collected()
+            if kept is not None:
+                return kept
             if credits or returned is not None or parsed_total:
                 raise carry_attempt_context(
                     error,
@@ -254,6 +309,9 @@ def fetch_instagram_mentions(
                 detail=error.code,
                 body_length=getattr(error, "body_length", None),
             )
+            kept = keep_collected()
+            if kept is not None:
+                return kept
             raise carry_attempt_context(
                 error,
                 credits,
@@ -294,8 +352,6 @@ def fetch_instagram_mentions(
                 for item in normalized_items
                 if within_overlap(item["posted_at"], collected_at, route)
             ]
-            retained_total += len(retained_items)
-            collected.extend(retained_items)
         except Exception as error:
             route_events[-1] = route_event(
                 route.id,
@@ -325,6 +381,9 @@ def fetch_instagram_mentions(
                 detail="malformed_posts",
                 body_length=getattr(payload, "body_length", None),
             )
+            kept = keep_collected()
+            if kept is not None:
+                return kept
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
@@ -333,6 +392,8 @@ def fetch_instagram_mentions(
                 body_length=getattr(payload, "body_length", None),
                 route_events=route_events,
             )
+        retained_total += len(retained_items)
+        collected.extend(retained_items)
 
         if route.id == "instagram.hashtag":
             cursor = payload.get("cursor")
@@ -381,6 +442,9 @@ def fetch_instagram_mentions(
                     body_length=getattr(error, "body_length", None),
                 )
             )
+            kept = keep_collected()
+            if kept is not None:
+                return kept
             raise carry_attempt_context(
                 error,
                 credits,
@@ -413,6 +477,9 @@ def fetch_instagram_mentions(
                 detail=error.code,
                 body_length=getattr(error, "body_length", None),
             )
+            kept = keep_collected()
+            if kept is not None:
+                return kept
             raise carry_attempt_context(
                 error,
                 credits,
@@ -453,8 +520,6 @@ def fetch_instagram_mentions(
                 for item in normalized_items
                 if within_overlap(item["posted_at"], collected_at, page2_route)
             ]
-            retained_total += len(retained_items)
-            collected.extend(retained_items)
         except Exception as error:
             route_events[-1] = route_event(
                 page2_route.id,
@@ -484,6 +549,9 @@ def fetch_instagram_mentions(
                 detail="malformed_posts",
                 body_length=getattr(payload, "body_length", None),
             )
+            kept = keep_collected()
+            if kept is not None:
+                return kept
             raise ScrapeCreatorsError(
                 "malformed_posts",
                 http_status=http_status,
@@ -492,21 +560,9 @@ def fetch_instagram_mentions(
                 body_length=getattr(payload, "body_length", None),
                 route_events=route_events,
             )
+        retained_total += len(retained_items)
+        collected.extend(retained_items)
 
-    mentions = dedupe_mentions(collected)
-    counts = {
-        "returned": returned,
-        "parsed": parsed_total,
-        "deduplicated": retained_total - len(mentions),
-    }
-    dropped = parsed_total - retained_total
-    if dropped > 0:
-        counts["dropped_out_of_window"] = dropped
-    return {
-        "mentions": mentions,
-        "outcome": "success",
-        "counts": counts,
-        "credits_charged": known_credits(credits),
-        "http_status": http_status,
-        "route_events": route_events,
-    }
+    return _mention_payload(
+        collected, returned, parsed_total, retained_total, credits, http_status, route_events
+    )

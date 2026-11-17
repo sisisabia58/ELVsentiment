@@ -171,7 +171,7 @@ describe("SearchDetail", () => {
     const done = finishedSnapshot();
     done.totals = { sources: 8, done: 7, results: 2 };
     render(<SearchDetail initialSnapshot={done} />);
-    expect(screen.getByText(/2 hasil/)).toBeTruthy();
+    expect(screen.getAllByText(/2 hasil/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/kredit/)).toBeNull();
   });
 

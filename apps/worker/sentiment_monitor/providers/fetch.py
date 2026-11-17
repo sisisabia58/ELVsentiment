@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import time
 from typing import Any, Callable, Mapping
 import os
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
@@ -62,6 +63,7 @@ def _dispatch(
     collected_at: str,
     date_window_days: int | None,
     opener: Callable[..., Any],
+    timeout: float | None = None,
 ) -> PlatformFetch:
     if provider == "scrapecreators":
         return fetch_scrapecreators_platform(
@@ -70,6 +72,7 @@ def _dispatch(
             api_key=api_key,
             collected_at=collected_at,
             opener=opener,
+            timeout=timeout,
         )
     if provider == "scrapeatlas":
         fetcher = _SCRAPEATLAS_FETCHERS.get(platform)
@@ -151,9 +154,14 @@ def fetch_platform(
         )
     effective_opener = opener
     if timeout is not None:
-        def effective_opener(request, **kwargs):
-            kwargs["timeout"] = timeout
-            return opener(request, **kwargs)
+        budget_end = time.monotonic() + float(timeout)
+
+        def effective_opener(request, timeout=None, **kwargs):
+            left = budget_end - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("route_budget")
+            chosen = left if timeout is None else min(float(timeout), left)
+            return opener(request, timeout=max(0.001, chosen), **kwargs)
 
     common = {
         "platform": platform,
@@ -165,7 +173,7 @@ def fetch_platform(
     if primary is not None:
         result = primary(api_key=first_key, **common)
     else:
-        result = _dispatch(first, api_key=first_key, **common)
+        result = _dispatch(first, api_key=first_key, timeout=timeout, **common)
     result = replace(result, attempted_providers=(first,))
     if (
         len(chain) < 2
@@ -190,7 +198,7 @@ def fetch_platform(
     if fallback is not None:
         fallback_result = fallback(api_key=second_key, **common)
     else:
-        fallback_result = _dispatch(second, api_key=second_key, **common)
+        fallback_result = _dispatch(second, api_key=second_key, timeout=timeout, **common)
     return replace(
         fallback_result,
         calls=list(result.calls) + list(fallback_result.calls),

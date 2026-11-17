@@ -1426,8 +1426,14 @@ def _counter_value(row) -> int:
 
 
 if __name__ == "__main__":
+    import logging
     import time
     import psycopg
+
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     from sentiment_monitor.limits import load_limits
     from sentiment_monitor.paths import repo_root
 

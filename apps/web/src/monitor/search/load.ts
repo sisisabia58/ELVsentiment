@@ -27,6 +27,8 @@ export type SnapshotSearch = {
   summaryStatus: string;
   overallStance: string | null;
   errorCode: string | null;
+  commentStatus?: string;
+  commentDetail?: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -159,12 +161,15 @@ export async function loadSearchSnapshot(
       summary_status: string;
       overall_stance: string | null;
       error_code: string | null;
+      comment_status: string;
+      comment_detail: string | null;
       created_at: string | Date;
       started_at: string | Date | null;
       finished_at: string | Date | null;
     }>(
       `select id, query_text, keyword_intent, date_window, sort_mode, language_filter,
               status, summary_status, overall_stance, error_code,
+              comment_status, comment_detail,
               created_at, started_at, finished_at
        from instant_searches
        where id = $1 and customer_id = $2`,
@@ -353,6 +358,8 @@ export async function loadSearchSnapshot(
         summaryStatus: row.summary_status,
         overallStance: row.overall_stance,
         errorCode: row.error_code,
+        commentStatus: row.comment_status,
+        commentDetail: row.comment_detail,
         createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
         startedAt: iso(row.started_at),
         finishedAt: iso(row.finished_at),
