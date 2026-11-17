@@ -22,6 +22,7 @@ from sentiment_monitor.instant_search import (
     set_source_state,
 )
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
+from sentiment_monitor.providers.comments import CommentFetch
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
 from sentiment_monitor.providers.fetch import fetch_platform
 from sentiment_monitor.providers.fixtures import fixture_comment_fetch, fixture_platform_fetch
@@ -461,14 +462,20 @@ def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monke
     )
     assert len(sources) == 7
     assert all(row["state"] == "answered" for row in sources)
-    assert all(row["result_count"] > 0 for row in sources)
+    assert all(row["result_count"] == 3 for row in sources)
     assert all(row["credits_charged"] == 0 for row in sources)
     ranks = db.execute(
         "select rank from instant_search_results where search_id=%s order by rank", (job.id,)
     )
     assert [row["rank"] for row in ranks] == list(range(1, len(ranks) + 1))
     ledger = db.execute("select count(*) as n from search_credit_ledger where search_id=%s", (job.id,))[0]["n"]
-    assert ledger == 7
+    # Seven search routes, plus one comment page for each of the top three posts
+    # on the six comment-capable platforms. Fixture calls charge nothing, and
+    # comment rows are not part of result_count.
+    assert ledger == 25
+    assert db.execute(
+        "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
+    )[0]["n"] == 36
 
 
 def test_runner_applies_date_window_and_keeps_undated_last(db):
@@ -502,6 +509,141 @@ def test_runner_applies_date_window_and_keeps_undated_last(db):
     )
     assert [row["external_id"] for row in rows] == ["new", "undated"]
     assert [row["rank"] for row in rows] == [1, 2]
+
+
+def canonical_comment(external_id: str) -> CanonicalComment:
+    return CanonicalComment(
+        external_id=f"c-{external_id}",
+        text="kriuk",
+        author_name="rina",
+        author_handle="@rina",
+        published_at=None,
+        likes=1,
+        replies=0,
+        source_provider="scrapeatlas",
+        raw_ref=f"fixture:comment:{external_id}",
+    )
+
+
+def fixture_fetcher(platform, keyword, settings, **kwargs):
+    del settings
+    return fixture_platform_fetch(
+        platform,
+        keyword,
+        collected_at=kwargs["collected_at"],
+        date_window_days=kwargs.get("date_window_days"),
+    )
+
+
+def test_runner_fetches_comments_for_at_most_three_posts_per_platform(db):
+    calls: list[str] = []
+
+    def comment_fetch(platform, post, **kwargs):
+        del kwargs
+        calls.append(platform)
+        return CommentFetch(
+            post_id=post.external_id,
+            comments=[canonical_comment(post.external_id)],
+            call=RouteCall("scrapeatlas", platform, "comments", "success", 200, 1, 100, 10, "ok"),
+            state="answered",
+            safe_detail="ok",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(),
+        fetcher=fixture_fetcher,
+        comment_fetcher=comment_fetch,
+    )
+    rows = db.execute(
+        "select platform, count(*) as n from instant_search_comments group by platform"
+    )
+    assert rows
+    assert all(row["n"] <= 3 for row in rows)
+    assert len(calls) <= 18
+    assert len(calls) == 18
+    assert "linkedin" not in calls
+    posts = db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s", (job.id,)
+    )[0]["n"]
+    assert posts == 21
+    ledger = db.execute(
+        "select count(*) as n from search_credit_ledger where search_id=%s and route='comments'",
+        (job.id,),
+    )[0]["n"]
+    assert ledger == 18
+
+
+def test_comment_failure_keeps_the_posts_and_the_search_status(db):
+    def comment_fetch(platform, post, **kwargs):
+        del kwargs
+        if platform == "youtube":
+            raise RuntimeError("comments down")
+        return CommentFetch(
+            post_id=post.external_id,
+            comments=[],
+            call=RouteCall("scrapeatlas", platform, "comments", "failed", 500, 1, 10, 5, "http_500"),
+            state="failed",
+            safe_detail="http_500",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(),
+        fetcher=fixture_fetcher,
+        comment_fetcher=comment_fetch,
+    )
+    status = db.execute("select status from instant_searches where id=%s", (job.id,))[0]["status"]
+    assert status == "succeeded"
+    youtube = db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s and platform='youtube'",
+        (job.id,),
+    )[0]["n"]
+    assert youtube == 3
+    charged = db.execute(
+        "select coalesce(sum(credits_charged), 0) as n from search_credit_ledger "
+        "where search_id=%s and route='comments'",
+        (job.id,),
+    )[0]["n"]
+    assert charged == 15
+
+
+def test_comment_calls_do_not_start_after_the_search_deadline(db, monkeypatch):
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
+    reads = {"n": 0}
+    calls: list[str] = []
+
+    def clock() -> float:
+        reads["n"] += 1
+        # The first reads capture the deadline and drain the post routes.
+        # Later reads are past that deadline, so no comment call may start.
+        return 0.0 if reads["n"] <= 2 else 100.0
+
+    def comment_fetch(platform, post, **kwargs):
+        del post, kwargs
+        calls.append(platform)
+        raise AssertionError("comment call started after the deadline")
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(),
+        fetcher=fixture_fetcher,
+        comment_fetcher=comment_fetch,
+        clock=clock,
+        deadline_seconds=1,
+    )
+    assert calls == []
+    stored = db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s", (job.id,)
+    )[0]["n"]
+    comments = db.execute(
+        "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
+    )[0]["n"]
+    assert stored >= 1
+    assert comments == 0
 
 
 def test_runner_passes_the_route_timeout_to_each_fetch(db):

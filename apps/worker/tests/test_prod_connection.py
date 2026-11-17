@@ -1067,6 +1067,14 @@ def _n1b_run(
         lambda conn: instant_search.claim_instant_search(conn, "qa")
     )
     assert job is not None
+    def comment_fetch(platform, post, **kwargs):
+        del platform, kwargs
+        from sentiment_monitor.providers.comments import CommentFetch
+
+        # This case proves date handling. Comment pages stay on the fake opener
+        # path and must not place a live provider call.
+        return CommentFetch(str(getattr(post, "external_id", "") or ""), [], None, "unavailable", "missing_key")
+
     instant_search._run_job_safely(
         prod_db.connect,
         job,
@@ -1075,6 +1083,7 @@ def _n1b_run(
             "now": datetime.now(timezone.utc),
             "settings": settings,
             "fetcher": fetcher,
+            "comment_fetcher": comment_fetch,
             "deadline_seconds": instant_search.SEARCH_DEADLINE_SECONDS,
         },
     )

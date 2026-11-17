@@ -151,6 +151,7 @@ def fetch_comments(
     settings: Mapping[str, ProviderSetting],
     env: Mapping[str, Any],
     opener: Callable[..., Any] = safe_urlopen,
+    timeout: int = 20,
 ) -> CommentFetch:
     post_id = str(post.external_id or "")
     path = COMMENT_ENDPOINTS.get(platform)
@@ -169,7 +170,7 @@ def fetch_comments(
     route_id = f"scrapeatlas.{platform}.comments"
     started = time.monotonic()
     try:
-        payload = fetch_scrapeatlas_json(path, params, api_key, opener=opener)
+        payload = fetch_scrapeatlas_json(path, params, api_key, opener=opener, timeout=timeout)
     except ScrapeAtlasError as error:
         latency_ms = int((time.monotonic() - started) * 1000)
         call = RouteCall(

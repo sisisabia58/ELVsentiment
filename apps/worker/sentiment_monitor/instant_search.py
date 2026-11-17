@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
+import os
 import re
 import time
 import uuid
@@ -28,7 +29,9 @@ from sentiment_monitor.providers.canonical import (
     sort_posts,
 )
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
+from sentiment_monitor.providers.comments import fetch_comments
 from sentiment_monitor.providers.fetch import fetch_platform
+from sentiment_monitor.providers.fixtures import fixture_comment_fetch
 from sentiment_monitor.providers.settings import load_provider_settings
 
 ROUTE_TIMEOUT_SECONDS = 20
@@ -36,6 +39,11 @@ SEARCH_DEADLINE_SECONDS = 40
 # Launching a paid route with less budget than this only pays for a result we
 # will immediately mark unavailable. Leave the whole wave unlaunched instead.
 MIN_LAUNCH_SECONDS = 8.0
+# One comment page for each of the top posts on the six comment-capable platforms.
+TOP_POSTS_FOR_COMMENTS = 3
+MAX_COMMENT_CALLS = TOP_POSTS_FOR_COMMENTS * 6
+# A comment call that cannot finish inside the search deadline is not started.
+MIN_COMMENT_SECONDS = 1.0
 # Seven launch platforms: one search's routes must fit in a single wave.
 MAX_CONCURRENCY = 7
 MAX_INFLIGHT = 8
@@ -713,6 +721,154 @@ def _record_late_calls(connect: Any, job: InstantSearchJob, future: Any) -> None
         pass
 
 
+def _iso_db(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(value)
+
+
+def _post_for_comments(row: Any) -> CanonicalPost:
+    return CanonicalPost(
+        platform=str(_row_value(row, "platform", 1)),  # type: ignore[arg-type]
+        external_id=str(_row_value(row, "external_id", 2) or ""),
+        text=str(_row_value(row, "text", 6) or ""),
+        title=_row_value(row, "title", 7),
+        author_name=_row_value(row, "author_name", 3),
+        author_handle=_row_value(row, "author_handle", 4),
+        url=_row_value(row, "url", 5),
+        published_at=_iso_db(_row_value(row, "published_at", 8)),
+        thumbnail_url=_row_value(row, "thumbnail_url", 9),
+        views=_row_value(row, "views", 10),
+        likes=_row_value(row, "likes", 11),
+        replies=_row_value(row, "replies", 12),
+        shares=_row_value(row, "shares", 13),
+        top_replies=(),
+        hashtags=(),
+        source_provider=str(_row_value(row, "source_provider", 14) or "unknown"),
+        routes=(),
+        raw_ref=str(_row_value(row, "raw_ref", 15) or ""),
+        collected_at=_iso_db(_row_value(row, "collected_at", 17)) or "1970-01-01T00:00:00Z",
+    )
+
+
+def _default_comment_fetcher(env: Mapping[str, Any], opener: Any) -> Any:
+    mode = env.get("CARI_PROVIDER_MODE") if isinstance(env, Mapping) else None
+    if not isinstance(mode, str) or not mode.strip():
+        mode = os.environ.get("CARI_PROVIDER_MODE", "live")
+    if mode.strip() == "fixture":
+        return lambda platform, post, **kwargs: fixture_comment_fetch(platform, post)
+
+    def live(platform: str, post: CanonicalPost, **kwargs: Any) -> Any:
+        seconds = kwargs.get("timeout")
+        call_kwargs: dict[str, Any] = {
+            "settings": kwargs["settings"],
+            "env": kwargs.get("env") or env,
+            "timeout": seconds if isinstance(seconds, int) else ROUTE_TIMEOUT_SECONDS,
+        }
+        chosen = kwargs.get("opener") or opener
+        if chosen is not None:
+            call_kwargs["opener"] = chosen
+        return fetch_comments(platform, post, **call_kwargs)
+
+    return live
+
+
+def _rollback_quiet(conn: Any) -> None:
+    rollback = getattr(conn, "rollback", None)
+    if callable(rollback):
+        try:
+            rollback()
+        except Exception:
+            return
+
+
+def fetch_top_comments(
+    conn: Any,
+    job: InstantSearchJob,
+    *,
+    settings: Mapping[str, ProviderSetting],
+    env: Mapping[str, Any],
+    opener: Any = None,
+    comment_fetcher: Any = None,
+    allow_call: Any = None,
+    seconds_left: Any = None,
+) -> None:
+    """Fetch one comment page for the top posts. Never changes the search status."""
+    if allow_call is None:
+        allow_call = lambda: True
+    if not allow_call():
+        return
+    if comment_fetcher is None:
+        comment_fetcher = _default_comment_fetcher(env, opener)
+    rows = conn.execute(
+        """
+        select id, platform, external_id, author_name, author_handle, url, text, title,
+               published_at, thumbnail_url, views, likes, replies, shares,
+               source_provider, raw_ref, rank, collected_at
+        from instant_search_results
+        where search_id = %s and customer_id = %s
+        order by platform,
+                 rank asc nulls last,
+                 (coalesce(views, 0) + 3 * coalesce(likes, 0)
+                  + 2 * coalesce(replies, 0) + 2 * coalesce(shares, 0)) desc,
+                 collected_at desc
+        """,
+        (job.id, job.customer_id),
+    ) or []
+    chosen: list[Any] = []
+    per_platform: dict[str, int] = {}
+    for row in rows:
+        platform = str(_row_value(row, "platform", 1))
+        if resolve_chain(platform, settings, mode="comments") == ():
+            continue
+        count = per_platform.get(platform, 0)
+        if count >= TOP_POSTS_FOR_COMMENTS:
+            continue
+        per_platform[platform] = count + 1
+        chosen.append(row)
+        if len(chosen) >= MAX_COMMENT_CALLS:
+            break
+    for row in chosen:
+        if not allow_call():
+            return
+        platform = str(_row_value(row, "platform", 1))
+        result_id = str(_row_value(row, "id", 0))
+        left = seconds_left() if seconds_left is not None else ROUTE_TIMEOUT_SECONDS
+        timeout = max(1, min(ROUTE_TIMEOUT_SECONDS, int(left)))
+        try:
+            fetched = comment_fetcher(
+                platform,
+                _post_for_comments(row),
+                settings=settings,
+                env=env,
+                opener=opener,
+                timeout=timeout,
+            )
+        except Exception:
+            continue
+        call = getattr(fetched, "call", None)
+        if call is not None:
+            try:
+                record_call(conn, job, call)
+            except Exception:
+                _rollback_quiet(conn)
+                return
+        try:
+            conn.execute("savepoint comment_row")
+            insert_comments(conn, job, result_id, getattr(fetched, "comments", None) or [])
+            conn.execute("release savepoint comment_row")
+        except Exception:
+            try:
+                conn.execute("rollback to savepoint comment_row")
+            except Exception:
+                _rollback_quiet(conn)
+                return
+
+
 def run_instant_search(
     connect: Any,
     job: InstantSearchJob,
@@ -725,7 +881,6 @@ def run_instant_search(
     clock: Any = time.monotonic,
     deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
 ) -> None:
-    del comment_fetcher
     tx = _Transactions(connect)
     if settings is None:
         settings = tx.run(load_provider_settings)
@@ -750,6 +905,7 @@ def run_instant_search(
         # The row's own deadline_at is the budget, not a fresh 40 s from claim
         # time: a search claimed late must still finish by its promised time.
         remaining = _remaining_seconds(job, deadline_seconds, datetime.now(timezone.utc))
+        comment_deadline: float | None = None
         if remaining < MIN_LAUNCH_SECONDS:
             for platform, chain in sources:
                 tx.run(
@@ -783,6 +939,7 @@ def run_instant_search(
                 futures[future] = (platform, chain)
             pending = set(futures)
             deadline = clock() + remaining
+            comment_deadline = deadline
             while pending:
                 left = deadline - clock()
                 if left <= 0:
@@ -828,6 +985,32 @@ def run_instant_search(
         # 'searching' past its deadline while we join its thread.
         ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
         tx.run(lambda conn: _apply_ranks(conn, job, ranked))
+
+        def _comments_still_fit() -> bool:
+            if comment_deadline is None:
+                return False
+            return comment_deadline - clock() >= MIN_COMMENT_SECONDS
+
+        def _comment_seconds_left() -> float:
+            if comment_deadline is None:
+                return 0
+            return comment_deadline - clock()
+
+        try:
+            tx.run(
+                lambda conn: fetch_top_comments(
+                    conn,
+                    job,
+                    settings=settings,
+                    env=env,
+                    comment_fetcher=comment_fetcher,
+                    allow_call=_comments_still_fit,
+                    seconds_left=_comment_seconds_left,
+                )
+            )
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
         tx.run(lambda conn: finish_search(conn, job, "failed"))
     finally:
         # cancel() cannot stop a task that already started. Wait only for the
