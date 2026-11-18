@@ -75,6 +75,25 @@ describe("ProgressPanel", () => {
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
   });
 
+  it("drives the AI step from the summary status", () => {
+    const { rerender } = render(
+      <ProgressPanel
+        snapshot={snapshot({ search: { ...snapshot().search, summaryStatus: "running" } })}
+        aiEnabled
+      />,
+    );
+    expect(screen.getByText("Ringkasan AI")).toBeTruthy();
+    expect(screen.getByText("Menulis ringkasan")).toBeTruthy();
+    rerender(
+      <ProgressPanel
+        snapshot={snapshot({ search: { ...snapshot().search, summaryStatus: "done" } })}
+        aiEnabled
+      />,
+    );
+    expect(screen.getByText("Selesai")).toBeTruthy();
+    expect(screen.queryByText("Menunggu · setelah komentar")).toBeNull();
+  });
+
   it("shows an empty answer and a skipped comment pass distinctly", () => {
     render(
       <ProgressPanel
@@ -159,6 +178,26 @@ describe("ProgressPanel", () => {
 describe("useSearchPoll", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+  });
+
+  it("keeps polling while a finished search is still writing its summary", async () => {
+    const waiting = snapshot({
+      search: { ...snapshot().search, status: "succeeded", summaryStatus: "running" },
+    });
+    const done = snapshot({
+      search: { ...waiting.search, summaryStatus: "done" },
+    });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(done), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHook(() => useSearchPoll(SEARCH_ID, waiting, { intervalMs: 1000 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not poll when the initial search is already finished", async () => {

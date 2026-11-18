@@ -76,7 +76,7 @@ function ResultCard(props: {
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
   return (
-    <article className="border-b border-border pb-4 last:border-b-0 last:pb-0">
+    <article id={`hasil-${result.id}`} className="border-b border-border pb-4 last:border-b-0 last:pb-0">
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <h3 className="line-clamp-4 break-words text-[14.5px] font-semibold leading-6 text-foreground">

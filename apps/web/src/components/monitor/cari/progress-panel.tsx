@@ -115,7 +115,7 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
   );
 }
 
-export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
+export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean }) {
   const snapshot = props.snapshot;
   const now = props.now ?? new Date();
   const done = snapshot.totals.done;
@@ -152,6 +152,19 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
                     : "Dilewati · tidak ada balasan";
   const commentRunning = commentStatus === "running" || (running && !sourcesBusy && commentStatus === "pending");
   const commentDone = commentStatus === "done" || commentCount > 0;
+  const summaryStatus = snapshot.search.summaryStatus ?? "pending";
+  const summaryCopy =
+    summaryStatus === "done"
+      ? "Selesai"
+      : summaryStatus === "running"
+        ? "Menulis ringkasan"
+        : summaryStatus === "failed"
+          ? "Gagal · hasil tetap tampil"
+          : summaryStatus === "skipped"
+            ? "Dilewati"
+            : "Menunggu · setelah komentar";
+  const summaryDone = summaryStatus === "done";
+  const summaryRunning = summaryStatus === "running";
 
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -197,7 +210,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
           </div>
         </div>
       </div>
-      <ol className={cn("grid border-t border-border", SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
+      <ol className={cn("grid border-t border-border", props.aiEnabled ? "sm:grid-cols-3" : SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
         <li className="flex items-center gap-3 px-5 py-3.5">
           <span
             className={cn(
@@ -237,6 +250,32 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
             <div>
               <p className="text-[13px] font-semibold text-foreground">Komentar</p>
               <p className="text-[11.5px] text-muted-foreground">{commentCopy}</p>
+            </div>
+          </li>
+        ) : null}
+        {props.aiEnabled ? (
+          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+            <span
+              className={cn(
+                "grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold",
+                summaryDone
+                  ? "bg-positif-bg text-positif"
+                  : summaryRunning
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-muted-foreground",
+              )}
+            >
+              {summaryDone ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : summaryRunning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                "3"
+              )}
+            </span>
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
+              <p className="text-[11.5px] text-muted-foreground">{summaryCopy}</p>
             </div>
           </li>
         ) : null}
