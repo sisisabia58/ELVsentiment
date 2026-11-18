@@ -92,4 +92,28 @@ describe("AskPanel", () => {
     expect(askQuestionAction).not.toHaveBeenCalled();
     expect(await screen.findByText("Menjawab…")).toBeTruthy();
   });
+
+  it("shows a busy Gemini status instead of an empty failure", () => {
+    render(
+      <AskPanel
+        searchId="s1"
+        questions={[{ ...failedQuestion, safeDetail: "http_503" }]}
+        suggestions={[]}
+      />,
+    );
+    expect(screen.getByText(/Gemini sedang sibuk/)).toBeTruthy();
+    expect(screen.queryByText("Jawaban belum tersedia")).toBeNull();
+  });
+
+  it("still names a failure when no detail was stored", () => {
+    render(
+      <AskPanel
+        searchId="s1"
+        questions={[{ ...failedQuestion, safeDetail: null }]}
+        suggestions={[]}
+      />,
+    );
+    expect(screen.getByText("Jawaban gagal. Coba lagi.")).toBeTruthy();
+    expect(screen.queryByText("Jawaban belum tersedia")).toBeNull();
+  });
 });

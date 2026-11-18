@@ -83,10 +83,9 @@ describe("ConversationBreakdown", () => {
     expect(screen.getByText(/bukan survei/)).toBeTruthy();
   });
 
-  it("links a quote to the result it came from", () => {
+  it("leaves quotes to the summary so the same line is not linked twice", () => {
     const withQuote: SearchSnapshot = {
       ...doneSnapshot,
-      results: [{ ...results[0], id: "r-quote", url: "https://example.invalid/sumber" }],
       ai: {
         ...doneSnapshot.ai!,
         quotes: [
@@ -95,7 +94,7 @@ describe("ConversationBreakdown", () => {
       },
     };
     render(<ConversationBreakdown snapshot={withQuote} />);
-    const link = screen.getByRole("link", { name: "enak banget" });
-    expect(link.getAttribute("href")).toBe("https://example.invalid/sumber");
+    expect(screen.queryByText("enak banget")).toBeNull();
+    expect(screen.queryByRole("link", { name: "enak banget" })).toBeNull();
   });
 });

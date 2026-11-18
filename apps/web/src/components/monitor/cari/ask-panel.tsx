@@ -17,16 +17,21 @@ const FAILURE_COPY: Record<string, string> = {
   paused: "Kuota Gemini sedang dijeda. Coba lagi sebentar lagi.",
   http_4xx: "Gemini menolak permintaan jawaban.",
   http_5xx: "Gemini sedang gangguan. Coba lagi sebentar lagi.",
+  http_503: "Gemini sedang sibuk. Coba lagi sebentar lagi.",
+  http_504: "Gemini sedang sibuk. Coba lagi sebentar lagi.",
   timeout: "Jawaban terlalu lama. Coba lagi.",
   empty_answer: "Jawaban kosong. Coba lagi.",
   missing_key: "Kunci Gemini belum diatur.",
   malformed_json: "Jawaban Gemini tidak bisa dibaca.",
   transport_error: "Gemini tidak terjangkau. Coba lagi.",
+  error: "Jawaban gagal. Coba lagi.",
 };
 
 function failureCopy(detail: string | null | undefined): string {
   if (detail && FAILURE_COPY[detail]) return FAILURE_COPY[detail];
-  return "Jawaban belum tersedia";
+  if (detail && /^http_5\d\d$/.test(detail)) return FAILURE_COPY.http_5xx;
+  if (detail && /^http_\d{3}$/.test(detail)) return `Jawaban gagal (${detail}). Coba lagi.`;
+  return "Jawaban gagal. Coba lagi.";
 }
 
 type Cited = { id: string; platform: string; authorHandle: string | null; authorName: string | null };

@@ -1,6 +1,5 @@
 import type { SearchSnapshot } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
-import { quoteHref } from "./quote-source";
 
 const STANCE_LABEL: Record<string, string> = {
   positif: "Positif",
@@ -18,39 +17,11 @@ const STANCE_BAR: Record<string, string> = {
   faktual: "bg-info",
 };
 
-const QUOTE_LABEL: Record<string, string> = {
-  pujian: "Pujian",
-  keluhan: "Keluhan",
-  pengamatan: "Pengamatan",
-  pertanyaan: "Pertanyaan",
-};
-
 type PlatformSummary = { platform?: string; stance?: string };
-type Quote = { type?: string; text?: string; author?: string; platform?: string; ref_id?: string };
 type Theme = { title?: string; description?: string; supporting_ids?: unknown; platforms?: unknown };
 
 function asList<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
-}
-
-function uniqueQuotes(quotes: Quote[]): Quote[] {
-  const seen = new Set<string>();
-  return quotes.filter((quote) => {
-    const key = `${quote.ref_id ?? ""}:${quote.text ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function QuoteLine(props: { text: string; href: string | null }) {
-  if (!props.href) return props.text;
-  const external = props.href.startsWith("http");
-  return (
-    <a href={props.href} {...(external ? { target: "_blank", rel: "noreferrer" } : {})}>
-      {props.text}
-    </a>
-  );
 }
 
 export function ConversationBreakdown(props: { snapshot: SearchSnapshot }) {
@@ -71,7 +42,6 @@ export function ConversationBreakdown(props: { snapshot: SearchSnapshot }) {
   }
   const classified = [...stanceCounts.values()].reduce((sum, count) => sum + count, 0);
   const maxCount = Math.max(1, ...resultCounts.values());
-  const quotes = asList<Quote>(snapshot.ai?.quotes).filter((item) => item.text);
   const themes = asList<Theme>(snapshot.ai?.themes).filter((item) => item.title);
   const stanceOrder = ["positif", "campuran", "negatif", "netral", "faktual"].filter(
     (stance) => stance !== "faktual" || (stanceCounts.get(stance) ?? 0) > 0,
@@ -113,25 +83,6 @@ export function ConversationBreakdown(props: { snapshot: SearchSnapshot }) {
             .map((stance) => `${STANCE_LABEL[stance]} ${Math.round(((stanceCounts.get(stance) ?? 0) / classified) * 100)}%`)
             .join(" · ")}
         </p>
-      ) : null}
-      {quotes.length > 0 ? (
-        <>
-          <h3 className="mt-5 text-[11px] font-semibold tracking-wide text-muted-foreground">APA KATA ORANG</h3>
-          <ul className="mt-2 space-y-2">
-            {uniqueQuotes(quotes).map((quote, index) => (
-              <li key={`${quote.text}-${index}`} className="rounded-lg border border-border px-3 py-2">
-                <span className="text-[11px] font-semibold text-primary">{QUOTE_LABEL[quote.type ?? ""] ?? quote.type}</span>
-                <p className="text-[13px] text-foreground">
-                  <QuoteLine
-                    text={quote.text ?? ""}
-                    href={quoteHref(quote.ref_id, snapshot.results, snapshot.comments)}
-                  />
-                </p>
-                {quote.author ? <p className="font-mono text-[11px] text-muted-foreground">{quote.author}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </>
       ) : null}
       {themes.length > 0 ? (
         <>

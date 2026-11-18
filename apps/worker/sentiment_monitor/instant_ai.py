@@ -179,8 +179,8 @@ def build_summary_prompt(data: SummaryInput) -> tuple[str, str]:
 
 
 def build_question_prompt(data: SummaryInput, question: str) -> tuple[str, str]:
-    """Same hardening as the summary. The question and posts stay in the user prompt."""
-    system = SUMMARY_SYSTEM + " Jawab dalam Bahasa Indonesia, hanya dari data."
+    """Same system instruction and data block as the summary. The question stays in the user prompt."""
+    system = SUMMARY_SYSTEM
     _ignored, data_user = build_summary_prompt(data)
     marker = data_user.find("<<<DATA>>>")
     block = data_user[marker:] if marker >= 0 else data_user

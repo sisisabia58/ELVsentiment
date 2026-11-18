@@ -64,6 +64,16 @@ function majorityFromCounts(
   return { stance, percent: Math.round((count / classified) * 100) };
 }
 
+function uniqueQuotes(quotes: Quote[]): Quote[] {
+  const seen = new Set<string>();
+  return quotes.filter((quote) => {
+    const key = (quote.text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function QuoteText(props: { text: string; href: string | null }) {
   if (!props.href) return <span>{props.text}</span>;
   const external = props.href.startsWith("http");
@@ -82,7 +92,6 @@ export function AiSummary(props: {
   platformCounts?: Record<string, number>;
   results?: Pick<SnapshotResult, "id" | "url">[];
   comments?: Pick<SnapshotComment, "id" | "resultId">[];
-  hideQuotes?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = props.summaryStatus ?? (props.ai ? "done" : "pending");
@@ -107,7 +116,7 @@ export function AiSummary(props: {
   const platforms = asList<PlatformSummary>(ai.platformSummaries).filter(
     (item) => item.platform && item.summary,
   );
-  const quotes = asList<Quote>(ai.quotes).filter((item) => item.text);
+  const quotes = uniqueQuotes(asList<Quote>(ai.quotes).filter((item) => item.text));
   const themes = asList<Theme>(ai.themes).filter((item) => item.title);
   const extra = Math.max(0, platforms.length - 3);
   const majority = majorityFromCounts(platforms, props.platformCounts);
@@ -143,11 +152,7 @@ export function AiSummary(props: {
         </div>
       ) : null}
       <ul className="mt-3 space-y-3">
-        {platforms.map((item, index) => {
-          const quote =
-            quotes.find((candidate) => candidate.ref_id && candidate.ref_id === item.quote_id) ??
-            quotes.find((candidate) => candidate.platform === item.platform);
-          return (
+        {platforms.map((item, index) => (
             <li key={`${item.platform}-${index}`} className={index >= 3 && !expanded ? "hidden lg:block" : ""}>
               <div className="flex items-center gap-2">
                 <PlatformTile platform={item.platform ?? "web"} size={18} />
@@ -158,23 +163,26 @@ export function AiSummary(props: {
                 ) : null}
               </div>
               <p className="mt-1 text-[13px] leading-5 text-foreground">{item.summary}</p>
-              {quote?.text && !props.hideQuotes ? (
-                <blockquote className="mt-1 border-l-2 border-border pl-2 text-[12.5px] text-muted-foreground">
-                  <QuoteText
-                    text={quote.text}
-                    href={quoteHref(quote.ref_id, props.results ?? [], props.comments ?? [])}
-                  />
-                  {quote.author ? <span className="ml-1 font-mono">{quote.author}</span> : null}
-                </blockquote>
-              ) : null}
             </li>
-          );
-        })}
+          ))}
       </ul>
       {extra > 0 && !expanded ? (
         <button type="button" className="mt-2 text-[12.5px] font-medium text-primary lg:hidden" onClick={() => setExpanded(true)}>
           Lihat {extra} platform lainnya
         </button>
+      ) : null}
+      {quotes.length > 0 ? (
+        <ul className="mt-3 space-y-2">
+          {quotes.map((quote) => (
+            <li key={`${quote.ref_id ?? ""}:${quote.text}`} className="border-l-2 border-border pl-2 text-[12.5px] text-muted-foreground">
+              <QuoteText
+                text={quote.text ?? ""}
+                href={quoteHref(quote.ref_id, props.results ?? [], props.comments ?? [])}
+              />
+              {quote.author ? <span className="ml-1 font-mono">{quote.author}</span> : null}
+            </li>
+          ))}
+        </ul>
       ) : null}
       {themes.length > 0 ? (
         <ul className="mt-3 space-y-1">

@@ -190,7 +190,7 @@ def test_invalid_argument_is_logged_and_does_not_pause(caplog):
         {"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
         gate,
     )
-    message = "Invalid JSON payload received. " + ("x" * 250)
+    message = "Invalid JSON payload received. " + ("x" * 800)
     client.opener = _reject(400, {
         "error": {
             "status": "INVALID_ARGUMENT",
@@ -203,9 +203,11 @@ def test_invalid_argument_is_logged_and_does_not_pause(caplog):
             client.generate_json(
                 system="s", user="u", schema={"type": "object", "properties": {}}, purpose="question",
             )
-    assert "gemini_http status=400 error_status=INVALID_ARGUMENT" in caplog.text
+    assert "status=400" in caplog.text
+    assert "error_status=INVALID_ARGUMENT" in caplog.text
     assert "Invalid JSON payload received." in caplog.text
-    assert "xxx" * 80 not in caplog.text
+    assert "retryDelay=30s" in caplog.text
+    assert "x" * 600 not in caplog.text
     assert not any("paused_until" in sql and sql.strip().startswith("insert") for sql, _params in gate.statements)
 
 
@@ -218,14 +220,21 @@ def test_resource_exhausted_pauses_for_at_most_two_minutes(caplog):
     client.opener = _reject(429, {
         "error": {
             "status": "RESOURCE_EXHAUSTED",
-            "message": "Quota exceeded for synthetic-key",
+            "message": "You exceeded your current quota for synthetic-key. " + ("y" * 400),
             "details": [
-                {"retryDelay": "3600s"},
-                {"violations": [{
-                    "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
-                    "quotaMetric": "generate_requests",
-                    "quotaValue": "20",
-                }]},
+                {"retryDelay": "36s"},
+                {"violations": [
+                    {
+                        "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                        "quotaMetric": "generate_content_free_tier_requests",
+                        "quotaValue": "20",
+                    },
+                    {
+                        "quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier",
+                        "quotaMetric": "generate_content_free_tier_input_token_count",
+                        "quotaValue": "1000000",
+                    },
+                ]},
             ],
         },
     })
@@ -244,18 +253,54 @@ def test_resource_exhausted_pauses_for_at_most_two_minutes(caplog):
     until = inserts[0][0]
     assert before < until <= before + timedelta(seconds=121)
     assert "status=429" in caplog.text
+    assert "model=gemini-3.5-flash-lite" in caplog.text
     assert "error_status=RESOURCE_EXHAUSTED" in caplog.text
+    assert "retryDelay=36s" in caplog.text
+    assert "metric=generate_content_free_tier_requests id=GenerateRequestsPerDayPerProjectPerModel-FreeTier value=20" in caplog.text
+    assert "metric=generate_content_free_tier_input_token_count id=GenerateContentInputTokensPerModelPerMinute-FreeTier value=1000000" in caplog.text
     assert "synthetic-key" not in caplog.text
 
 
 def test_question_request_matches_the_summary_envelope():
-    from sentiment_monitor.gemini import build_generation_body
+    from sentiment_monitor.gemini import build_generate_content_request, build_generation_body
     from sentiment_monitor.instant_ai import (
         QUESTION_MAX_OUTPUT_TOKENS,
         QUESTION_SCHEMA,
         SUMMARY_MAX_OUTPUT_TOKENS,
         SUMMARY_SCHEMA,
+        SUMMARY_SYSTEM,
+        SummaryInput,
+        build_question_prompt,
+        build_summary_prompt,
     )
+
+    data = SummaryInput("search", "kopi", [{"id": "r1", "platform": "threads", "text": "enak"}], [])
+    assert build_question_prompt(data, "Apa yang dipuji?")[0] == build_summary_prompt(data)[0] == SUMMARY_SYSTEM
+    question_request = build_generate_content_request(
+        model="gemini-3.5-flash-lite",
+        system=SUMMARY_SYSTEM,
+        user="tanya",
+        schema=QUESTION_SCHEMA,
+        max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
+    )
+    summary_request = build_generate_content_request(
+        model="gemini-3.5-flash-lite",
+        system=SUMMARY_SYSTEM,
+        user="ringkas",
+        schema=SUMMARY_SCHEMA,
+        max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
+    )
+    assert question_request["url"] == summary_request["url"]
+    assert question_request["url"] == (
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
+    )
+    for request in (question_request, summary_request):
+        assert set(request["body"]) == {"systemInstruction", "contents", "generationConfig"}
+        for banned in ("tools", "toolConfig", "cachedContent", "system_instruction"):
+            assert banned not in request["body"]
+        config = request["body"]["generationConfig"]
+        assert "thinkingConfig" not in config
+        assert "serviceTier" not in request["body"] and "serviceTier" not in config
 
     question = build_generation_body(
         system="sistem",

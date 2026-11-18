@@ -31,7 +31,8 @@ MAX_ERROR_BYTES = 65_536
 # A quota pause is a short retry hint. Anything longer is the old one-hour
 # hold and is cleared on the next acquire, including the row already stored.
 _MAX_PAUSE = timedelta(seconds=120)
-_MESSAGE_CHARS = 200
+_MESSAGE_CHARS = 500
+_DETAILS_CHARS = 1000
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 _JAKARTA = timezone(timedelta(hours=7))
@@ -170,14 +171,14 @@ def parse_gemini_error_body(payload: Any) -> GeminiErrorInfo:
     return GeminiErrorInfo(retry_after_ms, per_day, limit, quota_id, quota_metric)
 
 
-def _error_fields(raw: bytes) -> tuple[GeminiErrorInfo, str, str]:
+def _error_fields(raw: bytes) -> tuple[GeminiErrorInfo, str, str, str]:
     empty = GeminiErrorInfo(None, False, None, None, None)
     try:
         parsed = json.loads(raw.decode("utf-8")) if raw else {}
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return empty, "", ""
+        return empty, "", "", ""
     if not isinstance(parsed, dict):
-        return empty, "", ""
+        return empty, "", "", ""
     error = parsed.get("error")
     error_status = ""
     message = ""
@@ -188,20 +189,65 @@ def _error_fields(raw: bytes) -> tuple[GeminiErrorInfo, str, str]:
         text = error.get("message")
         if isinstance(text, str):
             message = " ".join(text.split())
-    return parse_gemini_error_body(parsed), error_status[:80], message
+    return parse_gemini_error_body(parsed), error_status[:80], message, _quota_details(parsed)
 
 
-def _log_rejection(http_status: int, error_status: str, message: str, api_key: str) -> None:
-    safe_status = error_status if re.fullmatch(r"[A-Z0-9_]{1,40}", error_status or "") else "-"
-    text = message[:_MESSAGE_CHARS]
+def _redact(text: str, api_key: str) -> str:
     if api_key:
         text = text.replace(api_key, "[redacted]")
-    text = re.sub(r"AIza[0-9A-Za-z_\-]{8,}", "[redacted]", text)
+    return re.sub(r"AIza[0-9A-Za-z_\-]{8,}", "[redacted]", text)
+
+
+def _quota_details(payload: Any) -> str:
+    """RetryInfo and every QuotaFailure violation, not only the first."""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(details, list):
+        return ""
+    parts: list[str] = []
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        delay = item.get("retryDelay")
+        if isinstance(delay, str) and delay.strip():
+            parts.append(f"retryDelay={delay.strip()}")
+        violations = item.get("violations")
+        if not isinstance(violations, list):
+            continue
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            metric = violation.get("quotaMetric")
+            quota_id = violation.get("quotaId")
+            value = violation.get("quotaValue")
+            parts.append(
+                "metric={metric} id={quota_id} value={value}".format(
+                    metric=metric if isinstance(metric, str) else "-",
+                    quota_id=quota_id if isinstance(quota_id, str) else "-",
+                    value=value if value is not None else "-",
+                )
+            )
+    return "; ".join(parts)
+
+
+def _log_rejection(
+    http_status: int,
+    error_status: str,
+    message: str,
+    details: str,
+    api_key: str,
+    model: str,
+) -> None:
+    safe_status = error_status if re.fullmatch(r"[A-Z0-9_]{1,40}", error_status or "") else "-"
+    text = _redact(message, api_key)[:_MESSAGE_CHARS]
+    quota = _redact(details, api_key)[:_DETAILS_CHARS]
     _log.info(
-        "gemini_http status=%s error_status=%s message=%s",
+        "gemini_http status=%s model=%s error_status=%s message=%s details=%s",
         http_status,
+        model or "-",
         safe_status,
         text or "-",
+        quota or "-",
     )
 
 
@@ -341,6 +387,30 @@ def _with_property_ordering(schema: Mapping[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def build_generate_content_request(
+    *,
+    model: str,
+    system: str,
+    user: str,
+    schema: Mapping[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    """URL and body shared by the summary and question calls.
+
+    No tools, cached content, thinking config, or service tier. Those are
+    separate Gemini quotas, and the summary call that succeeds does not send them.
+    """
+    return {
+        "url": f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        "body": build_generation_body(
+            system=system,
+            user=user,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        ),
+    }
+
+
 def build_generation_body(
     *,
     system: str,
@@ -390,15 +460,15 @@ class GeminiClient:
             _run_short(self.connect, lambda conn: acquire_gemini_slot(
                 conn, datetime.now(timezone.utc), self.max_rpm
             ))
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        body = json.dumps(
-            build_generation_body(
-                system=system,
-                user=user,
-                schema=schema,
-                max_output_tokens=max_output_tokens,
-            )
-        ).encode("utf-8")
+        request_parts = build_generate_content_request(
+            model=self.model,
+            system=system,
+            user=user,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        )
+        url = str(request_parts["url"])
+        body = json.dumps(request_parts["body"]).encode("utf-8")
         request = urllib.request.Request(
             url,
             data=body,
@@ -434,8 +504,8 @@ class GeminiClient:
         return GeminiResult(_response_json(payload), self.model, prompt, output, cost)
 
     def _raise_http(self, status: int, raw: bytes) -> None:
-        info, error_status, message = _error_fields(raw)
-        _log_rejection(status, error_status, message, self._api_key)
+        info, error_status, message, details = _error_fields(raw)
+        _log_rejection(status, error_status, message, details, self._api_key, self.model)
         quota = status == 429 or error_status == "RESOURCE_EXHAUSTED"
         if quota:
             self._record_pause(info)
