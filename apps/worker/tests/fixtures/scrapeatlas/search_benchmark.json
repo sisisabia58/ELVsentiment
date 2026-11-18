@@ -1,0 +1,47 @@
+{
+  "provenance": "synthetic",
+  "cases": [
+    {
+      "query": "tukuliling kopi",
+      "route": "scrapeatlas.tiktok.keyword",
+      "params": {"query": "tukuliling kopi", "region": "ID", "sort_by": "relevance", "since": "2026-11-11T00:00:00Z", "until": "2026-11-18T00:00:00Z"},
+      "page_count": 1,
+      "outcome": "success",
+      "raw_ids": ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "old", "malformed"],
+      "normalized_ids": ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "old"],
+      "ranked_ids": ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11"],
+      "labels": {"p1": "weak", "p2": "direct", "p3": "weak", "p4": "weak", "p5": "weak", "p6": "weak", "p7": "weak", "p8": "weak", "p9": "weak", "p10": "direct", "p11": "direct"},
+      "benchmark_ids": ["p2", "p11", "old", "malformed", "missing"],
+      "latency_ms": 123,
+      "provider_credits": 1
+    },
+    {
+      "query": "kopi keliling",
+      "route": "scrapeatlas.tiktok.keyword",
+      "params": {"query": "kopi keliling", "region": "ID", "sort_by": "relevance", "since": "2026-11-11T00:00:00Z", "until": "2026-11-18T00:00:00Z"},
+      "page_count": 1,
+      "outcome": "success",
+      "raw_ids": ["generic"],
+      "normalized_ids": ["generic"],
+      "ranked_ids": ["generic"],
+      "labels": {"generic": "direct"},
+      "benchmark_ids": [],
+      "latency_ms": null,
+      "provider_credits": null
+    },
+    {
+      "query": "qzxv meralopi 8j7rf",
+      "route": "scrapeatlas.tiktok.keyword",
+      "params": {"query": "qzxv meralopi 8j7rf", "region": "ID", "sort_by": "relevance", "since": "2026-11-11T00:00:00Z", "until": "2026-11-18T00:00:00Z"},
+      "page_count": 1,
+      "outcome": "success",
+      "raw_ids": [],
+      "normalized_ids": [],
+      "ranked_ids": [],
+      "labels": {},
+      "benchmark_ids": [],
+      "latency_ms": null,
+      "provider_credits": null
+    }
+  ]
+}
