@@ -294,9 +294,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
       </section>
 
       <div className="mx-auto mt-6 max-w-[960px]">
-        <div onClickCapture={(event) => event.stopPropagation()}>
-          <SearchForm onSubmit={start} pending={starting} />
-        </div>
+        <SearchForm onSubmit={start} pending={starting} />
         {error ? (
           <p role="alert" className="mt-2 rounded-lg border border-negatif/30 bg-negatif-bg px-3 py-2 text-[13px] text-negatif">
             {error}

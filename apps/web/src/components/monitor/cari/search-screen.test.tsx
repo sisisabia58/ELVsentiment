@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
 import { SearchDetail, SearchScreen } from "./search-screen";
@@ -277,6 +277,22 @@ const UNFINISHED_AI_COPY = [
 ];
 
 describe("SearchScreen", () => {
+  it("lets users select the date, sort, and language filters", () => {
+    render(<SearchScreen history={[]} now="2026-11-16T10:00:00Z" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Tanggal:\s*Semua$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "7 hari terakhir" }));
+    expect(screen.getByRole("button", { name: /^Tanggal:\s*7 hari$/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Urutkan:\s*Paling cocok$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Terbaru" }));
+    expect(screen.getByRole("button", { name: /^Urutkan:\s*Terbaru$/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Bahasa:\s*Semua$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Bahasa Indonesia" }));
+    expect(screen.getByRole("button", { name: /^Bahasa:\s*Indonesia$/ })).toBeTruthy();
+  });
+
   it("hides unfinished AI summary, quote, theme, and question copy by default", () => {
     render(
       <SearchScreen
