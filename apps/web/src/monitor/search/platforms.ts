@@ -50,14 +50,14 @@ export const PROVIDER_NAME: Record<ProviderId, string> = {
 };
 
 const KEYWORD_CAPABILITIES: Partial<Record<SearchPlatform, ProviderId[]>> = {
-  threads: ["scrapecreators", "scrapeatlas"],
-  tiktok: ["scrapecreators", "scrapeatlas"],
-  instagram: ["scrapecreators"],
+  threads: ["scrapeatlas"],
+  tiktok: ["scrapeatlas"],
+  instagram: ["scrapeatlas"],
   youtube: ["scrapeatlas"],
   reddit: ["scrapeatlas"],
   facebook: ["scrapeatlas"],
   linkedin: ["scrapeatlas"],
-  x: [],
+  x: ["scrapeatlas"],
   web: [],
 };
 
@@ -97,14 +97,14 @@ export const LAUNCH_PLATFORMS: SearchPlatform[] = [
 // tests compare against. Next cannot bundle a file outside apps/web, so the
 // defaults live here as a literal.
 export const DEFAULT_PROVIDER_SETTINGS: Record<SettingTarget, ProviderSetting> = {
-  threads: { provider: "scrapecreators", fallbackProvider: "scrapeatlas", fallbackOnFailure: false },
-  tiktok: { provider: "scrapecreators", fallbackProvider: "scrapeatlas", fallbackOnFailure: false },
-  instagram: { provider: "scrapecreators", fallbackProvider: null, fallbackOnFailure: false },
+  threads: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+  tiktok: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
+  instagram: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
   youtube: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
   reddit: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
   facebook: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
   linkedin: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
-  x: { provider: "official_x", fallbackProvider: null, fallbackOnFailure: false },
+  x: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
   web: { provider: "off", fallbackProvider: null, fallbackOnFailure: false },
   comments: { provider: "scrapeatlas", fallbackProvider: null, fallbackOnFailure: false },
 };
@@ -129,12 +129,8 @@ export function validateProviderChoice(
   fallbackProvider: string | null,
   fallbackOnFailure: boolean,
 ): boolean {
-  if (provider === "off") return fallbackOnFailure === false;
-  const supported = supportedForTarget(platform);
-  if (!supported.includes(provider as ProviderId)) return false;
-  if (fallbackOnFailure && fallbackProvider === null) return false;
-  if (fallbackProvider !== null && !supported.includes(fallbackProvider as ProviderId)) return false;
-  return true;
+  if (fallbackProvider !== null || fallbackOnFailure) return false;
+  return provider === "off" || supportedForTarget(platform).includes(provider as ProviderId);
 }
 
 export function resolveProviderChain(
@@ -149,15 +145,5 @@ export function resolveProviderChain(
   if (!setting || setting.provider === "off") return [];
   const supported = supportedProviders(platform, mode);
   if (!supported.includes(setting.provider)) return [];
-  const chain: ProviderId[] = [setting.provider];
-  const fallback = setting.fallbackProvider;
-  if (
-    setting.fallbackOnFailure &&
-    fallback &&
-    fallback !== setting.provider &&
-    supported.includes(fallback)
-  ) {
-    chain.push(fallback);
-  }
-  return chain;
+  return [setting.provider];
 }

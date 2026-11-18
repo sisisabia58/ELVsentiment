@@ -20,7 +20,7 @@ from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS, ProviderSetting
 from sentiment_monitor.providers.fetch import fetch_platform
-from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+from sentiment_monitor.providers.canonical import PlatformFetch
 
 
 def _post(platform: str, external_id: str) -> CanonicalPost:

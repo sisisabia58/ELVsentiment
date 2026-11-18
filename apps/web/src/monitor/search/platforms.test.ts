@@ -12,7 +12,7 @@ import {
 describe("search provider matrix", () => {
   it("matches the shared JSON defaults", () => {
     expect(DEFAULT_PROVIDER_SETTINGS.youtube.provider).toBe("scrapeatlas");
-    expect(DEFAULT_PROVIDER_SETTINGS.instagram.provider).toBe("scrapecreators");
+    expect(DEFAULT_PROVIDER_SETTINGS.instagram.provider).toBe("scrapeatlas");
     expect(DEFAULT_PROVIDER_SETTINGS.threads.fallbackOnFailure).toBe(false);
     expect(DEFAULT_PROVIDER_SETTINGS.comments.provider).toBe("scrapeatlas");
     expect(DEFAULT_PROVIDER_SETTINGS.web.provider).toBe("off");
@@ -37,45 +37,16 @@ describe("search provider matrix", () => {
     ]);
   });
 
-  it("blocks Instagram on ScrapeAtlas", () => {
-    expect(supportedProviders("instagram", "keyword")).toEqual(["scrapecreators"]);
-    expect(validateProviderChoice("instagram", "scrapeatlas", null, false)).toBe(false);
-    expect(validateProviderChoice("youtube", "scrapeatlas", null, false)).toBe(true);
-  });
-
-  it("accepts off everywhere and rejects a fallback without a provider", () => {
-    expect(validateProviderChoice("instagram", "off", null, false)).toBe(true);
-    expect(validateProviderChoice("x", "off", null, false)).toBe(true);
-    expect(validateProviderChoice("threads", "scrapecreators", null, true)).toBe(false);
-    expect(validateProviderChoice("instagram", "scrapecreators", "scrapeatlas", true)).toBe(false);
-    expect(validateProviderChoice("threads", "scrapecreators", "scrapeatlas", true)).toBe(true);
-  });
-
-  it("resolves chains only for supported providers and enabled fallbacks", () => {
-    expect(resolveProviderChain("threads", DEFAULT_PROVIDER_SETTINGS)).toEqual(["scrapecreators"]);
-    expect(resolveProviderChain("x", DEFAULT_PROVIDER_SETTINGS)).toEqual([]);
-    expect(
-      resolveProviderChain("threads", {
-        ...DEFAULT_PROVIDER_SETTINGS,
-        threads: {
-          provider: "scrapecreators",
-          fallbackProvider: "scrapeatlas",
-          fallbackOnFailure: true,
-        },
-      }),
-    ).toEqual(["scrapecreators", "scrapeatlas"]);
-    expect(
-      resolveProviderChain("youtube", {
-        ...DEFAULT_PROVIDER_SETTINGS,
-        youtube: {
-          provider: "scrapeatlas",
-          fallbackProvider: "scrapecreators",
-          fallbackOnFailure: true,
-        },
-      }),
-    ).toEqual(["scrapeatlas"]);
-    expect(resolveProviderChain("threads", DEFAULT_PROVIDER_SETTINGS, "comments")).toEqual([
-      "scrapeatlas",
-    ]);
+  it("resolves only ScrapeAtlas and preserves disabled and unavailable platforms", () => {
+    for (const target of SEARCH_PLATFORMS.filter((platform) => platform !== "web")) {
+      expect(supportedProviders(target)).toEqual(["scrapeatlas"]);
+      expect(resolveProviderChain(target, DEFAULT_PROVIDER_SETTINGS)).toEqual(["scrapeatlas"]);
+      expect(validateProviderChoice(target, "off", null, false)).toBe(true);
+      expect(validateProviderChoice(target, "off", "scrapecreators", false)).toBe(false);
+      expect(validateProviderChoice(target, "scrapecreators", null, false)).toBe(false);
+      expect(validateProviderChoice(target, "scrapeatlas", "scrapeatlas", true)).toBe(false);
+    }
+    expect(supportedProviders("web")).toEqual([]);
+    expect(supportedProviders("x", "comments")).toEqual([]);
   });
 });

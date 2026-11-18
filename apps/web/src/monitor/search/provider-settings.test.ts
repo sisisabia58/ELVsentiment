@@ -23,7 +23,7 @@ describe("provider settings", () => {
     expect(audit.rows[0]?.n).toBe(1);
   });
 
-  it("rejects Instagram on ScrapeAtlas without writing", async () => {
+  it("rejects Instagram on ScrapeCreators without writing", async () => {
     const db = pgliteQueryable(new PGlite());
     await applyMigration(db);
     const result = await saveProviderSetting(db, {
@@ -31,7 +31,7 @@ describe("provider settings", () => {
       customerId: "00000000-0000-0000-0000-000000000000",
       sessionTokenHash: "synthetic-token-hash",
       platform: "instagram",
-      provider: "scrapeatlas",
+      provider: "scrapecreators",
       fallbackProvider: null,
       fallbackOnFailure: false,
     });
@@ -43,15 +43,6 @@ describe("provider settings", () => {
   it("records the old values, supports fallback and off, and rejects a missing fallback", async () => {
     const db = pgliteQueryable(new PGlite());
     await applyMigration(db);
-    await saveProviderSetting(db, {
-      actorEmail: "owner@example.com",
-      customerId: "00000000-0000-0000-0000-000000000000",
-      sessionTokenHash: "synthetic-token-hash",
-      platform: "threads",
-      provider: "scrapecreators",
-      fallbackProvider: "scrapeatlas",
-      fallbackOnFailure: true,
-    });
     await saveProviderSetting(db, {
       actorEmail: "owner@example.com",
       customerId: "00000000-0000-0000-0000-000000000000",
@@ -77,22 +68,13 @@ describe("provider settings", () => {
       actor_email: string;
     }>("select * from provider_settings_audit order by created_at");
 
-    expect(audit.rows).toHaveLength(2);
+    expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]).toMatchObject({
-      old_provider: "scrapecreators",
-      new_provider: "scrapecreators",
-      old_fallback_provider: "scrapeatlas",
-      new_fallback_provider: "scrapeatlas",
-      old_fallback_on_failure: false,
-      new_fallback_on_failure: true,
-      actor_email: "owner@example.com",
-    });
-    expect(audit.rows[1]).toMatchObject({
-      old_provider: "scrapecreators",
+      old_provider: "scrapeatlas",
       new_provider: "off",
-      old_fallback_provider: "scrapeatlas",
+      old_fallback_provider: null,
       new_fallback_provider: null,
-      old_fallback_on_failure: true,
+      old_fallback_on_failure: false,
       new_fallback_on_failure: false,
     });
 
@@ -105,7 +87,7 @@ describe("provider settings", () => {
       fallbackProvider: null,
       fallbackOnFailure: true,
     });
-    expect(rejected).toEqual({ ok: false, error: "fallback_requires_provider" });
+    expect(rejected).toEqual({ ok: false, error: "unsupported_provider" });
   });
 
   it("rejects unknown targets and unsupported fallbacks without writing", async () => {

@@ -1,0 +1,108 @@
+{
+  "success": true,
+  "status": "partial",
+  "posts": [
+    {
+      "__typename": "XDTGraphVideo",
+      "__isXDTGraphMediaInterface": "XDTGraphVideo",
+      "id": "3000000000000000002",
+      "shortcode": "ExAmPlE0002",
+      "thumbnail_src": "https://scontent.cdninstagram.com/v/t51.2885-15/example_reel.jpg",
+      "display_url": "https://scontent.cdninstagram.com/v/t51.2885-15/example_reel.jpg",
+      "video_url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/example.mp4",
+      "video_play_count": 48200,
+      "has_audio": true,
+      "product_type": "clips",
+      "video_duration": 42.5,
+      "is_video": true,
+      "owner": {
+        "id": "1234567890",
+        "username": "example",
+        "is_verified": true,
+        "profile_pic_url": "https://scontent.cdninstagram.com/v/t51.2885-19/example_s150x150.jpg",
+        "full_name": "Example Person"
+      },
+      "edge_media_to_caption": {
+        "edges": [
+          {
+            "node": {
+              "id": "18000000000000002",
+              "text": "Example caption",
+              "created_at": "1789200000"
+            }
+          }
+        ]
+      },
+      "created_at": "2026-09-11T20:00:00.000Z",
+      "taken_at_timestamp": 1789200000,
+      "edge_media_preview_like": {
+        "count": 2100,
+        "edges": []
+      },
+      "like_and_view_counts_disabled": false,
+      "comment_count": 40,
+      "edge_media_preview_comment": {
+        "count": 40,
+        "edges": []
+      },
+      "edge_media_to_parent_comment": {
+        "count": 40,
+        "edges": []
+      },
+      "edge_media_to_tagged_user": {
+        "edges": [
+          {
+            "node": {
+              "id": "1234567891",
+              "x": 0.5,
+              "y": 0.5,
+              "user": {
+                "id": "1234567891",
+                "username": "tagged_example",
+                "is_verified": false,
+                "profile_pic_url": "https://scontent.cdninstagram.com/v/t51.2885-19/tagged_s150x150.jpg",
+                "full_name": "Tagged Person"
+              }
+            }
+          }
+        ]
+      },
+      "clips_music_attribution_info": {
+        "artist_name": "example",
+        "song_name": "Original audio",
+        "uses_original_audio": true,
+        "should_mute_audio": false,
+        "should_mute_audio_reason": "",
+        "audio_id": "1000000000000001"
+      },
+      "clips_metadata": {
+        "audio_type": "original_sounds",
+        "music_info": null,
+        "original_sound_info": {
+          "original_audio_title": "Original audio",
+          "should_mute_audio": false,
+          "audio_asset_id": "1000000000000001",
+          "ig_artist": {
+            "username": "example",
+            "id": "1234567890"
+          },
+          "is_explicit": false
+        },
+        "is_shared_to_fb": false
+      },
+      "is_paid_partnership": false,
+      "location": null,
+      "coauthor_producers": [],
+      "url": "https://www.instagram.com/example/reel/ExAmPlE0002/"
+    }
+  ],
+  "coverage": {
+    "source": "web_search",
+    "complete": false,
+    "warnings": [
+      "web_index_selection"
+    ],
+    "order": "relevance"
+  },
+  "cursor": "atlas:2"
+}

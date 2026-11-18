@@ -6,7 +6,7 @@ import {
   type ProviderId,
   type ProviderSetting,
   type SettingTarget,
-  supportedForTarget,
+  validateProviderChoice,
 } from "./platforms";
 
 export type ProviderSettingRow = ProviderSetting & { target: SettingTarget };
@@ -40,14 +40,9 @@ function validationError(
   fallbackProvider: string | null,
   fallbackOnFailure: boolean,
 ): SaveProviderSettingError | null {
-  if (provider === "off") return fallbackOnFailure ? "unsupported_provider" : null;
-  const supported = supportedForTarget(target);
-  if (!supported.includes(provider as ProviderId)) return "unsupported_provider";
-  if (fallbackOnFailure && fallbackProvider === null) return "fallback_requires_provider";
-  if (fallbackProvider !== null && !supported.includes(fallbackProvider as ProviderId)) {
-    return "unsupported_provider";
-  }
-  return null;
+  return validateProviderChoice(target, provider, fallbackProvider, fallbackOnFailure)
+    ? null
+    : "unsupported_provider";
 }
 
 export async function loadProviderSettings(

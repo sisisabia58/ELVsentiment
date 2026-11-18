@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timezone
 import math
 import re
@@ -80,6 +80,19 @@ class RouteCall:
     body_length: int | None = None
     latency_ms: int | None = None
     safe_detail: str = "ok"
+
+
+@dataclass(frozen=True)
+class PlatformFetch:
+    platform: str
+    provider: str = "scrapeatlas"
+    posts: list[CanonicalPost] = field(default_factory=list)
+    calls: list[RouteCall] = field(default_factory=list)
+    state: str = "unavailable"
+    safe_detail: str = "ok"
+    latency_ms: int | None = None
+    attempted_providers: tuple[str, ...] = ()
+    next_cursor: str | None = None
 
 
 _ID_WORDS = frozenset(

@@ -16,8 +16,8 @@ def test_missing_rows_use_defaults_and_invalid_rows_fall_back():
     ]
     settings = load_provider_settings(FakeConn(rows))
     assert settings["youtube"].provider == "scrapeatlas"
-    assert settings["instagram"].provider == "scrapecreators"
-    assert settings["threads"].provider == "scrapecreators"
+    assert settings["instagram"].provider == "scrapeatlas"
+    assert settings["threads"].provider == "scrapeatlas"
 
 
 def test_invalid_fallback_unknown_platform_and_off_rows_are_ignored_or_applied():
@@ -29,8 +29,8 @@ def test_invalid_fallback_unknown_platform_and_off_rows_are_ignored_or_applied()
         {"platform": "comments", "provider": "off", "fallback_provider": None, "fallback_on_failure": False},
     ]
     settings = load_provider_settings(FakeConn(rows))
-    assert settings["threads"].fallback_provider == "scrapeatlas"
-    assert settings["threads"].fallback_on_failure is True
+    assert settings["threads"].fallback_provider is None
+    assert settings["threads"].fallback_on_failure is False
     assert settings["reddit"].provider == "scrapeatlas"
     assert settings["reddit"].fallback_provider is None
     assert settings["youtube"].provider == "off"
@@ -50,7 +50,7 @@ def test_comments_scrapeatlas_row_loads_instead_of_falling_back():
     ]
     settings = load_provider_settings(FakeConn(rows))
     assert settings["comments"].provider == "scrapeatlas"
-    assert settings["comments"].fallback_on_failure is True
+    assert settings["comments"].fallback_on_failure is False
 
 
 def test_unsupported_comments_provider_row_is_still_rejected():
@@ -73,4 +73,4 @@ def test_fallback_enabled_without_provider_is_ignored():
     ]
     settings = load_provider_settings(FakeConn(rows))
     assert settings["threads"].fallback_on_failure is False
-    assert settings["threads"].provider == "scrapecreators"
+    assert settings["threads"].provider == "scrapeatlas"

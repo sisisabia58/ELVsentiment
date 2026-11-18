@@ -1,0 +1,93 @@
+{
+  "success": true,
+  "status": "partial",
+  "posts": [
+    {
+      "__typename": "Tweet",
+      "core": {
+        "user_results": {
+          "result": {
+            "__typename": "User",
+            "id": "VXNlcjoxMjM0NTY3ODkw",
+            "rest_id": "1234567890",
+            "affiliates_highlighted_label": {},
+            "has_graduated_access": true,
+            "is_blue_verified": true,
+            "legacy": {
+              "can_dm": false,
+              "created_at": "Mon Jan 02 03:04:05 +0000 2012",
+              "description": "Example bio",
+              "followers_count": 120,
+              "friends_count": 30,
+              "name": "Example Person",
+              "profile_image_url_https": "https://pbs.twimg.com/profile_images/1/example_normal.jpg",
+              "screen_name": "example",
+              "statuses_count": 50,
+              "verified": false
+            },
+            "profile_image_shape": "Circle",
+            "tipjar_settings": {}
+          }
+        }
+      },
+      "edit_control": {
+        "edit_tweet_ids": [
+          "1000000000000000001"
+        ],
+        "editable_until_msecs": "1700000000000",
+        "is_edit_eligible": false,
+        "edits_remaining": "5"
+      },
+      "grok_analysis_button": true,
+      "grok_annotations": {},
+      "is_translatable": false,
+      "legacy": {
+        "bookmark_count": 1,
+        "bookmarked": false,
+        "created_at": "Tue Feb 03 04:05:06 +0000 2026",
+        "conversation_id_str": "1000000000000000001",
+        "display_text_range": [
+          0,
+          12
+        ],
+        "entities": {
+          "hashtags": [],
+          "symbols": [],
+          "timestamps": [],
+          "urls": [],
+          "user_mentions": []
+        },
+        "favorite_count": 2,
+        "favorited": false,
+        "full_text": "Example text",
+        "is_quote_status": false,
+        "lang": "en",
+        "possibly_sensitive": false,
+        "possibly_sensitive_editable": true,
+        "quote_count": 0,
+        "reply_count": 0,
+        "retweet_count": 0,
+        "retweeted": false,
+        "user_id_str": "1234567890",
+        "id_str": "1000000000000000001"
+      },
+      "rest_id": "1000000000000000001",
+      "source": "<a href=\"https://mobile.twitter.com\" rel=\"nofollow\">Twitter Web App</a>",
+      "unmention_data": {},
+      "views": {
+        "count": "321",
+        "state": "EnabledWithCount"
+      },
+      "url": "https://x.com/example/status/1000000000000000001"
+    }
+  ],
+  "coverage": {
+    "source": "web_search",
+    "order": "relevance",
+    "complete": false,
+    "warnings": [
+      "web_index_selection"
+    ]
+  },
+  "cursor": "serper:2"
+}

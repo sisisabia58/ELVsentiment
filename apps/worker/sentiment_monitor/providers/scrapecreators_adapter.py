@@ -26,17 +26,7 @@ _FETCHERS: dict[str, Callable[..., dict[str, Any]]] = {
 }
 
 
-@dataclass(frozen=True)
-class PlatformFetch:
-    platform: str
-    provider: str = "scrapecreators"
-    posts: list[CanonicalPost] = field(default_factory=list)
-    calls: list[RouteCall] = field(default_factory=list)
-    state: str = "unavailable"
-    safe_detail: str = "ok"
-    latency_ms: int | None = None
-    attempted_providers: tuple[str, ...] = ()
-
+from sentiment_monitor.providers.canonical import PlatformFetch
 
 def _optional_int(value: Any) -> int | None:
     if isinstance(value, bool):

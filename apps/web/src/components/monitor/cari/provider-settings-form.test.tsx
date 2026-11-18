@@ -26,7 +26,7 @@ describe("provider settings form", () => {
     render(<ProviderSettingsForm rows={rows()} onSave={vi.fn()} />);
     const instagram = screen.getByLabelText("Provider Instagram") as HTMLSelectElement;
     expect(Array.from(instagram.options).map((option) => option.value)).toEqual([
-      "scrapecreators",
+      "scrapeatlas",
       "off",
     ]);
     const youtube = screen.getByLabelText("Provider YouTube") as HTMLSelectElement;
@@ -55,72 +55,15 @@ describe("provider settings form", () => {
 
   it("renders launch-unavailable platforms as read-only without a save button", () => {
     render(<ProviderSettingsForm rows={rows()} onSave={vi.fn()} />);
-    expect(screen.getAllByText("Belum tersedia saat peluncuran").length).toBe(2);
-    expect(screen.queryByLabelText("Provider X")).toBeNull();
+    expect(screen.getAllByText("Belum tersedia saat peluncuran").length).toBe(1);
+    expect(screen.getByLabelText("Provider X")).toBeTruthy();
     expect(screen.queryByLabelText("Provider Web")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Simpan X" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Simpan Web" })).toBeNull();
   });
 
-  it("renders the fallback checkbox at the small control size", () => {
+  it("omits fallback controls when there is a single provider", () => {
     render(<ProviderSettingsForm rows={rows()} onSave={vi.fn()} />);
-    const checkbox = screen.getByLabelText("Aktifkan cadangan Threads");
-    expect(checkbox.className).toContain("size-4");
-    expect(checkbox.className).toContain("min-h-0");
-    expect(checkbox.className).toContain("min-w-0");
-    expect(checkbox.className).toContain("flex-none");
-    expect(checkbox.className).toContain("accent-primary");
-  });
-
-  it("warns about an unsupported stored choice", () => {
-    render(
-      <ProviderSettingsForm
-        rows={rows({
-          instagram: {
-            target: "instagram",
-            provider: "scrapeatlas",
-            fallbackProvider: null,
-            fallbackOnFailure: false,
-          },
-        })}
-        onSave={vi.fn()}
-      />,
-    );
-    expect(screen.getAllByText(/tidak didukung/i).length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("refuses to enable fallback without a fallback provider", async () => {
-    const onSave = vi.fn().mockResolvedValue({ ok: true });
-    render(
-      <ProviderSettingsForm
-        rows={rows({
-          threads: {
-            target: "threads",
-            provider: "scrapecreators",
-            fallbackProvider: null,
-            fallbackOnFailure: false,
-          },
-        })}
-        onSave={onSave}
-      />,
-    );
-    fireEvent.click(screen.getByLabelText("Aktifkan cadangan Threads"));
-    expect(screen.getByText(/Pilih penyedia cadangan/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Simpan Threads" }));
-    expect(onSave).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText("Cadangan Threads"), {
-      target: { value: "scrapeatlas" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Simpan Threads" }));
-    await waitFor(() =>
-      expect(onSave).toHaveBeenCalledWith({
-        platform: "threads",
-        provider: "scrapecreators",
-        fallbackProvider: "scrapeatlas",
-        fallbackOnFailure: true,
-      }),
-    );
+    expect(screen.queryByLabelText("Aktifkan cadangan Threads")).toBeNull();
   });
 
   it("shows a server rejection next to the row", async () => {

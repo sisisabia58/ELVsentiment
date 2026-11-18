@@ -13,7 +13,7 @@ from sentiment_monitor.providers.canonical import (
     detect_language,
     keyword_relevance,
 )
-from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+from sentiment_monitor.providers.canonical import PlatformFetch
 
 FIXTURE_ROUTE = "fixture"
 

@@ -1,12 +1,12 @@
 {
-  "threads": {"provider": "scrapecreators", "fallback_provider": "scrapeatlas", "fallback_on_failure": false},
-  "tiktok": {"provider": "scrapecreators", "fallback_provider": "scrapeatlas", "fallback_on_failure": false},
-  "instagram": {"provider": "scrapecreators", "fallback_provider": null, "fallback_on_failure": false},
+  "threads": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
+  "tiktok": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
+  "instagram": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
   "youtube": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
   "reddit": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
   "facebook": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
   "linkedin": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
-  "x": {"provider": "official_x", "fallback_provider": null, "fallback_on_failure": false},
+  "x": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false},
   "web": {"provider": "off", "fallback_provider": null, "fallback_on_failure": false},
   "comments": {"provider": "scrapeatlas", "fallback_provider": null, "fallback_on_failure": false}
 }

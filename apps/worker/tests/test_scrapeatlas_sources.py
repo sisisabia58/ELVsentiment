@@ -51,7 +51,7 @@ def test_threads_uses_recent_true_and_filters_dates_locally():
     result = fetch_scrapeatlas_threads("barayam", api_key="synthetic",
         collected_at="2026-11-15T00:00:00Z", opener=opener, date_window_days=7)
     assert "recent=true" in seen[0]
-    assert "region=ID" in seen[0]
+    assert "region" not in seen[0]
     assert [post.external_id for post in result.posts] == ["new"]
     assert result.calls[0].credits_charged == 1
     assert result.calls[0].safe_detail == "ok"
@@ -242,7 +242,7 @@ def test_reddit_and_facebook_fixtures_map_fields():
         assert "hashtag=barayam" in request.full_url
         return Response(fixture("facebook_hashtag.json"), headers={"x-credits-charged": "1"})
 
-    facebook = fetch_scrapeatlas_facebook("barayam", api_key="synthetic",
+    facebook = fetch_scrapeatlas_facebook("#barayam", api_key="synthetic",
         collected_at="2026-11-15T00:00:00Z", opener=facebook_opener)
     assert facebook.state == "answered"
     assert facebook.posts[0].likes is not None
@@ -250,7 +250,7 @@ def test_reddit_and_facebook_fixtures_map_fields():
     assert facebook.posts[0].thumbnail_url.startswith("https://example.invalid/")
 
 
-def test_facebook_hashtag_strips_spaces_and_lowercases():
+def test_facebook_phrase_is_unavailable_without_request():
     seen = []
 
     def opener(request, timeout=0):
@@ -258,9 +258,11 @@ def test_facebook_hashtag_strips_spaces_and_lowercases():
         return Response({"success": True, "status": "success", "posts": [],
                          "coverage": {"warnings": []}}, headers={"x-credits-charged": "1"})
 
-    fetch_scrapeatlas_facebook("Ayam Barayam", api_key="synthetic",
+    result = fetch_scrapeatlas_facebook("Ayam Barayam", api_key="synthetic",
         collected_at="2026-11-15T00:00:00Z", opener=opener)
-    assert "hashtag=ayambarayam" in seen[0]
+    assert result.state == "unavailable"
+    assert result.safe_detail == "hashtag_only"
+    assert not seen
 
 
 def test_linkedin_fixture_uses_last_week_filter_and_web_index():
@@ -292,3 +294,42 @@ def test_youtube_and_reddit_404_are_answered_free():
         assert result.state == "answered"
         assert result.posts == []
         assert result.calls[0].credits_charged == 0
+
+@pytest.mark.parametrize(("platform", "path", "expected"), [
+    ("instagram", "instagram", ("3000000000000000002", "Example caption", 48200, 2100, 40)),
+    ("x", "twitter", ("1000000000000000001", "Example text", 321, 2, 0)),
+])
+def test_indexed_search_contract(platform, path, expected):
+    from urllib.parse import parse_qs, urlsplit
+    from sentiment_monitor.providers import scrapeatlas_sources as sources
+
+    payload = fixture(f"{platform}_posts.json")
+    payload["posts"] = [None, {}, {"owner": []}, *payload["posts"]]
+    seen = []
+
+    def opener(request, timeout=0):
+        url = urlsplit(request.full_url)
+        assert url.netloc == "api.scrapeatlas.com"
+        assert url.path == f"/v1/{path}/search/posts"
+        seen.append(parse_qs(url.query))
+        return Response(payload, headers={"x-credits-charged": "2"})
+
+    fetch = getattr(sources, f"fetch_scrapeatlas_{platform}", None)
+    assert callable(fetch)
+    kwargs = dict(api_key="fixture", collected_at="2026-11-15T00:00:00Z", opener=opener)
+    page = fetch("example", **kwargs)
+    post, = page.posts
+    assert (post.external_id, post.text, post.views, post.likes, post.replies) == expected
+    assert post.web_index and post.published_at and post.author_handle == "example"
+    assert post.url.startswith("https://")
+    assert page.calls[0].credits_charged == 2 and page.calls[0].outcome == "partial"
+    if platform == "instagram":
+        assert post.thumbnail_url and post.published_at.startswith("2026-09-")
+    else:
+        assert post.shares == 0 and post.published_at == "2026-02-03T04:05:06Z"
+    assert page.next_cursor == payload["cursor"]
+    payload.update(posts=[], cursor=None)
+    empty = fetch("example", cursor=page.next_cursor, **kwargs)
+    assert empty.state == "answered" and empty.posts == [] and empty.next_cursor is None
+    assert seen[0]["query"] == ["example"] and "cursor" not in seen[0]
+    assert seen[1]["cursor"] == [page.next_cursor]

@@ -287,7 +287,7 @@ def test_expire_old_searches_deletes_expired_and_cascades(db):
 def test_fixture_mode_returns_deterministic_posts_without_network(monkeypatch):
     monkeypatch.setenv("CARI_PROVIDER_MODE", "fixture")
     result = fetch_platform(
-        "youtube", Keyword("barayam"), {}, env={},
+        "youtube", Keyword("barayam"), DEFAULT_SETTINGS, env={},
         collected_at="2026-11-15T00:00:00Z", date_window_days=7,
     )
     assert result.provider == "fixture"
@@ -296,7 +296,7 @@ def test_fixture_mode_returns_deterministic_posts_without_network(monkeypatch):
     assert result.posts[0].external_id.startswith("fixture-youtube-")
     assert result.calls[0].credits_charged == 0
     repeated = fetch_platform(
-        "youtube", Keyword("barayam"), {}, env={},
+        "youtube", Keyword("barayam"), DEFAULT_SETTINGS, env={},
         collected_at="2026-11-15T00:00:00Z", date_window_days=7,
     )
     assert [item.external_id for item in repeated.posts] == [item.external_id for item in result.posts]
@@ -352,7 +352,7 @@ def test_runner_marks_slow_source_unavailable_at_deadline(db):
     def slow(*args, **kwargs):
         time.sleep(0.2)
         return __import__(
-            "sentiment_monitor.providers.scrapecreators_adapter", fromlist=["PlatformFetch"]
+            "sentiment_monitor.providers.canonical", fromlist=["PlatformFetch"]
         ).PlatformFetch("reddit", "scrapeatlas", [post("reddit")], [], "answered", "ok", 200)
 
     job = claim_instant_search(db, "worker-1")
@@ -375,7 +375,7 @@ def test_runner_marks_slow_source_unavailable_at_deadline(db):
 
 
 def test_deadline_path_joins_started_route_threads_with_a_bound(db, monkeypatch):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     started = threading.Event()
@@ -417,7 +417,7 @@ def test_deadline_path_joins_started_route_threads_with_a_bound(db, monkeypatch)
 
 
 def test_runner_keeps_answered_sources_when_another_fails(db):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     def mixed(platform, *args, **kwargs):
         if platform == "youtube":
@@ -442,7 +442,7 @@ def test_runner_keeps_answered_sources_when_another_fails(db):
 
 
 def test_runner_all_failed_is_failed_and_inserts_no_results(db):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     def failed(platform, *args, **kwargs):
         return PlatformFetch(platform, "scrapeatlas", [], [], "failed", "http_500", 10)
@@ -488,7 +488,7 @@ def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monke
 
 
 def test_runner_applies_date_window_and_keeps_undated_last(db):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     now = datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc)
 
@@ -585,7 +585,7 @@ def test_runner_fetches_comments_for_at_most_three_posts_per_platform(db):
 
 
 def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     calls: list[str] = []
     viral = replace(
@@ -688,7 +688,7 @@ def test_comment_failure_keeps_the_posts_and_the_search_status(db):
 
 
 def test_slow_source_does_not_block_comments_for_fast_platforms(db, monkeypatch, caplog):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     caplog.set_level(logging.INFO, logger="sentiment_monitor.instant_search")
@@ -1164,7 +1164,7 @@ def test_question_passes_the_connect_factory_to_gemini(db, monkeypatch):
 
 
 def test_runner_passes_the_route_timeout_to_each_fetch(db):
-    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+    from sentiment_monitor.providers.canonical import PlatformFetch
 
     seen = []
 

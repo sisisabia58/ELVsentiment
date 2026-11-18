@@ -97,7 +97,11 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
       </div>
       <span className="text-right tabular-nums">{source.state === "answered" ? source.resultCount : "—"}</span>
       <span className="text-right text-[11px] text-muted-foreground">
-        {source.state === "answered" && source.resultCount === 0 ? (
+        {source.safeDetail === "hashtag_only" ? (
+          <span>Hanya mendukung tagar</span>
+        ) : source.safeDetail === "web_index_selection" ? (
+          <span>Cakupan indeks terbatas</span>
+        ) : source.state === "answered" && source.resultCount === 0 ? (
           <span className="font-medium text-foreground">Selesai · 0 hasil</span>
         ) : source.state === "answered" ? (
           <span>

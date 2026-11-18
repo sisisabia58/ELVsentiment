@@ -15,18 +15,18 @@ from sentiment_monitor.paths import repo_root
 SearchPlatform = Literal[
     "threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x", "web"
 ]
-ProviderId = Literal["scrapecreators", "scrapeatlas", "official_x", "off"]
+ProviderId = Literal["scrapeatlas", "off"]
 ProviderMode = Literal["keyword", "comments"]
 
 KEYWORD_CAPABILITIES: dict[str, tuple[ProviderId, ...]] = {
-    "threads": ("scrapecreators", "scrapeatlas"),
-    "tiktok": ("scrapecreators", "scrapeatlas"),
-    "instagram": ("scrapecreators",),
+    "threads": ("scrapeatlas",),
+    "tiktok": ("scrapeatlas",),
+    "instagram": ("scrapeatlas",),
     "youtube": ("scrapeatlas",),
     "reddit": ("scrapeatlas",),
     "facebook": ("scrapeatlas",),
     "linkedin": ("scrapeatlas",),
-    "x": (),
+    "x": ("scrapeatlas",),
     "web": (),
 }
 
@@ -87,16 +87,7 @@ def resolve_chain(
     supported = supported_providers(platform, mode)
     if setting.provider not in supported:
         return ()
-    chain: list[ProviderId] = [setting.provider]
-    fallback = setting.fallback_provider
-    if (
-        setting.fallback_on_failure
-        and fallback
-        and fallback != setting.provider
-        and fallback in supported
-    ):
-        chain.append(fallback)
-    return tuple(chain)
+    return (setting.provider,)
 
 
 def _comments_supported() -> tuple[ProviderId, ...]:
@@ -118,14 +109,8 @@ def validate_choice(
     fallback_on_failure: bool,
     mode: ProviderMode = "keyword",
 ) -> None:
-    if provider == "off":
-        if fallback_on_failure:
-            raise ValueError("unsupported_provider")
-        return
-    supported = _comments_supported() if platform == "comments" else supported_providers(platform, mode)
-    if provider not in supported:
+    if fallback_provider is not None or fallback_on_failure:
         raise ValueError("unsupported_provider")
-    if fallback_on_failure and fallback_provider is None:
-        raise ValueError("fallback_requires_provider")
-    if fallback_provider is not None and fallback_provider not in supported:
+    supported = _comments_supported() if platform == "comments" else supported_providers(platform, mode)
+    if provider != "off" and provider not in supported:
         raise ValueError("unsupported_provider")

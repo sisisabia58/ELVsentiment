@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 import re
 import time
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Mapping
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
@@ -19,8 +20,7 @@ from sentiment_monitor.providers.canonical import (
     sanitize_post,
 )
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
-from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
-from sentiment_monitor.sources.instagram import normalize_hashtag
+from sentiment_monitor.providers.canonical import PlatformFetch
 from sentiment_monitor.sources.scrapecreators import unix_to_iso
 from sentiment_monitor.sources.tiktok import normalize_tiktok_item
 from sentiment_monitor.sources.threads import normalize_threads_item
@@ -124,6 +124,7 @@ def _fetch(
     extract: Callable[[Mapping[str, Any], str], list[dict[str, Any]]],
     date_window_days: int | None,
     web_index_from_warnings: bool = False,
+    cursor_field: str | None = None,
 ) -> PlatformFetch:
     started = time.monotonic()
     try:
@@ -191,7 +192,8 @@ def _fetch(
                     route_id,
                     web_index=web_index,
                 )
-                posts.append(sanitize_post(post))
+                if post.external_id:
+                    posts.append(sanitize_post(post))
             except Exception:
                 # One malformed record is dropped; its siblings survive.
                 continue
@@ -204,7 +206,9 @@ def _fetch(
             platform, "scrapeatlas", [], [call], "failed", "storage_failed", latency_ms
         )
     return PlatformFetch(
-        platform, "scrapeatlas", posts, [call], "answered", "ok", latency_ms
+        platform, "scrapeatlas", posts, [call], "answered",
+        "web_index_selection" if web_index else "ok", latency_ms,
+        next_cursor=payload.get(cursor_field) if isinstance(payload.get(cursor_field), str) else None,
     )
 
 
@@ -235,7 +239,7 @@ def fetch_scrapeatlas_threads(
     return _fetch(
         "threads",
         "/v1/threads/search",
-        {"query": str(keyword), "recent": "true", "region": "ID"},
+        {"query": str(keyword), "recent": "true"},
         api_key,
         opener=opener,
         keyword=keyword,
@@ -461,10 +465,14 @@ def fetch_scrapeatlas_facebook(
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
+    tag = str(keyword).removeprefix("#")
+    intent = getattr(keyword, "intent", "hashtag" if str(keyword).startswith("#") else "phrase")
+    if intent != "hashtag" or not re.fullmatch(r"\w+", tag):
+        return PlatformFetch("facebook", "scrapeatlas", state="unavailable", safe_detail="hashtag_only")
     return _fetch(
         "facebook",
         "/v1/facebook/hashtag",
-        {"hashtag": normalize_hashtag(str(keyword))},
+        {"hashtag": tag},
         api_key,
         opener=opener,
         keyword=keyword,
@@ -495,4 +503,88 @@ def fetch_scrapeatlas_linkedin(
         extract=_linkedin_items,
         date_window_days=date_window_days,
         web_index_from_warnings=True,
+    )
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _instagram_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
+    posts = []
+    for item in _list_items(payload, "posts"):
+        owner = _mapping(item.get("owner"))
+        edges = _list_items(_mapping(item.get("edge_media_to_caption")), "edges")
+        caption = _mapping(edges[0].get("node")) if edges else {}
+        posts.append({
+            "external_id": item.get("id"),
+            "text": caption.get("text"),
+            "url": item.get("url"),
+            "author_handle": owner.get("username"),
+            "author_name": owner.get("full_name"),
+            "posted_at": unix_to_iso(item.get("taken_at_timestamp")) or item.get("created_at"),
+            "thumbnail_url": item.get("thumbnail_src") or item.get("display_url"),
+            "views": item.get("video_play_count"),
+            "likes": _mapping(item.get("edge_media_preview_like")).get("count"),
+            "replies": item.get("comment_count"),
+        })
+    return posts
+
+
+def _x_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
+    posts = []
+    for item in _list_items(payload, "posts"):
+        legacy = _mapping(item.get("legacy"))
+        user = _mapping(_mapping(item.get("core")).get("user_results"))
+        author = _mapping(_mapping(user.get("result")).get("legacy"))
+        try:
+            posted_at = parsedate_to_datetime(legacy.get("created_at")).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (TypeError, ValueError, OverflowError):
+            posted_at = None
+        media = _list_items(_mapping(legacy.get("extended_entities")), "media")
+        posts.append({
+            "external_id": item.get("rest_id") or legacy.get("id_str"),
+            "text": legacy.get("full_text"),
+            "url": item.get("url"),
+            "author_handle": author.get("screen_name"),
+            "author_name": author.get("name"),
+            "posted_at": posted_at,
+            "thumbnail_url": media[0].get("media_url_https") if media else None,
+            "views": _mapping(item.get("views")).get("count"),
+            "likes": legacy.get("favorite_count"),
+            "replies": legacy.get("reply_count"),
+            "shares": legacy.get("retweet_count"),
+        })
+    return posts
+
+
+def fetch_scrapeatlas_instagram(
+    keyword: Keyword, *, api_key: str, collected_at: str,
+    opener: Callable[..., Any] = safe_urlopen, date_window_days: int | None = None,
+    cursor: str | None = None,
+) -> PlatformFetch:
+    params = {"query": str(keyword), "trim": "false"}
+    if cursor is not None:
+        params["cursor"] = cursor
+    return _fetch(
+        "instagram", "/v1/instagram/search/posts", params, api_key,
+        opener=opener, keyword=keyword, collected_at=collected_at,
+        route_id="scrapeatlas.instagram.posts", extract=_instagram_items,
+        date_window_days=date_window_days, web_index_from_warnings=True, cursor_field="cursor",
+    )
+
+
+def fetch_scrapeatlas_x(
+    keyword: Keyword, *, api_key: str, collected_at: str,
+    opener: Callable[..., Any] = safe_urlopen, date_window_days: int | None = None,
+    cursor: str | None = None,
+) -> PlatformFetch:
+    params = {"query": str(keyword)}
+    if cursor is not None:
+        params["cursor"] = cursor
+    return _fetch(
+        "x", "/v1/twitter/search/posts", params, api_key,
+        opener=opener, keyword=keyword, collected_at=collected_at,
+        route_id="scrapeatlas.twitter.posts", extract=_x_items,
+        date_window_days=date_window_days, web_index_from_warnings=True, cursor_field="cursor",
     )

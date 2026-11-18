@@ -63,8 +63,8 @@ MIN_COMMENT_SECONDS = 1.0
 # Sources may use the search deadline. Comments get this extra slice afterwards
 # so one slow source cannot starve every other platform's replies.
 COMMENT_BUDGET_SECONDS = 12.0
-# Seven launch platforms: one search's routes must fit in a single wave.
-MAX_CONCURRENCY = 7
+# Eight launch platforms: one search's routes must fit in a single wave.
+MAX_CONCURRENCY = 8
 MAX_INFLIGHT = 8
 # One poll answers at most this many queued questions. Failed rows stay failed
 # until the page retries them; the cycle never re-claims them.
@@ -107,6 +107,8 @@ SAFE_DETAILS = frozenset(
         "config_error",
         "missing_url",
         "unsupported_provider",
+        "hashtag_only",
+        "web_index_selection",
         "unsupported_platform",
         "not_found",
         "http_3xx",
@@ -499,6 +501,7 @@ _PLATFORM_ORDER = (
     "reddit",
     "facebook",
     "linkedin",
+    "x",
 )
 
 _DATE_WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30, "12m": 365}

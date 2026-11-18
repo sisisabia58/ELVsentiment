@@ -285,7 +285,7 @@ def test_bad_record_does_not_roll_back_another_search_or_the_ledger(prod_db):
             collected_at="2026-11-16T00:00:00Z",
         )
         from sentiment_monitor.providers.canonical import RouteCall
-        from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+        from sentiment_monitor.providers.canonical import PlatformFetch
 
         return PlatformFetch(
             platform_name,
