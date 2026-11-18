@@ -38,6 +38,7 @@ def test_offline_replay_reports_each_loss_stage_and_the_two_controls():
     assert generic["benchmark_recall_at_10"] is None
     assert zero["query"] == "qzxv meralopi 8j7rf"
     assert zero["total_usable_results"] == 0
+    assert zero["direct_matches_at_10"] == 0
     assert zero["precision_at_10"] is None
 
 
@@ -54,6 +55,7 @@ def test_replay_keeps_unknown_labels_and_charges_unmeasured(tmp_path):
     assert result.returncode == 0, result.stderr
     generic_result = json.loads(result.stdout)["results"][1]
     assert generic_result["unjudged_top_10_ids"] == ["generic"]
+    assert generic_result["direct_matches_at_10"] is None
     assert generic_result["precision_at_10"] is None
     assert generic_result["provider_credits"] is None
     assert generic_result["latency_ms"] is None

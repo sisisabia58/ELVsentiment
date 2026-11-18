@@ -26,8 +26,8 @@ def score_case(case: dict) -> dict:
         raise ValueError("outcome must be success, partial, failed, or unavailable")
 
     top_10 = ranked_order[:10]
-    direct_matches = sum(labels.get(post_id) == "direct" for post_id in top_10)
     unjudged = [post_id for post_id in top_10 if post_id not in labels]
+    direct_matches = None if unjudged else sum(labels[post_id] == "direct" for post_id in top_10)
     recovered = [post_id for post_id in top_10 if post_id in benchmark_ids]
     first_weak_index = next(
         (index for index, post_id in enumerate(ranked_order) if labels.get(post_id) == "weak"),
@@ -49,7 +49,7 @@ def score_case(case: dict) -> dict:
         "top_10_ids": top_10,
         "direct_matches_at_10": direct_matches,
         "unjudged_top_10_ids": unjudged,
-        "precision_at_10": direct_matches / len(top_10) if top_10 and not unjudged else None,
+        "precision_at_10": direct_matches / len(top_10) if top_10 and direct_matches is not None else None,
         "benchmark_ids_recovered_at_10": recovered,
         "benchmark_recall_at_10": len(recovered) / len(benchmark_ids) if benchmark_ids else None,
         "benchmark_ids_missing_from_raw": [post_id for post_id in benchmark_ids if post_id not in raw_ids],
