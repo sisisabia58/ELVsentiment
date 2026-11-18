@@ -15,6 +15,7 @@ const ERROR_COPY: Record<string, string> = {
 const FAILURE_COPY: Record<string, string> = {
   http_429: "Kuota Gemini sedang penuh. Coba lagi sebentar lagi.",
   paused: "Kuota Gemini sedang dijeda. Coba lagi sebentar lagi.",
+  cycle_cap: "Terlalu banyak permintaan sekaligus. Coba lagi sebentar lagi.",
   http_4xx: "Gemini menolak permintaan jawaban.",
   http_5xx: "Gemini sedang gangguan. Coba lagi sebentar lagi.",
   http_503: "Gemini sedang sibuk. Coba lagi sebentar lagi.",

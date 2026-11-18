@@ -65,6 +65,9 @@ COMMENT_BUDGET_SECONDS = 12.0
 # Seven launch platforms: one search's routes must fit in a single wave.
 MAX_CONCURRENCY = 7
 MAX_INFLIGHT = 8
+# One poll answers at most this many queued questions. Failed rows stay failed
+# until the page retries them; the cycle never re-claims them.
+MAX_QUESTIONS_PER_CYCLE = 2
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
 
@@ -1376,7 +1379,25 @@ def _client_env(env: Mapping[str, Any], provider: str) -> dict[str, Any]:
     return client_env
 
 
+def _summary_status(conn: Any, job: InstantSearchJob) -> str | None:
+    rows = conn.execute(
+        "select summary_status from instant_searches where id = %s and customer_id = %s",
+        (job.id, job.customer_id),
+    ) or []
+    if not rows:
+        return None
+    value = _row_value(rows[0], "summary_status", 0)
+    if value is None:
+        return "pending"
+    return str(value)
+
+
 def _prepare_summary(conn: Any, job: InstantSearchJob, env: Mapping[str, Any]) -> tuple[Any, dict[str, str], set[str], dict[str, Any]] | None:
+    # One automatic model call per search. The poll does not scan old rows.
+    # This proceeds only while summary_status is still the initial pending
+    # value; running, done, failed, and skipped are left alone.
+    if _summary_status(conn, job) != "pending":
+        return None
     provider = _ai_provider(env)
     if provider == "off":
         _set_summary_status(conn, job, "skipped")
@@ -1418,6 +1439,7 @@ def summarize_search(
             user=user,
             schema=SUMMARY_SCHEMA,
             purpose="summary",
+            search_id=job.id,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
         output = validate_summary(generated.data, refs, platforms)
@@ -1460,6 +1482,7 @@ def _summarize_collected(
             user=user,
             schema=SUMMARY_SCHEMA,
             purpose="summary",
+            search_id=job.id,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
         output = validate_summary(generated.data, refs, platforms)
@@ -1532,7 +1555,9 @@ def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, An
             pass
 
 
-_QUESTION_DETAILS = SAFE_DETAILS | frozenset({"empty_answer", "off", "error", "http_4xx", "paused"})
+_QUESTION_DETAILS = SAFE_DETAILS | frozenset(
+    {"empty_answer", "off", "error", "http_4xx", "paused", "cycle_cap"}
+)
 
 
 def _question_detail(value: str) -> str:
@@ -1596,6 +1621,7 @@ def _answer_question(
             user=user,
             schema=QUESTION_SCHEMA,
             purpose="question",
+            search_id=search_id,
             max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
         )
         answer = validate_answer(getattr(generated, "data", None), refs)
@@ -1627,12 +1653,18 @@ def _answer_question(
     except GeminiError as error:
         detail = _question_detail(error.code)
         _fail_question(conn, question_id, detail, now)
-        _info("question", question_detail=detail)
+        _info("question", question_detail=detail, question_search=search_id)
         return "failed"
     except Exception:
         _fail_question(conn, question_id, "error", now)
-        _info("question", question_detail="error")
+        _info("question", question_detail="error", question_search=search_id)
         return "failed"
+
+
+def _commit_question_claim(conn: Any) -> None:
+    commit = getattr(conn, "commit", None)
+    if callable(commit):
+        commit()
 
 
 def run_question_cycle(
@@ -1654,8 +1686,9 @@ def run_question_cycle(
         """,
         (now, now),
     )
-    bounded = max(0, min(2, int(limit)))
+    bounded = max(0, min(MAX_QUESTIONS_PER_CYCLE, int(limit)))
     if bounded == 0:
+        _commit_question_claim(conn)
         return 0
     rows = conn.execute(
         """
@@ -1675,6 +1708,9 @@ def run_question_cycle(
         """,
         (bounded,),
     ) or []
+    # Commit the claim before the model call. A later error must not roll the
+    # row back to queued, or the 2 s poll would send the same question again.
+    _commit_question_claim(conn)
     done = 0
     failed = 0
     for row in rows:
@@ -1758,6 +1794,11 @@ def run_instant_search_poll(
     a long-lived pool. New arrivals therefore become claimable while an earlier
     batch is still fetching; ``for update skip locked`` plus the immediate
     per-claim commit keep multiple workers from double-claiming.
+
+    This poll does not look for old searches whose summary_status is still
+    pending or failed. A summary runs once, at the end of the run that claimed
+    that search, and a second call is refused while the status is no longer
+    pending.
     """
     del limits
     tx = _Transactions(connect)

@@ -93,6 +93,18 @@ describe("AskPanel", () => {
     expect(await screen.findByText("Menjawab…")).toBeTruthy();
   });
 
+  it("names a per-cycle cap instead of an empty failure", () => {
+    render(
+      <AskPanel
+        searchId="s1"
+        questions={[{ ...failedQuestion, safeDetail: "cycle_cap" }]}
+        suggestions={[]}
+      />,
+    );
+    expect(screen.getByText(/Terlalu banyak permintaan sekaligus/)).toBeTruthy();
+    expect(screen.queryByText("Jawaban belum tersedia")).toBeNull();
+  });
+
   it("shows a busy Gemini status instead of an empty failure", () => {
     render(
       <AskPanel

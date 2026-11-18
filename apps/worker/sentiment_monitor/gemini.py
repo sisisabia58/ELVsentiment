@@ -1,8 +1,12 @@
 """Gemini JSON transport, quota gate, and offline fakes.
 
 Exceptions keep only a short safe code. A non-200 response logs its HTTP
-status, error.status, and the first 200 characters of error.message.
-Prompts, API keys, and the rest of the body are not logged.
+status, error.status, and a short redacted message. A successful call logs
+purpose, search id, and token counts. Prompts, API keys, and response text
+are not logged.
+
+A quota pause lasts until RetryInfo retryDelay (capped at 24 hours). The
+worker does not shorten that to a minute or two and then call again.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -28,9 +33,12 @@ GEMINI_DEFAULT_OUTPUT_USD_PER_MTOK = 2.50
 GEMINI_TIMEOUT_SECONDS = 20
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_ERROR_BYTES = 65_536
-# A quota pause is a short retry hint. Anything longer is the old one-hour
-# hold and is cleared on the next acquire, including the row already stored.
-_MAX_PAUSE = timedelta(seconds=120)
+# One poll is 2 seconds. A cycle may finish every in-flight search (8) and
+# answer the question cap (2). Anything beyond that is a loop, not a search.
+GEMINI_CALLS_PER_CYCLE = 10
+GEMINI_CYCLE_SECONDS = 2.0
+_BACKOFF_BASE_MS = 30_000
+_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000
 _MESSAGE_CHARS = 500
 _DETAILS_CHARS = 1000
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
@@ -38,6 +46,54 @@ _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 _JAKARTA = timezone(timedelta(hours=7))
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 _SAFE_CODE = re.compile(r"^[a-z0-9_]{1,40}$")
+_budget_lock = threading.Lock()
+_cycle_started = 0.0
+_cycle_count = 0
+_backoff_ms = 0
+
+
+def reset_gemini_budget() -> None:
+    """Clear the in-process cycle counter and backoff. Tests start from zero."""
+    global _cycle_started, _cycle_count, _backoff_ms
+    with _budget_lock:
+        _cycle_started = 0.0
+        _cycle_count = 0
+        _backoff_ms = 0
+
+
+def _take_cycle_slot() -> bool:
+    """Allow at most GEMINI_CALLS_PER_CYCLE HTTP calls in one poll window."""
+    global _cycle_started, _cycle_count
+    now = time.monotonic()
+    with _budget_lock:
+        if _cycle_started <= 0.0 or now - _cycle_started >= GEMINI_CYCLE_SECONDS:
+            _cycle_started = now
+            _cycle_count = 0
+        if _cycle_count >= GEMINI_CALLS_PER_CYCLE:
+            return False
+        _cycle_count += 1
+        return True
+
+
+def _pause_delay_ms(info: GeminiErrorInfo) -> int:
+    """Honor RetryInfo. Without one, double the previous delay from 30 seconds."""
+    global _backoff_ms
+    with _budget_lock:
+        if info.retry_after_ms is not None:
+            delay = max(0, min(int(info.retry_after_ms), _BACKOFF_MAX_MS))
+            _backoff_ms = delay
+            return delay
+        if _backoff_ms <= 0:
+            _backoff_ms = _BACKOFF_BASE_MS
+        else:
+            _backoff_ms = min(_backoff_ms * 2, _BACKOFF_MAX_MS)
+        return _backoff_ms
+
+
+def _log_token(value: object, fallback: str) -> str:
+    if isinstance(value, str) and _MODEL_PATTERN.fullmatch(value):
+        return value
+    return fallback
 
 _DEMO_SUMMARY: dict[str, Any] = {
     "overall_summary": "Percakapan ini tercatat dari hasil pencarian.",
@@ -276,7 +332,10 @@ def acquire_gemini_slot(
     if not rows:
         return
     paused = _aware_or_none(_row_value(rows[0], "paused_until", 0))
-    if paused is not None and (paused <= now or paused > now + _MAX_PAUSE):
+    # A pause that is already over can be cleared. A future pause is the
+    # server's retryDelay, including a multi-hour free-tier daily reset,
+    # and must not be cleared just because it is longer than two minutes.
+    if paused is not None and paused <= now:
         conn.execute(
             "update gemini_gate set paused_until = null, pause_kind = null where id = 1"
         )
@@ -453,13 +512,20 @@ class GeminiClient:
         user: str,
         schema: Mapping[str, Any],
         purpose: str,
+        search_id: str | None = None,
         max_output_tokens: int = 4096,
     ) -> GeminiResult:
-        del purpose
         if self.connect is not None:
             _run_short(self.connect, lambda conn: acquire_gemini_slot(
                 conn, datetime.now(timezone.utc), self.max_rpm
             ))
+        if not _take_cycle_slot():
+            _log.info(
+                "gemini_cycle_cap purpose=%s search=%s",
+                _log_token(purpose, "other"),
+                _log_token(search_id, "-"),
+            )
+            raise GeminiError("cycle_cap", counts_as_attempt=False)
         request_parts = build_generate_content_request(
             model=self.model,
             system=system,
@@ -501,6 +567,14 @@ class GeminiClient:
         if not isinstance(payload, dict):
             raise GeminiError("malformed_json")
         prompt, output, cost = _usage_cost(payload, self.env)
+        _log.info(
+            "gemini_ok purpose=%s search=%s model=%s input_tokens=%s output_tokens=%s",
+            _log_token(purpose, "other"),
+            _log_token(search_id, "-"),
+            _log_token(self.model, "unknown"),
+            int(prompt),
+            int(output),
+        )
         return GeminiResult(_response_json(payload), self.model, prompt, output, cost)
 
     def _raise_http(self, status: int, raw: bytes) -> None:
@@ -533,8 +607,7 @@ class GeminiClient:
     def _record_pause(self, info: GeminiErrorInfo) -> None:
         if self.connect is None:
             return
-        delay_ms = info.retry_after_ms if info.retry_after_ms is not None else 60_000
-        delay_ms = max(0, min(int(delay_ms), int(_MAX_PAUSE.total_seconds() * 1000)))
+        delay_ms = _pause_delay_ms(info)
         until = datetime.now(timezone.utc) + timedelta(milliseconds=delay_ms)
         try:
             _run_short(

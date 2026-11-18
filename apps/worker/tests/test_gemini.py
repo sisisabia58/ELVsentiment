@@ -16,7 +16,15 @@ from sentiment_monitor.gemini import (
     format_gemini_pause,
     parse_gemini_error_body,
     record_gemini_pause,
+    reset_gemini_budget,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_gemini_budget():
+    reset_gemini_budget()
+    yield
+    reset_gemini_budget()
 
 
 def test_create_gemini_defaults_to_demo_and_requires_explicit_live_mode():
@@ -125,14 +133,18 @@ def test_gemini_cost_includes_thought_tokens():
     assert result.cost_usd == pytest.approx(0.000675)
 
 
-def test_acquire_honors_a_short_pause_and_clears_one_past_the_ttl(db):
+def test_acquire_honors_a_daily_pause_and_clears_one_already_past(db):
     now = datetime.now(timezone.utc)
     record_gemini_pause(db, now + timedelta(seconds=30), kind="retry")
     with pytest.raises(GeminiError, match="paused"):
         acquire_gemini_slot(db, now, 10, sleep=lambda _seconds: None)
+    record_gemini_pause(db, now + timedelta(seconds=27403), kind="per_day")
+    with pytest.raises(GeminiError, match="paused") as caught:
+        acquire_gemini_slot(db, now + timedelta(seconds=120), 10, sleep=lambda _seconds: None)
+    assert caught.value.retry_after_ms > 27_000_000
     db.execute(
-        "update gemini_gate set paused_until = %s, pause_kind = 'per_day' where id = 1",
-        (now + timedelta(hours=1),),
+        "update gemini_gate set paused_until = %s where id = 1",
+        (now - timedelta(seconds=5),),
     )
     acquire_gemini_slot(db, now, 10, sleep=lambda _seconds: None)
     row = db.execute("select paused_until, pause_kind from gemini_gate where id = 1")[0]
@@ -211,7 +223,7 @@ def test_invalid_argument_is_logged_and_does_not_pause(caplog):
     assert not any("paused_until" in sql and sql.strip().startswith("insert") for sql, _params in gate.statements)
 
 
-def test_resource_exhausted_pauses_for_at_most_two_minutes(caplog):
+def test_resource_exhausted_pauses_until_the_retry_delay(caplog):
     gate = _Gate()
     client = create_gemini(
         {"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
@@ -251,7 +263,7 @@ def test_resource_exhausted_pauses_for_at_most_two_minutes(caplog):
     ]
     assert len(inserts) == 1
     until = inserts[0][0]
-    assert before < until <= before + timedelta(seconds=121)
+    assert before + timedelta(seconds=35) <= until <= before + timedelta(seconds=40)
     assert "status=429" in caplog.text
     assert "model=gemini-3.5-flash-lite" in caplog.text
     assert "error_status=RESOURCE_EXHAUSTED" in caplog.text
@@ -360,3 +372,117 @@ def test_question_request_matches_the_summary_envelope():
     assert question_schema["propertyOrdering"] == ["answer", "citations"]
     assert question_schema["properties"]["citations"]["items"]["type"] == "string"
     assert question["generationConfig"]["responseSchema"]["type"] == summary["generationConfig"]["responseSchema"]["type"] == "object"
+
+
+def test_daily_retry_delay_is_stored_in_full():
+    gate = _Gate()
+    client = create_gemini(
+        {"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
+        gate,
+    )
+    client.opener = _reject(429, {
+        "error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "quota",
+            "details": [{"retryDelay": "27403s"}],
+        },
+    })
+    before = datetime.now(timezone.utc)
+    with pytest.raises(GeminiError, match="http_429"):
+        client.generate_json(
+            system="s", user="u", schema={"type": "object", "properties": {}}, purpose="summary",
+        )
+    inserts = [
+        params for sql, params in gate.statements
+        if "paused_until" in sql and sql.strip().startswith("insert")
+    ]
+    assert len(inserts) == 1
+    until = inserts[0][0]
+    assert before + timedelta(seconds=27400) <= until <= before + timedelta(seconds=27410)
+
+
+def test_quota_without_retry_delay_backs_off_exponentially():
+    gate = _Gate()
+    client = create_gemini(
+        {"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
+        gate,
+    )
+    client.opener = _reject(429, {
+        "error": {"status": "RESOURCE_EXHAUSTED", "message": "quota"},
+    })
+
+    def once():
+        started = datetime.now(timezone.utc)
+        with pytest.raises(GeminiError, match="http_429"):
+            client.generate_json(
+                system="s", user="u", schema={"type": "object", "properties": {}}, purpose="question",
+            )
+        return started
+
+    first_started = once()
+    second_started = once()
+    inserts = [
+        params[0] for sql, params in gate.statements
+        if "paused_until" in sql and sql.strip().startswith("insert")
+    ]
+    assert len(inserts) == 2
+    assert first_started + timedelta(seconds=29) <= inserts[0] <= first_started + timedelta(seconds=35)
+    assert second_started + timedelta(seconds=59) <= inserts[1] <= second_started + timedelta(seconds=70)
+
+
+class _OkResponse:
+    status = 200
+
+    def read(self, _limit):
+        return json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "{\"ok\": true}"}]}}],
+            "usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 100, "thoughtsTokenCount": 50},
+        }).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_successful_call_logs_purpose_search_and_tokens(caplog):
+    client = create_gemini({
+        "CARI_AI_PROVIDER": "gemini",
+        "GEMINI_API_KEY": "synthetic-key",
+    })
+    client.opener = lambda request, timeout: _OkResponse()
+    search_id = "22222222-2222-4222-8222-222222222222"
+    with caplog.at_level(logging.INFO, logger="sentiment_monitor.gemini"):
+        client.generate_json(
+            system="s", user="u", schema={}, purpose="question", search_id=search_id,
+        )
+    assert (
+        "gemini_ok purpose=question "
+        f"search={search_id} model=gemini-3.5-flash-lite input_tokens=1000 output_tokens=150"
+    ) in caplog.text
+    assert "synthetic-key" not in caplog.text
+    assert "user" not in caplog.text.split("gemini_ok", 1)[-1]
+
+
+def test_generate_json_stops_at_the_cycle_cap(monkeypatch):
+    import sentiment_monitor.gemini as gemini_mod
+
+    monkeypatch.setattr(gemini_mod, "GEMINI_CALLS_PER_CYCLE", 2)
+    calls = []
+
+    def opener(request, timeout):
+        del request, timeout
+        calls.append(1)
+        return _OkResponse()
+
+    client = create_gemini({
+        "CARI_AI_PROVIDER": "gemini",
+        "GEMINI_API_KEY": "synthetic-key",
+    })
+    client.opener = opener
+    for _ in range(2):
+        client.generate_json(system="s", user="u", schema={}, purpose="summary", search_id="search-1")
+    with pytest.raises(GeminiError, match="cycle_cap"):
+        client.generate_json(system="s", user="u", schema={}, purpose="summary", search_id="search-1")
+    assert calls == [1, 1]
