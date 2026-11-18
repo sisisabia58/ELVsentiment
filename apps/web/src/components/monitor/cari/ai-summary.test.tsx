@@ -31,6 +31,23 @@ describe("AiSummary", () => {
     expect(screen.getByText("Rasa bawang putih & kulit kriuk")).toBeTruthy();
   });
 
+  it("renders each summary paragraph on its own", () => {
+    render(
+      <AiSummary
+        ai={{
+          ...aiFixture,
+          overallSummary: "Gambaran umum percakapan.\n\nPujian yang menonjol.\nKeluhan yang menonjol.",
+        }}
+        resultCount={12}
+        commentCount={4}
+      />,
+    );
+    expect(screen.getByText("Gambaran umum percakapan.")).toBeTruthy();
+    expect(screen.getByText("Pujian yang menonjol.")).toBeTruthy();
+    expect(screen.getByText("Keluhan yang menonjol.")).toBeTruthy();
+    expect(screen.getAllByText(/menonjol|Gambaran/).length).toBe(3);
+  });
+
   it("shows a skeleton while the summary is pending and a safe failure message", () => {
     const { rerender } = render(<AiSummary ai={null} summaryStatus="running" />);
     expect(screen.getByText(/Ringkasan ditulis setelah komentar terkumpul/)).toBeTruthy();

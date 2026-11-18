@@ -37,6 +37,14 @@ function asList<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function summaryParagraphs(text: string): string[] {
+  const blocks = text
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return blocks.length > 0 ? blocks : [text];
+}
+
 export function AiSummary(props: {
   ai: SnapshotAi | null;
   summaryStatus?: string;
@@ -73,7 +81,13 @@ export function AiSummary(props: {
   return (
     <section className="rounded-[14px] border border-border bg-surface p-4 shadow-card">
       <h2 className="text-[15px] font-semibold text-foreground">Ringkasan AI</h2>
-      <p className="mt-2 text-[13.5px] leading-6 text-foreground">{ai.overallSummary}</p>
+      <div className="mt-2 space-y-3">
+        {summaryParagraphs(ai.overallSummary).map((paragraph, index) => (
+          <p key={index} className="text-[13.5px] leading-6 text-foreground">
+            {paragraph}
+          </p>
+        ))}
+      </div>
       <p className="mt-2 text-[12px] text-muted-foreground">
         Ditulis AI dari {props.resultCount ?? 0} hasil dan {props.commentCount ?? 0} komentar teratas · bisa keliru, cek kutipannya
       </p>

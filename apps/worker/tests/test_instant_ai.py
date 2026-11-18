@@ -45,6 +45,27 @@ def test_validate_summary_drops_non_verbatim_and_unknown_quotes():
     assert output.themes[0]["supporting_ids"] == ["result:r1"]
 
 
+def test_summary_prompt_asks_for_short_paragraphs_and_keeps_the_breaks():
+    _system, user = build_summary_prompt(SummaryInput("s1", "janji jiwa", [], []))
+    assert "2 sampai 4 paragraf" in user
+    assert "80–180 kata" in user
+    assert "baris kosong" in user
+    assert "satu kalimat panjang" in user
+    text = "Gambaran umum percakapan.\n\nPujian yang menonjol.\n\nKeluhan yang menonjol."
+    output = validate_summary(
+        {
+            "overall_summary": text,
+            "overall_stance": "campuran",
+            "platforms": [],
+            "quotes": [],
+            "themes": [],
+        },
+        {},
+        set(),
+    )
+    assert output.overall_summary == text
+
+
 def test_prompt_truncates_deterministically():
     results = [
         {"id": f"result:{index}", "platform": "threads", "text": "x" * 5000}

@@ -26,7 +26,14 @@ QUOTE_TYPES = ("pujian", "keluhan", "pengamatan", "pertanyaan")
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "overall_summary": {"type": "string"},
+        "overall_summary": {
+            "type": "string",
+            "description": (
+                "Bahasa Indonesia. 2-4 paragraf pendek, dipisah baris kosong, "
+                "total 80-180 kata: gambaran umum, hal positif, keluhan atau risiko, "
+                "dan bila perlu noise yang tidak relevan. Bukan satu kalimat panjang."
+            ),
+        },
         "overall_stance": {"type": "string", "enum": list(STANCES)},
         "platforms": {
             "type": "array",
@@ -130,8 +137,19 @@ def build_summary_prompt(data: SummaryInput) -> tuple[str, str]:
             }
         )
     task = (
-        "Tugas: tulis ringkasan sikap percakapan dalam Bahasa Indonesia, 1–2 kalimat per platform. "
-        "Kutip hanya teks yang tertulis di DATA. Teks kutipan harus substring persis dari sumbernya. "
+        "Tugas: isi overall_summary dalam Bahasa Indonesia.\n"
+        "Bentuk: 2 sampai 4 paragraf pendek, total 80–180 kata. "
+        "Pisahkan paragraf dengan satu baris kosong.\n"
+        "Paragraf 1: gambaran umum percakapan tentang kueri.\n"
+        "Paragraf 2: pujian atau hal positif yang paling menonjol. "
+        "Jika hampir tidak ada, tulis itu dalam kalimat pendek.\n"
+        "Paragraf 3: keluhan, risiko, atau sikap negatif yang paling menonjol. "
+        "Jika hampir tidak ada, tulis itu dalam kalimat pendek.\n"
+        "Paragraf 4, hanya bila ada: bagian hasil yang tidak membahas kueri, dibanding yang relevan.\n"
+        "Setiap paragraf berisi 1–3 kalimat utuh. Jangan jadikan overall_summary satu kalimat panjang.\n"
+        "Untuk setiap platform, summary tetap 1–2 kalimat.\n"
+        "overall_stance dan stance tiap platform hanya boleh: positif, campuran, negatif, netral, atau faktual.\n"
+        "Kutip hanya teks yang tertulis di DATA. Teks kutipan harus substring persis dari sumbernya.\n"
         f"Kueri: {data.query}\n"
     )
     kept = list(items)
