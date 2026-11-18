@@ -4,9 +4,8 @@ import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
 import { elapsedSeconds } from "./snapshot-format";
 
-// Komentar and Ringkasan AI belong to M4/M5. Keep them out of the progress
-// panel until those milestones ship.
-const SHOW_UPCOMING_STEPS = false;
+// Comments ship with this milestone. The AI summary stays hidden until it does.
+const SHOW_COMMENT_STEP = true;
 
 const STATE_LABEL: Record<string, string> = {
   answered: "Selesai",
@@ -70,7 +69,7 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
   return (
     <div
       className={cn(
-        "grid grid-cols-[14px_112px_minmax(0,1fr)_32px_84px] items-center gap-2 text-[13px]",
+        "grid grid-cols-[14px_112px_minmax(0,1fr)_32px_132px] items-center gap-2 text-[13px]",
         (source.state === "unavailable" || source.state === "failed") && "opacity-70",
       )}
     >
@@ -98,12 +97,16 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
       </div>
       <span className="text-right tabular-nums">{source.state === "answered" ? source.resultCount : "—"}</span>
       <span className="text-right text-[11px] text-muted-foreground">
-        {source.state === "answered" ? (
+        {source.state === "answered" && source.resultCount === 0 ? (
+          <span className="font-medium text-foreground">Selesai · 0 hasil</span>
+        ) : source.state === "answered" ? (
           <span>
             <span className="font-medium text-foreground">Selesai</span> · {latency}
           </span>
         ) : source.state === "searching" || source.state === "queued" ? (
           <span>Mencari</span>
+        ) : source.safeDetail === "deadline" ? (
+          <span>waktu habis</span>
         ) : (
           label
         )}
@@ -112,7 +115,7 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
   );
 }
 
-export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
+export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean }) {
   const snapshot = props.snapshot;
   const now = props.now ?? new Date();
   const done = snapshot.totals.done;
@@ -121,6 +124,47 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
   const finished = ["succeeded", "partial", "failed"].includes(snapshot.search.status);
   const running = !finished;
   const elapsed = elapsedSeconds(snapshot, now);
+  const sourcesBusy = snapshot.sources.some((source) => source.state === "queued" || source.state === "searching");
+  const commentCount = snapshot.comments.length;
+  const commentStatus = snapshot.search.commentStatus ?? "pending";
+  const commentDetail = snapshot.search.commentDetail ?? null;
+  const commentCopy =
+    commentStatus === "done" || commentCount > 0
+      ? commentCount > 0
+        ? `Selesai · ${commentCount} balasan`
+        : "Selesai · tidak ada balasan"
+      : commentStatus === "running"
+        ? "Mengambil balasan teratas"
+        : commentStatus === "skipped" && commentDetail === "comment_budget"
+          ? "Dilewati · waktu habis"
+          : commentStatus === "skipped" && commentDetail === "no_posts"
+            ? "Dilewati · tidak ada postingan"
+            : commentStatus === "skipped" && commentDetail === "no_provider"
+              ? "Dilewati · sumber tidak mendukung"
+              : commentStatus === "skipped" && commentDetail === "calls_failed"
+                ? "Dilewati · gagal mengambil"
+                : commentStatus === "skipped"
+                  ? "Dilewati · tidak ada balasan"
+                : sourcesBusy
+                  ? "Menunggu · sumber masih berjalan"
+                  : running
+                    ? "Mengambil balasan teratas"
+                    : "Dilewati · tidak ada balasan";
+  const commentRunning = commentStatus === "running" || (running && !sourcesBusy && commentStatus === "pending");
+  const commentDone = commentStatus === "done" || commentCount > 0;
+  const summaryStatus = snapshot.search.summaryStatus ?? "pending";
+  const summaryCopy =
+    summaryStatus === "done"
+      ? "Selesai"
+      : summaryStatus === "running"
+        ? "Menulis ringkasan"
+        : summaryStatus === "failed"
+          ? "Gagal · hasil tetap tampil"
+          : summaryStatus === "skipped"
+            ? "Dilewati"
+            : "Menunggu · setelah komentar";
+  const summaryDone = summaryStatus === "done";
+  const summaryRunning = summaryStatus === "running";
 
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -166,7 +210,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
           </div>
         </div>
       </div>
-      <ol className={cn("grid border-t border-border", SHOW_UPCOMING_STEPS && "sm:grid-cols-3")}>
+      <ol className={cn("grid border-t border-border", props.aiEnabled ? "sm:grid-cols-3" : SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
         <li className="flex items-center gap-3 px-5 py-3.5">
           <span
             className={cn(
@@ -183,27 +227,57 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date }) {
             </p>
           </div>
         </li>
-        {SHOW_UPCOMING_STEPS ? (
-          <>
-            <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-              <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-                2
-              </span>
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">Komentar</p>
-                <p className="text-[11.5px] text-muted-foreground">Menunggu · ambil balasan teratas</p>
-              </div>
-            </li>
-            <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-              <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-                3
-              </span>
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
-                <p className="text-[11.5px] text-muted-foreground">Menunggu · ±10 detik</p>
-              </div>
-            </li>
-          </>
+        {SHOW_COMMENT_STEP ? (
+          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+            <span
+              className={cn(
+                "grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold",
+                commentDone
+                  ? "bg-positif-bg text-positif"
+                  : commentRunning
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-muted-foreground",
+              )}
+            >
+              {commentDone ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : commentRunning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                "2"
+              )}
+            </span>
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">Komentar</p>
+              <p className="text-[11.5px] text-muted-foreground">{commentCopy}</p>
+            </div>
+          </li>
+        ) : null}
+        {props.aiEnabled ? (
+          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
+            <span
+              className={cn(
+                "grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold",
+                summaryDone
+                  ? "bg-positif-bg text-positif"
+                  : summaryRunning
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-muted-foreground",
+              )}
+            >
+              {summaryDone ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : summaryRunning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                "3"
+              )}
+            </span>
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
+              <p className="text-[11.5px] text-muted-foreground">{summaryCopy}</p>
+            </div>
+          </li>
         ) : null}
       </ol>
     </section>

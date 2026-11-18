@@ -7,10 +7,26 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
+import json
+import logging
+import os
 import re
 import time
 import uuid
 
+from sentiment_monitor.gemini import GeminiError, create_gemini
+from sentiment_monitor.opencode import create_opencode
+from sentiment_monitor.instant_ai import (
+    QUESTION_MAX_OUTPUT_TOKENS,
+    QUESTION_SCHEMA,
+    SUMMARY_MAX_OUTPUT_TOKENS,
+    SUMMARY_SCHEMA,
+    SummaryInput,
+    build_question_prompt,
+    build_summary_prompt,
+    validate_answer,
+    validate_summary,
+)
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
     MAX_EXTERNAL_ID_LENGTH,
@@ -23,12 +39,15 @@ from sentiment_monitor.providers.canonical import (
     keyword_relevance,
     post_identity,
     safe_credit,
+    comment_has_visible_text,
     sanitize_comment,
     sanitize_post,
     sort_posts,
 )
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
+from sentiment_monitor.providers.comments import fetch_comments
 from sentiment_monitor.providers.fetch import fetch_platform
+from sentiment_monitor.providers.fixtures import fixture_comment_fetch
 from sentiment_monitor.providers.settings import load_provider_settings
 
 ROUTE_TIMEOUT_SECONDS = 20
@@ -36,11 +55,38 @@ SEARCH_DEADLINE_SECONDS = 40
 # Launching a paid route with less budget than this only pays for a result we
 # will immediately mark unavailable. Leave the whole wave unlaunched instead.
 MIN_LAUNCH_SECONDS = 8.0
+# One comment page for each of the top posts on the six comment-capable platforms.
+TOP_POSTS_FOR_COMMENTS = 3
+MAX_COMMENT_CALLS = TOP_POSTS_FOR_COMMENTS * 6
+# A comment call that cannot finish inside the comment budget is not started.
+MIN_COMMENT_SECONDS = 1.0
+# Sources may use the search deadline. Comments get this extra slice afterwards
+# so one slow source cannot starve every other platform's replies.
+COMMENT_BUDGET_SECONDS = 12.0
 # Seven launch platforms: one search's routes must fit in a single wave.
 MAX_CONCURRENCY = 7
 MAX_INFLIGHT = 8
+# One poll answers at most this many queued questions. Failed rows stay failed
+# until the page retries them; the cycle never re-claims them.
+MAX_QUESTIONS_PER_CYCLE = 2
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
+
+_log = logging.getLogger("sentiment_monitor.instant_search")
+_LOG_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def _info(search_id: str, **fields: object) -> None:
+    """One safe line. Values that are not short tokens are dropped."""
+    parts = [f"search={search_id}"]
+    for key, value in fields.items():
+        if not isinstance(key, str) or not _LOG_TOKEN.fullmatch(key):
+            continue
+        text = str(value)
+        if not _LOG_TOKEN.fullmatch(text):
+            continue
+        parts.append(f"{key}={text}")
+    _log.info(" ".join(parts))
 
 CLAIM_SQL = """
 select id, customer_id, query_text, keyword_intent, date_window, sort_mode,
@@ -58,6 +104,7 @@ SAFE_DETAILS = frozenset(
         "queued",
         "deadline",
         "missing_key",
+        "config_error",
         "missing_url",
         "unsupported_provider",
         "unsupported_platform",
@@ -341,6 +388,8 @@ def insert_comments(
     inserted = 0
     for item in comments:
         item = sanitize_comment(item)
+        if not comment_has_visible_text(item.text):
+            continue
         cursor = conn.execute(
             """
             insert into instant_search_comments
@@ -630,7 +679,7 @@ def _handle_result(
                 )
             )
             all_posts.extend(kept)
-            return
+            return kept
         if state == "unavailable":
             tx.run(
                 lambda conn: set_source_state(
@@ -645,7 +694,7 @@ def _handle_result(
                     safe_detail=detail,
                 )
             )
-            return
+            return []
         tx.run(
             lambda conn: set_source_state(
                 conn,
@@ -659,6 +708,7 @@ def _handle_result(
                 safe_detail=detail,
             )
         )
+        return []
     except Exception:
         _mark_source_failed(
             tx,
@@ -669,6 +719,30 @@ def _handle_result(
             credits=credits,
             attempted=attempted,
         )
+    return []
+
+
+def _set_comment_progress(conn: Any, job: InstantSearchJob, status: str, detail: str | None) -> None:
+    _set_customer(conn, job.customer_id)
+    conn.execute(
+        "update instant_searches set comment_status = %s, comment_detail = %s "
+        "where id = %s and customer_id = %s",
+        (status, detail, job.id, job.customer_id),
+    )
+
+
+def _comment_result_ids(conn: Any, job: InstantSearchJob, platform: str) -> dict[str, str]:
+    rows = conn.execute(
+        """
+        select id, external_id from instant_search_results
+        where search_id = %s and customer_id = %s and platform = %s
+        """,
+        (job.id, job.customer_id, platform),
+    ) or []
+    found: dict[str, str] = {}
+    for row in rows:
+        found[str(_row_value(row, "external_id", 1))] = str(_row_value(row, "id", 0))
+    return found
 
 
 def _remaining_seconds(
@@ -713,6 +787,154 @@ def _record_late_calls(connect: Any, job: InstantSearchJob, future: Any) -> None
         pass
 
 
+def _iso_db(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(value)
+
+
+def _post_for_comments(row: Any) -> CanonicalPost:
+    return CanonicalPost(
+        platform=str(_row_value(row, "platform", 1)),  # type: ignore[arg-type]
+        external_id=str(_row_value(row, "external_id", 2) or ""),
+        text=str(_row_value(row, "text", 6) or ""),
+        title=_row_value(row, "title", 7),
+        author_name=_row_value(row, "author_name", 3),
+        author_handle=_row_value(row, "author_handle", 4),
+        url=_row_value(row, "url", 5),
+        published_at=_iso_db(_row_value(row, "published_at", 8)),
+        thumbnail_url=_row_value(row, "thumbnail_url", 9),
+        views=_row_value(row, "views", 10),
+        likes=_row_value(row, "likes", 11),
+        replies=_row_value(row, "replies", 12),
+        shares=_row_value(row, "shares", 13),
+        top_replies=(),
+        hashtags=(),
+        source_provider=str(_row_value(row, "source_provider", 14) or "unknown"),
+        routes=(),
+        raw_ref=str(_row_value(row, "raw_ref", 15) or ""),
+        collected_at=_iso_db(_row_value(row, "collected_at", 17)) or "1970-01-01T00:00:00Z",
+    )
+
+
+def _default_comment_fetcher(env: Mapping[str, Any], opener: Any) -> Any:
+    mode = env.get("CARI_PROVIDER_MODE") if isinstance(env, Mapping) else None
+    if not isinstance(mode, str) or not mode.strip():
+        mode = os.environ.get("CARI_PROVIDER_MODE", "live")
+    if mode.strip() == "fixture":
+        return lambda platform, post, **kwargs: fixture_comment_fetch(platform, post)
+
+    def live(platform: str, post: CanonicalPost, **kwargs: Any) -> Any:
+        seconds = kwargs.get("timeout")
+        call_kwargs: dict[str, Any] = {
+            "settings": kwargs["settings"],
+            "env": kwargs.get("env") or env,
+            "timeout": seconds if isinstance(seconds, int) else ROUTE_TIMEOUT_SECONDS,
+        }
+        chosen = kwargs.get("opener") or opener
+        if chosen is not None:
+            call_kwargs["opener"] = chosen
+        return fetch_comments(platform, post, **call_kwargs)
+
+    return live
+
+
+def _rollback_quiet(conn: Any) -> None:
+    rollback = getattr(conn, "rollback", None)
+    if callable(rollback):
+        try:
+            rollback()
+        except Exception:
+            return
+
+
+def fetch_top_comments(
+    conn: Any,
+    job: InstantSearchJob,
+    *,
+    settings: Mapping[str, ProviderSetting],
+    env: Mapping[str, Any],
+    opener: Any = None,
+    comment_fetcher: Any = None,
+    allow_call: Any = None,
+    seconds_left: Any = None,
+) -> None:
+    """Fetch one comment page for the top posts. Never changes the search status."""
+    if allow_call is None:
+        allow_call = lambda: True
+    if not allow_call():
+        return
+    if comment_fetcher is None:
+        comment_fetcher = _default_comment_fetcher(env, opener)
+    rows = conn.execute(
+        """
+        select id, platform, external_id, author_name, author_handle, url, text, title,
+               published_at, thumbnail_url, views, likes, replies, shares,
+               source_provider, raw_ref, rank, collected_at
+        from instant_search_results
+        where search_id = %s and customer_id = %s
+        order by platform,
+                 rank asc nulls last,
+                 (coalesce(views, 0) + 3 * coalesce(likes, 0)
+                  + 2 * coalesce(replies, 0) + 2 * coalesce(shares, 0)) desc,
+                 collected_at desc
+        """,
+        (job.id, job.customer_id),
+    ) or []
+    chosen: list[Any] = []
+    per_platform: dict[str, int] = {}
+    for row in rows:
+        platform = str(_row_value(row, "platform", 1))
+        if resolve_chain(platform, settings, mode="comments") == ():
+            continue
+        count = per_platform.get(platform, 0)
+        if count >= TOP_POSTS_FOR_COMMENTS:
+            continue
+        per_platform[platform] = count + 1
+        chosen.append(row)
+        if len(chosen) >= MAX_COMMENT_CALLS:
+            break
+    for row in chosen:
+        if not allow_call():
+            return
+        platform = str(_row_value(row, "platform", 1))
+        result_id = str(_row_value(row, "id", 0))
+        left = seconds_left() if seconds_left is not None else ROUTE_TIMEOUT_SECONDS
+        timeout = max(1, min(ROUTE_TIMEOUT_SECONDS, int(left)))
+        try:
+            fetched = comment_fetcher(
+                platform,
+                _post_for_comments(row),
+                settings=settings,
+                env=env,
+                opener=opener,
+                timeout=timeout,
+            )
+        except Exception:
+            continue
+        call = getattr(fetched, "call", None)
+        if call is not None:
+            try:
+                record_call(conn, job, call)
+            except Exception:
+                _rollback_quiet(conn)
+                return
+        try:
+            conn.execute("savepoint comment_row")
+            insert_comments(conn, job, result_id, getattr(fetched, "comments", None) or [])
+            conn.execute("release savepoint comment_row")
+        except Exception:
+            try:
+                conn.execute("rollback to savepoint comment_row")
+            except Exception:
+                _rollback_quiet(conn)
+                return
+
+
 def run_instant_search(
     connect: Any,
     job: InstantSearchJob,
@@ -724,8 +946,8 @@ def run_instant_search(
     comment_fetcher: Any = None,
     clock: Any = time.monotonic,
     deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
+    llm: Any = None,
 ) -> None:
-    del comment_fetcher
     tx = _Transactions(connect)
     if settings is None:
         settings = tx.run(load_provider_settings)
@@ -746,10 +968,18 @@ def run_instant_search(
     futures: dict[Any, tuple[str, tuple[str, ...]]] = {}
     all_posts: list[CanonicalPost] = []
     pending: set[Any] = set()
+    comment_futures: dict[Any, tuple[str, str]] = {}
     try:
         # The row's own deadline_at is the budget, not a fresh 40 s from claim
         # time: a search claimed late must still finish by its promised time.
         remaining = _remaining_seconds(job, deadline_seconds, datetime.now(timezone.utc))
+        comment_calls = 0
+        comment_rows = 0
+        skip_reasons: list[str] = []
+        comment_running = False
+        commented_platforms: set[str] = set()
+        if comment_fetcher is None:
+            comment_fetcher = _default_comment_fetcher(env, None)
         if remaining < MIN_LAUNCH_SECONDS:
             for platform, chain in sources:
                 tx.run(
@@ -763,6 +993,8 @@ def run_instant_search(
                         safe_detail="deadline",
                     )
                 )
+                _info(job.id, platform=platform, state="unavailable", results=0, latency_ms=0, detail="deadline")
+            skip_reasons.append("comment_budget")
         else:
             for platform, chain in sources:
                 tx.run(
@@ -782,9 +1014,94 @@ def run_instant_search(
                 )
                 futures[future] = (platform, chain)
             pending = set(futures)
-            deadline = clock() + remaining
+            # One clock read establishes both budgets. Comments keep a slice
+            # after the source deadline; they are not limited by it.
+            source_deadline = clock() + remaining
+            comment_deadline = source_deadline + COMMENT_BUDGET_SECONDS
+
+            def _schedule_comments(platform: str, posts: list[CanonicalPost]) -> None:
+                nonlocal comment_calls, comment_running
+                if platform in commented_platforms:
+                    return
+                commented_platforms.add(platform)
+                if resolve_chain(platform, settings, mode="comments") == ():
+                    skip_reasons.append("no_provider")
+                    _info(job.id, platform=platform, comments="skipped", reason="no_provider")
+                    return
+                if not posts:
+                    skip_reasons.append("no_posts")
+                    _info(job.id, platform=platform, comments="skipped", reason="no_posts")
+                    return
+                if comment_deadline - clock() < MIN_COMMENT_SECONDS:
+                    skip_reasons.append("comment_budget")
+                    _info(job.id, platform=platform, comments="skipped", reason="comment_budget")
+                    return
+                # Match the order the results list shows for this sort. A post
+                # that already says it has zero replies is skipped so the next
+                # visible post can use the slot. An unknown count stays eligible.
+                visible = sort_posts(posts, job.sort_mode)
+                ranked_posts = [
+                    item for item in visible if item.replies is None or item.replies > 0
+                ][:TOP_POSTS_FOR_COMMENTS]
+                ids = tx.run(lambda conn: _comment_result_ids(conn, job, platform))
+                started = 0
+                for post in ranked_posts:
+                    if comment_calls >= MAX_COMMENT_CALLS:
+                        skip_reasons.append("call_cap")
+                        break
+                    result_id = ids.get(post.external_id)
+                    if not result_id:
+                        continue
+                    left = comment_deadline - clock()
+                    if left < MIN_COMMENT_SECONDS:
+                        skip_reasons.append("comment_budget")
+                        break
+                    timeout = max(1, min(ROUTE_TIMEOUT_SECONDS, int(left)))
+                    future = executor.submit(
+                        comment_fetcher,
+                        platform,
+                        post,
+                        settings=settings,
+                        env=env,
+                        timeout=timeout,
+                    )
+                    comment_futures[future] = (platform, result_id)
+                    comment_calls += 1
+                    started += 1
+                if started and not comment_running:
+                    tx.run(lambda conn: _set_comment_progress(conn, job, "running", None))
+                    comment_running = True
+                _info(job.id, platform=platform, comments="started", calls=started)
+
+            def _drain_comments(done: set[Any]) -> None:
+                nonlocal comment_rows
+                for future in done:
+                    meta = comment_futures.pop(future, None)
+                    if meta is None:
+                        continue
+                    platform, result_id = meta
+                    try:
+                        fetched = future.result()
+                    except Exception:
+                        _info(job.id, platform=platform, comments="failed", reason="error")
+                        continue
+                    try:
+                        def _store(conn: Any, result_id: str = result_id, fetched: Any = fetched) -> int:
+                            call = getattr(fetched, "call", None)
+                            if call is not None:
+                                record_call(conn, job, call)
+                            return insert_comments(
+                                conn, job, result_id, getattr(fetched, "comments", None) or []
+                            )
+
+                        comment_rows += int(tx.run(_store) or 0)
+                    except Exception:
+                        if tx.shared is not None:
+                            _rollback_quiet(tx.shared)
+                        _info(job.id, platform=platform, comments="failed", reason="storage")
+
             while pending:
-                left = deadline - clock()
+                left = source_deadline - clock()
                 if left <= 0:
                     break
                 done, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
@@ -796,13 +1113,28 @@ def run_instant_search(
                         result = future.result()
                     except Exception:
                         tx.run(lambda conn, platform=platform, chain=chain: _failed_state(conn, job, platform, chain))
+                        _info(job.id, platform=platform, state="failed", results=0, latency_ms=0, detail="other")
                         continue
                     try:
-                        _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
+                        kept = _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
                     except Exception:
                         # Belt and braces: _handle_result isolates itself, but one
                         # platform must never abort the remaining done futures.
                         _mark_source_failed(tx, job, platform, chain)
+                        kept = []
+                    state = getattr(result, "state", "failed")
+                    _info(
+                        job.id,
+                        platform=platform,
+                        state=state,
+                        results=len(kept or []),
+                        latency_ms=getattr(result, "latency_ms", None) or 0,
+                        detail=getattr(result, "safe_detail", None) or "other",
+                    )
+                    _schedule_comments(platform, kept or [])
+                ready = {item for item in comment_futures if item.done()}
+                if ready:
+                    _drain_comments(ready)
             for future in pending:
                 platform, chain = futures[future]
                 # A route that finishes after the deadline was still paid for.
@@ -824,20 +1156,59 @@ def run_instant_search(
                         safe_detail="deadline",
                     )
                 )
-        # Finish first: a straggler route must not hold the search in
-        # 'searching' past its deadline while we join its thread.
+                _info(job.id, platform=platform, state="unavailable", results=0, latency_ms=0, detail="deadline")
+            while comment_futures:
+                left = comment_deadline - clock()
+                if left <= 0:
+                    break
+                done, _rest = wait(set(comment_futures), timeout=left, return_when=FIRST_COMPLETED)
+                if not done:
+                    break
+                _drain_comments(done)
+            for future in list(comment_futures):
+                if tx.factory:
+                    future.add_done_callback(
+                        lambda done, job=job: _record_late_calls(connect, job, done)
+                    )
+                future.cancel()
         ranked = sort_posts(dedupe_posts(all_posts), job.sort_mode)
         tx.run(lambda conn: _apply_ranks(conn, job, ranked))
+        if comment_rows:
+            comment_status, comment_detail = "done", "ok"
+        elif comment_calls:
+            comment_status, comment_detail = "skipped", "calls_failed"
+        elif "comment_budget" in skip_reasons:
+            comment_status, comment_detail = "skipped", "comment_budget"
+        elif "no_posts" in skip_reasons:
+            comment_status, comment_detail = "skipped", "no_posts"
+        elif "no_provider" in skip_reasons:
+            comment_status, comment_detail = "skipped", "no_provider"
+        else:
+            comment_status, comment_detail = "skipped", "no_posts"
+        try:
+            tx.run(lambda conn: _set_comment_progress(conn, job, comment_status, comment_detail))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+        _info(
+            job.id,
+            comments_calls=comment_calls,
+            comments_inserted=comment_rows,
+            comment_status=comment_status,
+            comment_detail=comment_detail,
+        )
         tx.run(lambda conn: finish_search(conn, job, "failed"))
+        _summarize_collected(tx, job, env=env, now=now, llm=llm)
     finally:
         # cancel() cannot stop a task that already started. Wait only for the
         # per-route bound, then stop waiting entirely: late results are
         # discarded and must not hold the worker thread hostage.
-        for future in pending:
+        stragglers = set(pending) | set(comment_futures)
+        for future in stragglers:
             future.cancel()
         still_running: set[Any] = set()
-        if pending:
-            _, still_running = wait(pending, timeout=ROUTE_TIMEOUT_SECONDS)
+        if stragglers:
+            _, still_running = wait(stragglers, timeout=ROUTE_TIMEOUT_SECONDS)
         # Join the pool only when every straggler has already finished. A route
         # that is still hung must not hold shutdown (or the worker) hostage.
         executor.shutdown(wait=not still_running, cancel_futures=True)
@@ -861,6 +1232,329 @@ update instant_search_sources
 """
 
 
+def _ai_provider(env: Mapping[str, Any]) -> str:
+    raw = env.get("CARI_AI_PROVIDER") if isinstance(env, Mapping) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raw = os.environ.get("CARI_AI_PROVIDER", "demo")
+    if not isinstance(raw, str) or not raw.strip():
+        return "demo"
+    return raw.strip().lower()
+
+
+def _set_summary_status(conn: Any, job: InstantSearchJob, status: str, stance: str | None = None) -> None:
+    _set_customer(conn, job.customer_id)
+    if stance is None:
+        conn.execute(
+            "update instant_searches set summary_status = %s where id = %s and customer_id = %s",
+            (status, job.id, job.customer_id),
+        )
+        return
+    conn.execute(
+        "update instant_searches set summary_status = %s, overall_stance = %s "
+        "where id = %s and customer_id = %s",
+        (status, stance, job.id, job.customer_id),
+    )
+
+
+def _load_summary_input(conn: Any, job: InstantSearchJob) -> tuple[SummaryInput, dict[str, str], set[str]] | None:
+    rows = conn.execute(
+        """
+        select id, platform, author_name, author_handle, text, title, published_at
+        from instant_search_results
+        where search_id = %s and customer_id = %s
+        order by rank asc nulls last, collected_at desc
+        limit 50
+        """,
+        (job.id, job.customer_id),
+    ) or []
+    if not rows:
+        return None
+    result_ids = {str(_row_value(row, "id", 0)) for row in rows}
+    comments = [
+        row
+        for row in (
+            conn.execute(
+                """
+                select id, result_id, author_name, author_handle, text
+                from instant_search_comments
+                where search_id = %s and customer_id = %s
+                """,
+                (job.id, job.customer_id),
+            )
+            or []
+        )
+        if str(_row_value(row, "result_id", 1)) in result_ids
+    ]
+    refs: dict[str, str] = {}
+    platforms: set[str] = set()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        result_id = str(_row_value(row, "id", 0))
+        platform = str(_row_value(row, "platform", 1) or "")
+        text = str(_row_value(row, "text", 4) or "")
+        title = _row_value(row, "title", 5)
+        stored = text if not title else f"{title}\n{text}"
+        refs[f"result:{result_id}"] = stored
+        platforms.add(platform)
+        published = _row_value(row, "published_at", 6)
+        results.append(
+            {
+                "id": f"result:{result_id}",
+                "result_id": result_id,
+                "platform": platform,
+                "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2) or "",
+                "published_at": _iso_db(published),
+                "text": text,
+                "title": title,
+            }
+        )
+    comment_rows: list[dict[str, Any]] = []
+    for row in comments:
+        comment_id = str(_row_value(row, "id", 0))
+        text = str(_row_value(row, "text", 4) or "")
+        refs[f"comment:{comment_id}"] = text
+        comment_rows.append(
+            {
+                "id": f"comment:{comment_id}",
+                "result_id": f"result:{_row_value(row, 'result_id', 1)}",
+                "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2) or "",
+                "text": text,
+            }
+        )
+    return (
+        SummaryInput(job.id, job.query, results, comment_rows),
+        refs,
+        platforms,
+    )
+
+
+def _store_summary(conn: Any, job: InstantSearchJob, output: Any, result: Any) -> None:
+    _set_customer(conn, job.customer_id)
+    conn.execute(
+        """
+        insert into instant_search_ai
+          (search_id, customer_id, overall_summary, overall_stance, platform_summaries,
+           quotes, themes, model, input_tokens, output_tokens, cost_usd)
+        values (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+        on conflict (search_id) do update
+        set overall_summary = excluded.overall_summary,
+            overall_stance = excluded.overall_stance,
+            platform_summaries = excluded.platform_summaries,
+            quotes = excluded.quotes,
+            themes = excluded.themes,
+            model = excluded.model,
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cost_usd = excluded.cost_usd
+        """,
+        (
+            job.id,
+            job.customer_id,
+            output.overall_summary,
+            output.overall_stance,
+            json.dumps(output.platforms, ensure_ascii=False),
+            json.dumps(output.quotes, ensure_ascii=False),
+            json.dumps(output.themes, ensure_ascii=False),
+            str(getattr(result, "model", None) or "unknown"),
+            int(getattr(result, "input_tokens", 0) or 0),
+            int(getattr(result, "output_tokens", 0) or 0),
+            float(getattr(result, "cost_usd", 0) or 0),
+        ),
+    )
+    _set_summary_status(conn, job, "done", output.overall_stance)
+
+
+def _client_env(env: Mapping[str, Any], provider: str) -> dict[str, Any]:
+    client_env = dict(env)
+    client_env["CARI_AI_PROVIDER"] = provider
+    for name in (
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
+        "GEMINI_MAX_RPM",
+        "GEMINI_INPUT_USD_PER_MTOK",
+        "GEMINI_OUTPUT_USD_PER_MTOK",
+        "OPENCODE_API_KEY",
+        "OPENCODE_MODEL",
+        "OPENCODE_MAX_RPM",
+    ):
+        if name not in client_env:
+            value = os.environ.get(name)
+            if value is not None:
+                client_env[name] = value
+    return client_env
+
+
+def _create_llm(env: Mapping[str, Any], conn: Any = None) -> Any:
+    """Gemini stays on its own client. opencode is the only other live provider."""
+    if _ai_provider(env) == "opencode":
+        return create_opencode(env, conn)
+    return create_gemini(env, conn)
+
+
+def _summary_status(conn: Any, job: InstantSearchJob) -> str | None:
+    rows = conn.execute(
+        "select summary_status from instant_searches where id = %s and customer_id = %s",
+        (job.id, job.customer_id),
+    ) or []
+    if not rows:
+        return None
+    value = _row_value(rows[0], "summary_status", 0)
+    if value is None:
+        return "pending"
+    return str(value)
+
+
+def _prepare_summary(conn: Any, job: InstantSearchJob, env: Mapping[str, Any]) -> tuple[Any, dict[str, str], set[str], dict[str, Any]] | None:
+    # One automatic model call per search. The poll does not scan old rows.
+    # This proceeds only while summary_status is still the initial pending
+    # value; running, done, failed, and skipped are left alone.
+    if _summary_status(conn, job) != "pending":
+        return None
+    provider = _ai_provider(env)
+    if provider == "off":
+        _set_summary_status(conn, job, "skipped")
+        return None
+    prepared = _load_summary_input(conn, job)
+    if prepared is None:
+        _set_summary_status(conn, job, "skipped")
+        return None
+    data, refs, platforms = prepared
+    _set_summary_status(conn, job, "running")
+    return data, refs, platforms, _client_env(env, provider)
+
+
+def summarize_search(
+    conn: Any,
+    job: InstantSearchJob,
+    *,
+    llm: Any = None,
+    settings: Any = None,
+    now: datetime,
+    env: Mapping[str, Any] | None = None,
+) -> None:
+    """Write the summary. A model failure never changes the search status."""
+    del settings, now
+    try:
+        prepared = _prepare_summary(conn, job, env or {})
+    except Exception:
+        _set_summary_status(conn, job, "failed")
+        return
+    if prepared is None:
+        return
+    data, refs, platforms, client_env = prepared
+    try:
+        if llm is None:
+            llm = _create_llm(client_env)
+        system, user = build_summary_prompt(data)
+        generated = llm.generate_json(
+            system=system,
+            user=user,
+            schema=SUMMARY_SCHEMA,
+            purpose="summary",
+            search_id=job.id,
+            max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+        output = validate_summary(generated.data, refs, platforms)
+        _store_summary(conn, job, output, generated)
+    except GeminiError:
+        _set_summary_status(conn, job, "failed")
+    except Exception:
+        _set_summary_status(conn, job, "failed")
+
+
+def _summarize_collected(
+    tx: _Transactions,
+    job: InstantSearchJob,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    llm: Any,
+) -> None:
+    """Commit 'running' before the model call. Never raise into the search runner."""
+    del now
+    try:
+        prepared = tx.run(lambda conn: _prepare_summary(conn, job, env))
+    except Exception:
+        if tx.shared is not None:
+            _rollback_quiet(tx.shared)
+        try:
+            tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+        return
+    if prepared is None:
+        return
+    data, refs, platforms, client_env = prepared
+    try:
+        client = llm if llm is not None else _create_llm(client_env, tx.connect)
+        system, user = build_summary_prompt(data)
+        generated = client.generate_json(
+            system=system,
+            user=user,
+            schema=SUMMARY_SCHEMA,
+            purpose="summary",
+            search_id=job.id,
+            max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+        output = validate_summary(generated.data, refs, platforms)
+    except Exception as error:
+        code = error.code if isinstance(error, GeminiError) else "error"
+        _info(job.id, summary_detail=code)
+        try:
+            tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+        return
+    try:
+        tx.run(lambda conn: _store_summary(conn, job, output, generated))
+    except Exception:
+        if tx.shared is not None:
+            _rollback_quiet(tx.shared)
+        try:
+            tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
+        except Exception:
+            if tx.shared is not None:
+                _rollback_quiet(tx.shared)
+
+
+_SUMMARY_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def retry_named_summary(connect: Any, search_id: str, env: Mapping[str, Any]) -> None:
+    """Re-run one failed summary by id. This is not a scan of old searches."""
+    if not isinstance(search_id, str) or not _SUMMARY_ID.fullmatch(search_id):
+        return
+    tx = _Transactions(connect)
+
+    def reopen(conn: Any) -> InstantSearchJob | None:
+        rows = conn.execute(
+            "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
+            "language_filter, deadline_at from instant_searches where id = %s",
+            (search_id,),
+        ) or []
+        if not rows:
+            return None
+        job = _job_from_row(rows[0])
+        if job is None:
+            return None
+        _set_customer(conn, job.customer_id)
+        conn.execute(
+            "update instant_searches set summary_status = 'pending' "
+            "where id = %s and summary_status = 'failed'",
+            (job.id,),
+        )
+        return job
+
+    job = tx.run(reopen)
+    if job is None:
+        return
+    _summarize_collected(tx, job, env=env, now=datetime.now(timezone.utc), llm=None)
+
+
 def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
     # A queued search past its deadline can never be claimed, and a running
     # search that missed its deadline by more than the grace window was left by
@@ -868,6 +1562,19 @@ def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
     # UI stops polling them forever. The 60 s grace avoids racing an in-flight
     # runner that is still shutting its route threads down.
     conn.execute(FAIL_DEADLINE_SQL, (now, now, now, now))
+    # A summary left 'running' after the search already finished was abandoned
+    # by a crashed worker. Mark it failed so the page stops waiting. This does
+    # not change the search status.
+    conn.execute(
+        """
+        update instant_searches
+           set summary_status = 'failed'
+         where summary_status = 'running'
+           and finished_at is not null
+           and finished_at <= %s - interval '3 minutes'
+        """,
+        (now,),
+    )
 
 
 def _fail_unfinished_sources(conn: Any, job: InstantSearchJob) -> None:
@@ -896,6 +1603,180 @@ def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, An
             )
         except Exception:
             pass
+
+
+_QUESTION_DETAILS = SAFE_DETAILS | frozenset(
+    {"empty_answer", "off", "error", "http_4xx", "paused", "cycle_cap"}
+)
+
+
+def _question_detail(value: str) -> str:
+    if value in _QUESTION_DETAILS or _HTTP_STATUS_PATTERN.fullmatch(value):
+        return value
+    return "error"
+
+
+def _fail_question(conn: Any, question_id: str, detail: str, now: datetime) -> None:
+    conn.execute(
+        "update instant_search_questions set status = 'failed', answer = null, "
+        "safe_detail = %s, answered_at = %s where id = %s",
+        (_question_detail(detail), now, question_id),
+    )
+
+
+def _load_question_job(conn: Any, search_id: str, customer_id: str) -> InstantSearchJob | None:
+    rows = conn.execute(
+        "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
+        "language_filter, deadline_at from instant_searches where id = %s and customer_id = %s",
+        (search_id, customer_id),
+    ) or []
+    if not rows:
+        return None
+    return _job_from_row(rows[0])
+
+
+def _answer_question(
+    conn: Any,
+    row: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    llm: Any,
+    connect: Any = None,
+) -> str:
+    question_id = str(_row_value(row, "id", 0))
+    search_id = str(_row_value(row, "search_id", 1))
+    customer_id = str(_row_value(row, "customer_id", 2))
+    question = _row_value(row, "question", 3)
+    try:
+        provider = _ai_provider(env)
+        if provider == "off":
+            _fail_question(conn, question_id, "off", now)
+            return "failed"
+        job = _load_question_job(conn, search_id, customer_id)
+        if job is None:
+            _fail_question(conn, question_id, "not_found", now)
+            return "failed"
+        prepared = _load_summary_input(conn, job)
+        if prepared is None:
+            data, refs = SummaryInput(job.id, job.query, [], []), {}
+        else:
+            data, refs, _platforms = prepared
+        client = llm if llm is not None else _create_llm(
+            _client_env(env, provider), connect if connect is not None else conn
+        )
+        system, user = build_question_prompt(data, str(question or ""))
+        generated = client.generate_json(
+            system=system,
+            user=user,
+            schema=QUESTION_SCHEMA,
+            purpose="question",
+            search_id=search_id,
+            max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
+        )
+        answer = validate_answer(getattr(generated, "data", None), refs)
+        if not answer.answer:
+            _fail_question(conn, question_id, "empty_answer", now)
+            return "failed"
+        conn.execute(
+            """
+            update instant_search_questions
+               set status = 'done',
+                   answer = %s,
+                   citations = %s::jsonb,
+                   model = %s,
+                   cost_usd = %s,
+                   safe_detail = null,
+                   answered_at = %s
+             where id = %s
+            """,
+            (
+                answer.answer,
+                json.dumps(answer.citations),
+                str(getattr(generated, "model", None) or "unknown"),
+                float(getattr(generated, "cost_usd", 0) or 0),
+                now,
+                question_id,
+            ),
+        )
+        return "done"
+    except GeminiError as error:
+        detail = _question_detail(error.code)
+        _fail_question(conn, question_id, detail, now)
+        _info("question", question_detail=detail, question_search=search_id)
+        return "failed"
+    except Exception:
+        _fail_question(conn, question_id, "error", now)
+        _info("question", question_detail="error", question_search=search_id)
+        return "failed"
+
+
+def _commit_question_claim(conn: Any) -> None:
+    commit = getattr(conn, "commit", None)
+    if callable(commit):
+        commit()
+
+
+def run_question_cycle(
+    conn: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    limit: int = 2,
+    llm: Any = None,
+    connect: Any = None,
+) -> int:
+    """Answer queued questions. A failure never changes the search status."""
+    conn.execute(
+        """
+        update instant_search_questions
+           set status = 'failed', safe_detail = 'deadline', answered_at = %s
+         where status = 'running'
+           and created_at <= %s - interval '10 minutes'
+        """,
+        (now, now),
+    )
+    bounded = max(0, min(MAX_QUESTIONS_PER_CYCLE, int(limit)))
+    if bounded == 0:
+        _commit_question_claim(conn)
+        return 0
+    rows = conn.execute(
+        """
+        with claimed as (
+            select id
+            from instant_search_questions
+            where status = 'queued'
+            order by created_at, id
+            limit %s
+            for update skip locked
+        )
+        update instant_search_questions as question
+           set status = 'running'
+          from claimed
+         where question.id = claimed.id
+        returning question.id, question.search_id, question.customer_id, question.question
+        """,
+        (bounded,),
+    ) or []
+    # Commit the claim before the model call. A later error must not roll the
+    # row back to queued, or the 2 s poll would send the same question again.
+    _commit_question_claim(conn)
+    done = 0
+    failed = 0
+    for row in rows:
+        outcome = _answer_question(conn, row, env=env, now=now, llm=llm, connect=connect)
+        if outcome == "done":
+            done += 1
+        else:
+            failed += 1
+    if rows:
+        _info(
+            "questions",
+            questions_claimed=len(rows),
+            questions_done=done,
+            questions_failed=failed,
+        )
+    return len(rows)
 
 
 def run_instant_search_cycle(
@@ -963,6 +1844,11 @@ def run_instant_search_poll(
     a long-lived pool. New arrivals therefore become claimable while an earlier
     batch is still fetching; ``for update skip locked`` plus the immediate
     per-claim commit keep multiple workers from double-claiming.
+
+    This poll does not look for old searches whose summary_status is still
+    pending or failed. A summary runs once, at the end of the run that claimed
+    that search, and a second call is refused while the status is no longer
+    pending.
     """
     del limits
     tx = _Transactions(connect)

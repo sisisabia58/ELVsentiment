@@ -63,6 +63,32 @@ const comments = {
 };
 
 describe("ResultsList", () => {
+  it("shows at most three top replies and the remaining count", () => {
+    const fourComments = [0, 1, 2, 3].map((index) => ({
+      id: `c${index}`,
+      resultId: "r1",
+      platform: "threads",
+      externalId: `c-${index}`,
+      authorName: "Rina",
+      authorHandle: "rina",
+      text: `balasan ${index}`,
+      publishedAt: "2026-11-12T10:00:00Z",
+      likes: 10 - index,
+      replies: 0,
+    }));
+    render(
+      <ResultsList
+        results={[result({ id: "r1", replies: 4 })]}
+        commentsByResult={{ r1: fourComments }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getAllByText(/▲/)).toHaveLength(3);
+    expect(screen.getByText("1 balasan lainnya")).toBeTruthy();
+    expect(screen.getByLabelText(/contoh balasan/i)).toBeTruthy();
+    expect(screen.queryByText("4 hasil")).toBeNull();
+  });
+
   it("shows engagement, thumbnail, top replies, and an undated label", () => {
     const datedPost = result({
       id: "r1",
@@ -99,6 +125,134 @@ describe("ResultsList", () => {
     expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
     expect(screen.getAllByRole("img").length).toBeGreaterThan(0);
     expect(screen.getByText("Paling cocok")).toBeTruthy();
+  });
+
+  it("does not present a LinkedIn reply count as collected replies", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "linkedin", replies: 8 })]}
+        commentsByResult={{}}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("Balasan tidak diambil")).toBeTruthy();
+    expect(screen.queryByText("8 balasan")).toBeNull();
+    expect(screen.queryByLabelText(/contoh balasan/i)).toBeNull();
+  });
+
+  it("hides a reply row whose text is empty", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
+        commentsByResult={{
+          r1: [
+            { ...comments.r1[0], platform: "facebook", text: "enak", authorName: "Sari", authorHandle: null },
+            { ...comments.r1[1], id: "c-empty", platform: "facebook", text: "   " },
+          ],
+        }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("enak")).toBeTruthy();
+    expect(screen.getByText("3 balasan")).toBeTruthy();
+    expect(screen.getAllByText(/▲/)).toHaveLength(1);
+    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+  });
+
+  it("drops invisible facebook replies and keeps the lainnya count on the rows shown", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
+        commentsByResult={{
+          r1: [
+            { ...comments.r1[0], id: "c-text", platform: "facebook", text: "enak", authorName: "Sari", authorHandle: null },
+            { ...comments.r1[0], id: "c-zhong", platform: "facebook", text: "\u200b", authorName: "Zhong Lun", authorHandle: "Zhong Lun" },
+            { ...comments.r1[0], id: "c-miki", platform: "facebook", text: "\ufeff\u200c", authorName: "Miki Yong", authorHandle: "Miki Yong" },
+            { ...comments.r1[0], id: "c-object", platform: "facebook", text: "\ufffc", authorName: "Stiker", authorHandle: null },
+          ],
+        }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("enak")).toBeTruthy();
+    expect(screen.queryByText("Zhong Lun")).toBeNull();
+    expect(screen.queryByText("Miki Yong")).toBeNull();
+    expect(screen.queryByText("Stiker")).toBeNull();
+    expect(screen.getAllByText(/▲/)).toHaveLength(1);
+    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+    const block = screen.getByLabelText(/contoh balasan/i);
+    expect(block.textContent).toContain("3");
+    expect(block.textContent).not.toContain("4");
+  });
+
+  it("shows the stored Zhong Lun text and counts lainnya from the rows on screen", () => {
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3, authorName: "Rojaklah" })]}
+        commentsByResult={{
+          r1: [
+            {
+              ...comments.r1[0],
+              id: "c-miki",
+              platform: "facebook",
+              text: "Zhong Lun",
+              authorName: "Miki Yong",
+              authorHandle: "Miki Yong",
+              likes: 0,
+            },
+            {
+              ...comments.r1[0],
+              id: "c-edward",
+              platform: "facebook",
+              text: "环氧乙烷 tidak masalah",
+              authorName: "Edward Gooi",
+              authorHandle: "Edward Gooi",
+              likes: 0,
+            },
+            {
+              ...comments.r1[0],
+              id: "c-filler",
+              platform: "facebook",
+              text: "\u3164",
+              authorName: "Kosong",
+              authorHandle: "Kosong",
+              likes: 0,
+            },
+          ],
+        }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getByText("Zhong Lun")).toBeTruthy();
+    expect(screen.getByText("Miki Yong")).toBeTruthy();
+    expect(screen.getByText("Edward Gooi")).toBeTruthy();
+    expect(screen.queryByText("Kosong")).toBeNull();
+    expect(screen.getAllByText(/▲/)).toHaveLength(2);
+    expect(screen.getByText("1 balasan lainnya")).toBeTruthy();
+    const block = screen.getByLabelText(/contoh balasan/i);
+    expect(block.textContent).toContain("3");
+    expect(block.textContent).not.toContain("4");
+  });
+
+  it("does not show more reply rows than the post reports", () => {
+    const rows = ["satu", "dua", "tiga", "empat"].map((text, index) => ({
+      ...comments.r1[0],
+      id: `c${index}`,
+      platform: "facebook",
+      text,
+      authorName: text,
+      authorHandle: null,
+    }));
+    render(
+      <ResultsList
+        results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
+        commentsByResult={{ r1: rows }}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getAllByText(/▲/)).toHaveLength(3);
+    expect(screen.queryByText("empat")).toBeNull();
+    expect(screen.queryByText(/balasan lainnya/)).toBeNull();
   });
 
   it("replaces a broken thumbnail with an aria-hidden platform placeholder", () => {

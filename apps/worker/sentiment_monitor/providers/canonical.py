@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 import math
 import re
+import unicodedata
 from typing import Iterable, Literal
 import urllib.parse
 
@@ -267,6 +268,29 @@ def sanitize_post(post: CanonicalPost) -> CanonicalPost:
         raw_ref=str(_cap_text(_clean_text(post.raw_ref) or "", MAX_RAW_REF_LENGTH)),
         routes=tuple(str(_clean_text(route)) for route in post.routes),
     )
+
+
+# Hangul fillers are letters (Lo), so a category check keeps them. They paint blank.
+_BLANK_LETTERS = frozenset({"\u115f", "\u1160", "\u3164", "\uffa0", "\ufffc", "\u2800"})
+
+
+def comment_has_visible_text(value: object) -> bool:
+    """False for blank, whitespace, and invisible sticker placeholders.
+
+    Facebook photo and sticker replies often arrive as U+FFFC, a zero-width
+    character, a Hangul filler, or spaces. Those still have a length, so a
+    plain strip keeps an author row with nothing to read.
+    """
+    if not isinstance(value, str):
+        return False
+    for char in value:
+        if char in _BLANK_LETTERS:
+            continue
+        category = unicodedata.category(char)
+        if category[0] in {"C", "Z", "M"}:
+            continue
+        return True
+    return False
 
 
 def sanitize_comment(comment: CanonicalComment) -> CanonicalComment:

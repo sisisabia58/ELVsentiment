@@ -147,6 +147,98 @@ def test_facebook_requests_newest_sort():
     assert "sort=newest" in seen[0]
 
 
+def test_facebook_skips_replies_with_no_text():
+    payload = fixture("comments_facebook.json")
+    payload["comments"] = [
+        {"id": "sticker", "text": "  ", "author": {"name": "Stiker"}, "reaction_count": 1},
+        payload["comments"][0],
+    ]
+
+    def opener(request, timeout=0):
+        del request, timeout
+        return Response(payload, headers={"x-credits-charged": "1"})
+
+    result = fetch_comments(
+        "facebook", post(platform="facebook", url="https://example.invalid/post/1"),
+        settings=SETTINGS,
+        env={"SCRAPEATLAS_API_KEY": "synthetic"}, opener=opener,
+    )
+    assert [item.external_id for item in result.comments] == [payload["comments"][1]["id"]]
+    assert result.comments[0].text.startswith("Iya iyaaalah")
+
+
+def test_facebook_labels_a_sticker_and_drops_invisible_text():
+    payload = fixture("comments_facebook.json")
+    payload["comments"] = [
+        {"id": "blank", "text": "\u200b", "author": {"name": "Zhong Lun"}, "reaction_count": 1},
+        {
+            "id": "sticker",
+            "text": "\ufffc",
+            "author": {"name": "Miki Yong"},
+            "attachments": [{"type": "sticker", "url": "https://example.invalid/sticker.png"}],
+            "reaction_count": 2,
+        },
+        payload["comments"][0],
+    ]
+
+    def opener(request, timeout=0):
+        del request, timeout
+        return Response(payload, headers={"x-credits-charged": "1"})
+
+    result = fetch_comments(
+        "facebook", post(platform="facebook", url="https://example.invalid/post/1"),
+        settings=SETTINGS,
+        env={"SCRAPEATLAS_API_KEY": "synthetic"}, opener=opener,
+    )
+    assert [item.external_id for item in result.comments] == ["sticker", payload["comments"][2]["id"]]
+    assert result.comments[0].text == "lampiran media"
+    assert result.comments[0].author_name == "Miki Yong"
+
+
+def test_facebook_keeps_the_stored_zhong_lun_text_and_prefers_a_longer_message():
+    """Staging search a923bb0d stored Miki Yong's text as the ASCII name Zhong Lun."""
+    payload = fixture("comments_facebook.json")
+    payload["comments"] = [
+        {
+            "id": "miki",
+            "text": "Zhong Lun",
+            "author": {"name": "Miki Yong"},
+            "reaction_count": 0,
+            "reply_count": 0,
+        },
+        {
+            "id": "with-message",
+            "text": "\u3164",
+            "message": "enak sekali",
+            "author": {"name": "Ada Pesan"},
+            "reaction_count": 0,
+        },
+        {
+            "id": "sticker",
+            "text": "\u3164",
+            "author": {"name": "Stiker"},
+            "attachments": [{"type": "sticker", "url": "https://example.invalid/sticker.png"}],
+            "reaction_count": 0,
+        },
+    ]
+
+    def opener(request, timeout=0):
+        del request, timeout
+        return Response(payload, headers={"x-credits-charged": "1"})
+
+    result = fetch_comments(
+        "facebook", post(platform="facebook", url="https://example.invalid/post/1"),
+        settings=SETTINGS,
+        env={"SCRAPEATLAS_API_KEY": "synthetic"}, opener=opener,
+    )
+    by_id = {item.external_id: item for item in result.comments}
+    assert by_id["miki"].text == "Zhong Lun"
+    assert by_id["miki"].author_name == "Miki Yong"
+    assert by_id["miki"].likes == 0
+    assert by_id["with-message"].text == "enak sekali"
+    assert by_id["sticker"].text == "lampiran media"
+
+
 def test_404_not_found_is_answered_with_zero_comments_and_credits():
     def opener(request, timeout=0):
         raise urllib.error.HTTPError(

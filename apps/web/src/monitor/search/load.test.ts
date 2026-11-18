@@ -244,6 +244,36 @@ describe("loadSearchSnapshot", () => {
     expect(snapshot?.questions[0]?.answer).toBe("Antrean.");
     expect(await loadSearchSnapshot(db, OTHER_CUSTOMER, SEARCH)).toBeNull();
   });
+
+  it("orders comments by likes then published time and keeps them out of the result count", async () => {
+    const db = await migrated();
+    await insertSearch(db, SEARCH, CUSTOMER);
+    const resultId = "77777777-7777-4777-8777-777777777777";
+    await insertResult(db, SEARCH, CUSTOMER, {
+      id: resultId,
+      externalId: "tiktok-1",
+      publishedAt: "2026-11-15T09:00:00Z",
+      rank: 1,
+    });
+    const rows = [
+      ["88888888-8888-4888-8888-888888888881", "low", 1, "2026-11-01T00:00:00Z"],
+      ["88888888-8888-4888-8888-888888888882", "later", 5, "2026-11-03T00:00:00Z"],
+      ["88888888-8888-4888-8888-888888888883", "earlier", 5, "2026-11-02T00:00:00Z"],
+    ] as const;
+    for (const [id, externalId, likes, publishedAt] of rows) {
+      await db.query(
+        `insert into instant_search_comments
+           (id, search_id, customer_id, result_id, platform, external_id, text, likes,
+            published_at, source_provider, raw_ref)
+         values ($1, $2, $3, $4, 'tiktok', $5, $5, $6, $7, 'scrapeatlas', $5)`,
+        [id, SEARCH, CUSTOMER, resultId, externalId, likes, publishedAt],
+      );
+    }
+    const snapshot = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
+    expect(snapshot?.comments.map((comment) => comment.externalId)).toEqual(["earlier", "later", "low"]);
+    expect(snapshot?.totals.results).toBe(1);
+    expect(snapshot?.results).toHaveLength(1);
+  });
 });
 
 describe("loadHistory", () => {

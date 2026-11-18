@@ -117,6 +117,62 @@ function failedSnapshot(errorCode: string): SearchSnapshot {
 }
 
 describe("SearchDetail", () => {
+  it("hides the summary until a non-demo provider is selected", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "campuran",
+      platformSummaries: [],
+      quotes: [{ text: "kutipan-rahasia" }],
+      themes: [],
+      model: "demo",
+    };
+    render(<SearchDetail initialSnapshot={done} />);
+    expect(screen.queryByText("Ringkasan AI")).toBeNull();
+    expect(screen.queryByText("Tanya hasil ini")).toBeNull();
+    expect(screen.queryByText("kutipan-rahasia")).toBeNull();
+    expect(screen.queryByText("Bagaimana percakapannya")).toBeNull();
+    expect(screen.getByText("antrean barayam ciledug tadi malem")).toBeTruthy();
+  });
+
+  it("shows the summary beside the results and the breakdown after them", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "campuran",
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian." }],
+      quotes: [],
+      themes: [],
+      model: "gemini",
+    };
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getAllByText("Ringkasan AI").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tanya hasil ini")).toBeTruthy();
+    expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
+    const body = document.body.textContent ?? "";
+    expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
+  });
+
+  it("shows each quote link once", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "positif",
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "result:r1" }],
+      quotes: [
+        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+      ],
+      themes: [],
+      model: "gemini",
+    };
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getAllByRole("link", { name: "antrean unik" })).toHaveLength(1);
+  });
+
   it("shows the command receipt, progress before completion, and results after", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const { rerender } = render(<SearchDetail initialSnapshot={snapshot()} />);
@@ -129,6 +185,7 @@ describe("SearchDetail", () => {
     expect(screen.getByText(/7 dari 8 sumber menjawab/)).toBeTruthy();
     expect(screen.getByText("Hasil")).toBeTruthy();
     expect(screen.getByText(/antrean barayam/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pantau sebagai proyek" })).toBeTruthy();
   });
 
   it("never names a raw provider to the end user", () => {
@@ -171,7 +228,7 @@ describe("SearchDetail", () => {
     const done = finishedSnapshot();
     done.totals = { sources: 8, done: 7, results: 2 };
     render(<SearchDetail initialSnapshot={done} />);
-    expect(screen.getByText(/2 hasil/)).toBeTruthy();
+    expect(screen.getAllByText(/2 hasil/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/kredit/)).toBeNull();
   });
 
@@ -244,6 +301,8 @@ describe("SearchScreen", () => {
     expect(screen.queryByText("campuran")).toBeNull();
     expect(screen.getByText("Cari di 7 sumber")).toBeTruthy();
     expect(screen.getByText("Baca komentar teratas")).toBeTruthy();
+    expect(screen.getByText(/Balasan pada 3 pos teratas tiap sumber/)).toBeTruthy();
+    expect(screen.queryByText(/paling disukai ikut diambil/)).toBeNull();
   });
 
   it("keeps the AI summary, quote, and question copy when answers are enabled", () => {

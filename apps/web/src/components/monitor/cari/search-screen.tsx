@@ -14,9 +14,12 @@ import {
 } from "@/monitor/search/filters";
 import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
 import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platforms";
-import { startSearchAction } from "@/app/cari/start-action";
+import { monitorAsProjectAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
+import { AiSummary } from "./ai-summary";
+import { ConversationBreakdown } from "./conversation-breakdown";
+import { AskPanel } from "./ask-panel";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
@@ -103,6 +106,55 @@ function useNow(initialIso: string | undefined): Date {
   return now;
 }
 
+function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boolean; running: boolean }) {
+  const snapshot = props.snapshot;
+  if (snapshot.results.length === 0 && !props.aiEnabled) return null;
+  const results = snapshot.results.length > 0 ? (
+    <ResultsList
+      results={snapshot.results}
+      commentsByResult={commentsByResult(snapshot)}
+      sortMode={snapshot.search.filters.sort}
+      now={props.now}
+    />
+  ) : null;
+  if (!props.aiEnabled || props.running) {
+    return results ? <div className="mt-5">{results}</div> : null;
+  }
+  const counts: Record<string, number> = {};
+  for (const result of snapshot.results) counts[result.platform] = (counts[result.platform] ?? 0) + 1;
+  const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
+  const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
+  return (
+    <div className="mt-5 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-5">
+      <aside className="order-first mb-5 lg:order-2 lg:mb-0 lg:sticky lg:top-4">
+        <AiSummary
+          ai={snapshot.ai}
+          summaryStatus={summaryStatus}
+          resultCount={snapshot.totals.results}
+          commentCount={snapshot.comments.length}
+          platformCounts={counts}
+          results={snapshot.results}
+          comments={snapshot.comments}
+        />
+      </aside>
+      <div className="min-w-0 lg:order-1">
+        {results}
+        {showBreakdown ? <ConversationBreakdown snapshot={snapshot} /> : null}
+        <div className="mt-5">
+          <AskPanel
+            searchId={snapshot.search.id}
+            questions={snapshot.questions}
+            suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Platform mana yang paling ramai?"]}
+            results={snapshot.results}
+            comments={snapshot.comments}
+            resultCount={snapshot.totals.results}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComment[]> {
   const grouped: Record<string, SnapshotComment[]> = {};
   for (const comment of snapshot.comments) {
@@ -111,13 +163,15 @@ function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComm
   return grouped;
 }
 
-export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string }) {
+export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string; aiEnabled?: boolean }) {
   const { snapshot, stale } = useSearchPoll(
     props.initialSnapshot.search.id,
     props.initialSnapshot,
   );
+  const router = useRouter();
   const now = useNow(props.now);
   const search = snapshot.search;
+  const [monitorError, setMonitorError] = useState<string | null>(null);
   const running = search.status === "queued" || search.status === "running";
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
@@ -144,8 +198,36 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
           <p className="font-mono text-[12.5px] text-muted-foreground">{receipt.join(" · ")}</p>
+          {!running ? (
+            <button
+              type="button"
+              className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-[13px] font-medium text-foreground"
+              onClick={() => {
+                void (async () => {
+                  setMonitorError(null);
+                  try {
+                    const result = await monitorAsProjectAction(search.id);
+                    if (result.ok) {
+                      router.push(result.href);
+                      return;
+                    }
+                    setMonitorError("Proyek belum bisa disiapkan. Coba lagi.");
+                  } catch {
+                    setMonitorError("Proyek belum bisa disiapkan. Coba lagi.");
+                  }
+                })();
+              }}
+            >
+              Pantau sebagai proyek
+            </button>
+          ) : null}
         </div>
       </section>
+      {monitorError ? (
+        <p role="alert" className="mt-2 text-[13px] text-negatif">
+          {monitorError}
+        </p>
+      ) : null}
       {failureCopy ? (
         <p
           role="alert"
@@ -159,21 +241,10 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
           Koneksi terputus. Menampilkan hasil terakhir.
         </p>
       ) : null}
-      {running ? (
-        <div className="mt-5">
-          <ProgressPanel snapshot={snapshot} now={now} />
-        </div>
-      ) : null}
-      {snapshot.results.length > 0 ? (
-        <div className="mt-5">
-          <ResultsList
-            results={snapshot.results}
-            commentsByResult={commentsByResult(snapshot)}
-            sortMode={search.filters.sort}
-            now={now}
-          />
-        </div>
-      ) : null}
+      <div className="mt-5">
+        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={props.aiEnabled} />
+      </div>
+      <SearchBody snapshot={snapshot} now={now} aiEnabled={props.aiEnabled === true} running={running} />
     </div>
   );
 }
@@ -264,7 +335,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
             {
               icon: MessageSquareText,
               title: "Baca komentar teratas",
-              body: "Balasan paling disukai ikut diambil, karena reaksi orang sering ada di komentar.",
+              body: "Balasan pada 3 pos teratas tiap sumber ikut diambil. Kartu menampilkan sampai 3 balasan; sisanya hanya angka.",
             },
             ...(aiEnabled
               ? [

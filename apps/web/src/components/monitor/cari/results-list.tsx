@@ -6,6 +6,7 @@ import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
 import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
 import type { SnapshotComment, SnapshotResult } from "@/monitor/search/load";
+import { supportedProviders } from "@/monitor/search/platforms";
 import { PLATFORM_ORDER, PlatformTile, platformName } from "./platform-tile";
 
 const compact = new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 });
@@ -14,8 +15,28 @@ export function formatCompact(value: number): string {
   return compact.format(value).replace(/\u00a0/g, " ");
 }
 
+function commentsCollected(platform: string): boolean {
+  return supportedProviders(platform, "comments").length > 0;
+}
+
+// Spaces and zero-width/object-replacement characters still look blank.
+const INVISIBLE_COMMENT_CHAR =
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u115F\u1160\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFFC]/g;
+
+function commentTextIsVisible(value: string): boolean {
+  return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;
+}
+
+function visibleComments(comments: SnapshotComment[], replyCount: number | null): SnapshotComment[] {
+  const withText = comments.filter((comment) => commentTextIsVisible(comment.text));
+  const cap = replyCount != null && replyCount >= 0 ? Math.min(3, replyCount) : 3;
+  return withText.slice(0, cap);
+}
+
 function Engagement(props: { result: SnapshotResult }) {
   const result = props.result;
+  const replies = result.replies;
+  const collected = commentsCollected(result.platform);
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
       {result.views != null ? (
@@ -27,8 +48,11 @@ function Engagement(props: { result: SnapshotResult }) {
           <span>{formatCompact(result.likes)}</span>
         </span>
       ) : null}
-      {result.replies != null ? (
-        <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">{formatCompact(result.replies)} balasan</span>
+      {collected && replies != null ? (
+        <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">{formatCompact(replies)} balasan</span>
+      ) : null}
+      {!collected && replies != null && replies > 0 ? (
+        <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">Balasan tidak diambil</span>
       ) : null}
       {result.shares != null ? (
         <span className="rounded-md bg-surface-subtle px-1.5 py-0.5">{formatCompact(result.shares)} bagikan</span>
@@ -44,15 +68,15 @@ function ResultCard(props: {
 }) {
   const result = props.result;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const comments = props.comments.slice(0, 2);
+  const comments = visibleComments(props.comments, result.replies);
   function checkThumbnail(image: HTMLImageElement | null) {
     if (image?.complete && image.naturalWidth === 0) setThumbnailFailed(true);
   }
-  const remaining = Math.max(0, (result.replies ?? 0) - comments.length);
+  const remaining = result.replies == null ? 0 : Math.max(0, result.replies - comments.length);
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
   return (
-    <article className="border-b border-border pb-4 last:border-b-0 last:pb-0">
+    <article id={`hasil-${result.id}`} className="border-b border-border pb-4 last:border-b-0 last:pb-0">
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <h3 className="line-clamp-4 break-words text-[14.5px] font-semibold leading-6 text-foreground">
@@ -102,7 +126,10 @@ function ResultCard(props: {
         </div>
       </div>
       {comments.length > 0 ? (
-        <div className="mt-3 rounded-lg border border-border bg-surface-subtle/60">
+        <div
+          className="mt-3 rounded-lg border border-border bg-surface-subtle/60"
+          aria-label="Contoh balasan teratas, bukan semua komentar"
+        >
           <p className="flex items-center gap-1.5 px-3 pt-2.5 text-[11px] font-semibold tracking-wide text-muted-foreground">
             <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
             BALASAN TERATAS

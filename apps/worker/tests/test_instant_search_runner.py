@@ -1,5 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
+import logging
 import threading
 import time
 import uuid
@@ -8,6 +10,7 @@ import pytest
 
 from sentiment_monitor import instant_search
 from sentiment_monitor.intent import Keyword
+from sentiment_monitor.gemini import GeminiError, GeminiResult, ScriptedGemini
 from sentiment_monitor.instant_search import (
     ROUTE_TIMEOUT_SECONDS,
     claim_instant_search,
@@ -20,8 +23,12 @@ from sentiment_monitor.instant_search import (
     run_instant_search_cycle,
     search_status,
     set_source_state,
+    run_instant_search_poll,
+    run_question_cycle,
+    summarize_search,
 )
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
+from sentiment_monitor.providers.comments import CommentFetch
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
 from sentiment_monitor.providers.fetch import fetch_platform
 from sentiment_monitor.providers.fixtures import fixture_comment_fetch, fixture_platform_fetch
@@ -246,6 +253,9 @@ def test_insert_posts_and_comments_drop_collisions_and_keep_canonical_fields(db)
         raw_ref="fixture:c-1",
     )
     assert insert_comments(db, job, result_id, [comment, comment]) == 1
+    blank = replace(comment, external_id="c-blank", text="  ", raw_ref="fixture:c-blank")
+    invisible = replace(comment, external_id="c-zwsp", text="\u200b\ufffc", raw_ref="fixture:c-zwsp")
+    assert insert_comments(db, job, result_id, [blank, invisible]) == 0
 
 
 def test_expire_old_searches_deletes_expired_and_cascades(db):
@@ -461,14 +471,20 @@ def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monke
     )
     assert len(sources) == 7
     assert all(row["state"] == "answered" for row in sources)
-    assert all(row["result_count"] > 0 for row in sources)
+    assert all(row["result_count"] == 3 for row in sources)
     assert all(row["credits_charged"] == 0 for row in sources)
     ranks = db.execute(
         "select rank from instant_search_results where search_id=%s order by rank", (job.id,)
     )
     assert [row["rank"] for row in ranks] == list(range(1, len(ranks) + 1))
     ledger = db.execute("select count(*) as n from search_credit_ledger where search_id=%s", (job.id,))[0]["n"]
-    assert ledger == 7
+    # Seven search routes, plus one comment page for each of the top three posts
+    # on the six comment-capable platforms. Fixture calls charge nothing, and
+    # comment rows are not part of result_count.
+    assert ledger == 25
+    assert db.execute(
+        "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
+    )[0]["n"] == 36
 
 
 def test_runner_applies_date_window_and_keeps_undated_last(db):
@@ -502,6 +518,649 @@ def test_runner_applies_date_window_and_keeps_undated_last(db):
     )
     assert [row["external_id"] for row in rows] == ["new", "undated"]
     assert [row["rank"] for row in rows] == [1, 2]
+
+
+def canonical_comment(external_id: str) -> CanonicalComment:
+    return CanonicalComment(
+        external_id=f"c-{external_id}",
+        text="kriuk",
+        author_name="rina",
+        author_handle="@rina",
+        published_at=None,
+        likes=1,
+        replies=0,
+        source_provider="scrapeatlas",
+        raw_ref=f"fixture:comment:{external_id}",
+    )
+
+
+def fixture_fetcher(platform, keyword, settings, **kwargs):
+    del settings
+    return fixture_platform_fetch(
+        platform,
+        keyword,
+        collected_at=kwargs["collected_at"],
+        date_window_days=kwargs.get("date_window_days"),
+    )
+
+
+def test_runner_fetches_comments_for_at_most_three_posts_per_platform(db):
+    calls: list[str] = []
+
+    def comment_fetch(platform, post, **kwargs):
+        del kwargs
+        calls.append(platform)
+        return CommentFetch(
+            post_id=post.external_id,
+            comments=[canonical_comment(post.external_id)],
+            call=RouteCall("scrapeatlas", platform, "comments", "success", 200, 1, 100, 10, "ok"),
+            state="answered",
+            safe_detail="ok",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(),
+        fetcher=fixture_fetcher,
+        comment_fetcher=comment_fetch,
+    )
+    rows = db.execute(
+        "select platform, count(*) as n from instant_search_comments group by platform"
+    )
+    assert rows
+    assert all(row["n"] <= 3 for row in rows)
+    assert len(calls) <= 18
+    assert len(calls) == 18
+    assert "linkedin" not in calls
+    posts = db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s", (job.id,)
+    )[0]["n"]
+    assert posts == 21
+    ledger = db.execute(
+        "select count(*) as n from search_credit_ledger where search_id=%s and route='comments'",
+        (job.id,),
+    )[0]["n"]
+    assert ledger == 18
+
+
+def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    calls: list[str] = []
+    viral = replace(
+        post("threads", "viral"),
+        text="minuman lain",
+        views=1_000_000,
+        replies=50,
+    )
+    quiet = replace(post("threads", "quiet"), text="barayam sepi", views=1, replies=0)
+    shown = replace(post("threads", "shown"), text="barayam enak", views=2, replies=4)
+    unknown = replace(post("threads", "unknown"), text="barayam juga", views=0, replies=None)
+
+    def fetcher(platform, *args, **kwargs):
+        del args, kwargs
+        if platform != "threads":
+            return PlatformFetch(platform, "scrapeatlas", [], [], "unavailable", "unavailable", 10)
+        return PlatformFetch(
+            platform, "scrapeatlas", [viral, quiet, shown, unknown], [], "answered", "ok", 10
+        )
+
+    def comment_fetch(platform, item, **kwargs):
+        del platform, kwargs
+        calls.append(item.external_id)
+        return CommentFetch(
+            post_id=item.external_id,
+            comments=[canonical_comment(item.external_id)],
+            call=RouteCall("scrapeatlas", "threads", "comments", "success", 200, 1, 40, 5, "ok"),
+            state="answered",
+            safe_detail="ok",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db,
+        job,
+        env={},
+        now=datetime.now(timezone.utc),
+        settings={
+            "threads": DEFAULT_SETTINGS["threads"],
+            "comments": DEFAULT_SETTINGS["comments"],
+        },
+        fetcher=fetcher,
+        comment_fetcher=comment_fetch,
+    )
+    assert calls == ["shown", "unknown", "viral"]
+    attached = db.execute(
+        """
+        select r.external_id
+        from instant_search_comments c
+        join instant_search_results r on r.id = c.result_id
+        where c.search_id = %s
+        order by r.rank
+        """,
+        (job.id,),
+    )
+    assert [row["external_id"] for row in attached] == ["shown", "unknown", "viral"]
+    ranks = db.execute(
+        """
+        select external_id, rank from instant_search_results
+        where search_id = %s order by rank
+        """,
+        (job.id,),
+    )
+    assert [row["external_id"] for row in ranks] == ["shown", "quiet", "unknown", "viral"]
+
+
+def test_comment_failure_keeps_the_posts_and_the_search_status(db):
+    def comment_fetch(platform, post, **kwargs):
+        del kwargs
+        if platform == "youtube":
+            raise RuntimeError("comments down")
+        return CommentFetch(
+            post_id=post.external_id,
+            comments=[],
+            call=RouteCall("scrapeatlas", platform, "comments", "failed", 500, 1, 10, 5, "http_500"),
+            state="failed",
+            safe_detail="http_500",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(),
+        fetcher=fixture_fetcher,
+        comment_fetcher=comment_fetch,
+    )
+    status = db.execute("select status from instant_searches where id=%s", (job.id,))[0]["status"]
+    assert status == "succeeded"
+    youtube = db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s and platform='youtube'",
+        (job.id,),
+    )[0]["n"]
+    assert youtube == 3
+    charged = db.execute(
+        "select coalesce(sum(credits_charged), 0) as n from search_credit_ledger "
+        "where search_id=%s and route='comments'",
+        (job.id,),
+    )[0]["n"]
+    assert charged == 15
+
+
+def test_slow_source_does_not_block_comments_for_fast_platforms(db, monkeypatch, caplog):
+    from sentiment_monitor.providers.scrapecreators_adapter import PlatformFetch
+
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
+    caplog.set_level(logging.INFO, logger="sentiment_monitor.instant_search")
+    calls: list[str] = []
+
+    def fetcher(platform, *args, **kwargs):
+        del args, kwargs
+        if platform == "reddit":
+            time.sleep(0.35)
+        return PlatformFetch(platform, "scrapeatlas", [post(platform, f"{platform}-1")], [], "answered", "ok", 10)
+
+    def comment_fetch(platform, item, **kwargs):
+        del item, kwargs
+        calls.append(platform)
+        return CommentFetch(
+            post_id=platform,
+            comments=[canonical_comment(platform)],
+            call=RouteCall("scrapeatlas", platform, "comments", "success", 200, 1, 20, 5, "ok"),
+            state="answered",
+            safe_detail="ok",
+        )
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings={
+            "threads": DEFAULT_SETTINGS["threads"],
+            "reddit": DEFAULT_SETTINGS["reddit"],
+            "comments": DEFAULT_SETTINGS["comments"],
+        },
+        fetcher=fetcher,
+        comment_fetcher=comment_fetch,
+        deadline_seconds=0.12,
+    )
+    assert calls == ["threads"]
+    threads = db.execute(
+        "select state, result_count from instant_search_sources where search_id=%s and platform='threads'",
+        (job.id,),
+    )[0]
+    reddit = db.execute(
+        "select state, safe_detail, result_count from instant_search_sources where search_id=%s and platform='reddit'",
+        (job.id,),
+    )[0]
+    assert threads["state"] == "answered"
+    assert threads["result_count"] == 1
+    assert reddit["state"] == "unavailable"
+    assert reddit["safe_detail"] == "deadline"
+    assert reddit["result_count"] == 0
+    assert db.execute(
+        "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
+    )[0]["n"] == 1
+    search = db.execute(
+        "select status, error_code, comment_status from instant_searches where id=%s", (job.id,)
+    )[0]
+    assert search["status"] == "partial"
+    assert search["error_code"] is None
+    assert search["comment_status"] == "done"
+    text = caplog.text
+    assert "platform=threads" in text
+    assert "state=answered" in text
+    assert "platform=reddit" in text
+    assert "detail=deadline" in text
+    assert "comments_calls=1" in text
+    assert "comment_status=done" in text
+    assert "barayam" not in text
+
+
+def test_comment_calls_do_not_start_after_the_comment_budget(db, monkeypatch):
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
+    reads = {"n": 0}
+    calls: list[str] = []
+
+    def clock() -> float:
+        reads["n"] += 1
+        # The first reads capture the source deadline and drain the post routes.
+        # Later reads are past the comment budget as well, so no comment call starts.
+        return 0.0 if reads["n"] <= 2 else 100.0
+
+    def comment_fetch(platform, post, **kwargs):
+        del post, kwargs
+        calls.append(platform)
+        raise AssertionError("comment call started after the deadline")
+
+    job = claim_instant_search(db, "worker-1")
+    run_instant_search(
+        db, job, env={}, now=datetime.now(timezone.utc),
+        settings=all_platform_settings(),
+        fetcher=fixture_fetcher,
+        comment_fetcher=comment_fetch,
+        clock=clock,
+        deadline_seconds=1,
+    )
+    assert calls == []
+    stored = db.execute(
+        "select count(*) as n from instant_search_results where search_id=%s", (job.id,)
+    )[0]["n"]
+    comments = db.execute(
+        "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
+    )[0]["n"]
+    assert stored >= 1
+    assert comments == 0
+
+
+class FailingGemini:
+    def generate_json(self, **kwargs):
+        raise GeminiError("http_500")
+
+
+def test_summary_is_attempted_once_and_a_failed_one_is_not_retried(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    calls = []
+
+    class Once:
+        def generate_json(self, **kwargs):
+            calls.append(kwargs.get("search_id"))
+            raise GeminiError("http_500")
+
+    now = datetime.now(timezone.utc)
+    summarize_search(db, job, llm=Once(), now=now)
+    summarize_search(db, job, llm=Once(), now=now)
+    assert calls == [job.id]
+    assert db.execute(
+        "select summary_status from instant_searches where id=%s", (job.id,)
+    )[0]["summary_status"] == "failed"
+
+
+def test_poll_does_not_backfill_an_old_pending_summary(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    db.commit()
+
+    def fetcher(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("a finished search must not be claimed again")
+
+    def submit(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("a finished search must not be submitted")
+
+    started = run_instant_search_poll(
+        db,
+        env={"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        submit=submit,
+        in_flight=set(),
+        fetcher=fetcher,
+    )
+    assert started == 0
+    assert db.execute(
+        "select status, summary_status from instant_searches where id=%s", (job.id,)
+    )[0] == {"status": "succeeded", "summary_status": "pending"}
+
+
+def test_summary_failure_leaves_search_succeeded_but_marks_summary_failed(db):
+    job = claim_instant_search(db, "worker-1")
+    set_source_state(db, job, "youtube", "answered", result_count=1, credits_charged=1, latency_ms=10)
+    insert_posts(db, job, [post("youtube", "vid-1")])
+    finish_search(db, job, "succeeded")
+    summarize_search(db, job, llm=FailingGemini(), now=datetime.now(timezone.utc))
+    search = db.execute("select status, summary_status, error_code from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["summary_status"] == "failed"
+    assert search["error_code"] is None
+
+
+def test_summary_is_skipped_without_results_or_when_ai_is_off(db):
+    job = claim_instant_search(db, "worker-1")
+    finish_search(db, job, "succeeded")
+    called = []
+
+    class Spy:
+        def generate_json(self, **kwargs):
+            called.append(1)
+            return GeminiResult({"overall_summary": "x"}, "scripted", 0, 0, 0)
+
+    summarize_search(db, job, llm=Spy(), now=datetime.now(timezone.utc))
+    assert called == []
+    assert db.execute("select summary_status from instant_searches where id=%s", (job.id,))[0]["summary_status"] == "skipped"
+
+
+def test_summary_is_skipped_when_the_provider_is_off(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    called = []
+
+    class Spy:
+        def generate_json(self, **kwargs):
+            called.append(1)
+            raise AssertionError("off must not call the model")
+
+    summarize_search(
+        db, job, llm=Spy(), now=datetime.now(timezone.utc), env={"CARI_AI_PROVIDER": "off"},
+    )
+    assert called == []
+    search = db.execute("select status, summary_status from instant_searches where id=%s", (job.id,))[0]
+    assert search["summary_status"] == "skipped"
+
+
+def test_summary_keeps_only_a_verbatim_quote(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [replace(post("threads", "th-1"), text="ayam ini enak banget")])
+    finish_search(db, job, "succeeded")
+    result_id = db.execute(
+        "select id from instant_search_results where search_id=%s", (job.id,)
+    )[0]["id"]
+    client = ScriptedGemini([
+        GeminiResult(
+            data={
+                "overall_summary": "Ringkasan.",
+                "overall_stance": "campuran",
+                "platforms": [{
+                    "platform": "threads", "stance": "campuran",
+                    "summary": "Campuran.", "quote_id": f"result:{result_id}",
+                }],
+                "quotes": [
+                    {"type": "pujian", "text": "enak banget", "ref_id": f"result:{result_id}",
+                     "platform": "threads", "author": "rina"},
+                    {"type": "keluhan", "text": "bukan kutipan", "ref_id": f"result:{result_id}",
+                     "platform": "threads", "author": "rina"},
+                ],
+                "themes": [],
+            },
+            model="scripted",
+            input_tokens=3,
+            output_tokens=2,
+            cost_usd=0,
+        )
+    ])
+    summarize_search(db, job, llm=client, now=datetime.now(timezone.utc))
+    search = db.execute("select status, summary_status, overall_stance from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["summary_status"] == "done"
+    assert search["overall_stance"] == "campuran"
+    stored = db.execute("select quotes, cost_usd from instant_search_ai where search_id=%s", (job.id,))[0]
+    quotes = stored["quotes"]
+    if isinstance(quotes, str):
+        quotes = json.loads(quotes)
+    assert quotes == [{
+        "type": "pujian", "text": "enak banget", "ref_id": f"result:{result_id}",
+        "platform": "threads", "author": "rina",
+    }]
+    assert stored["cost_usd"] == 0
+
+
+def _queue_question(db, question: str, question_id: str) -> None:
+    db.execute(
+        """
+        insert into instant_search_questions
+          (id, search_id, customer_id, question, status, user_credits)
+        values (%s, %s, %s, %s, 'queued', 1)
+        """,
+        (question_id, SEARCH, CUSTOMER, question),
+    )
+
+
+def test_question_cycle_claims_at_most_two_and_does_not_reclaim_a_failure(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    ids = [
+        "33333333-3333-4333-8333-333333333341",
+        "33333333-3333-4333-8333-333333333342",
+        "33333333-3333-4333-8333-333333333343",
+        "33333333-3333-4333-8333-333333333344",
+        "33333333-3333-4333-8333-333333333345",
+    ]
+    for question_id in ids:
+        _queue_question(db, "Apa keluhan utama?", question_id)
+    calls = []
+
+    class Boom:
+        def generate_json(self, **kwargs):
+            calls.append(kwargs.get("search_id"))
+            raise GeminiError("http_500")
+
+    now = datetime.now(timezone.utc)
+    claimed = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom(), limit=9)
+    assert claimed == 2
+    assert calls == [job.id, job.id]
+    again = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom(), limit=9)
+    assert again == 2
+    assert len(calls) == 4
+    failed = db.execute(
+        "select count(*) as n from instant_search_questions where status = 'failed'"
+    )[0]["n"]
+    queued = db.execute(
+        "select count(*) as n from instant_search_questions where status = 'queued'"
+    )[0]["n"]
+    assert failed == 4
+    assert queued == 1
+    third = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom())
+    assert third == 1
+    assert len(calls) == 5
+    parked = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom())
+    assert parked == 0
+    assert len(calls) == 5
+
+
+def test_a_store_error_after_the_claim_does_not_requeue_the_question(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    question_id = "33333333-3333-4333-8333-333333333346"
+    _queue_question(db, "Apa keluhan utama?", question_id)
+
+    class Guard:
+        def execute(self, sql, params=None):
+            text = " ".join(sql.split())
+            # The deadline sweep also writes status = 'failed'. Only the answer
+            # update, which clears the answer, is the store this test breaks.
+            if "answer = null" in text or "status = 'done'" in text:
+                raise RuntimeError("store failed")
+            return db.execute(sql, params)
+
+        def commit(self):
+            return db.commit()
+
+        def rollback(self):
+            return db.rollback()
+
+    class Boom:
+        def generate_json(self, **kwargs):
+            raise GeminiError("http_500")
+
+    with pytest.raises(RuntimeError, match="store failed"):
+        run_question_cycle(
+            Guard(), env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+        )
+    row = db.execute(
+        "select status from instant_search_questions where id=%s", (question_id,)
+    )[0]
+    assert row["status"] == "running"
+    calls = []
+
+    class Counting:
+        def generate_json(self, **kwargs):
+            calls.append(1)
+            raise GeminiError("http_500")
+
+    assert run_question_cycle(
+        db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Counting(),
+    ) == 0
+    assert calls == []
+
+
+def test_question_failure_does_not_change_the_search(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333333")
+
+    class Boom:
+        def generate_json(self, **kwargs):
+            raise GeminiError("http_500")
+
+    claimed = run_question_cycle(
+        db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+    )
+    assert claimed == 1
+    search = db.execute(
+        "select status, error_code from instant_searches where id=%s", (job.id,)
+    )[0]
+    assert search["status"] == "succeeded"
+    assert search["error_code"] is None
+    row = db.execute(
+        "select status, answer, safe_detail from instant_search_questions where id=%s",
+        ("33333333-3333-4333-8333-333333333333",),
+    )[0]
+    assert row["status"] == "failed"
+    assert row["answer"] is None
+    assert row["safe_detail"] == "http_500"
+
+
+def test_question_stores_known_citations_and_drops_the_rest(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [replace(post("threads", "th-1"), text="antrean panjang")])
+    finish_search(db, job, "succeeded")
+    result_id = db.execute(
+        "select id from instant_search_results where search_id=%s", (job.id,)
+    )[0]["id"]
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333334")
+    client = ScriptedGemini([
+        GeminiResult(
+            data={
+                "answer": "Keluhan utama adalah antrean.",
+                "citations": [f"result:{result_id}", "result:missing"],
+            },
+            model="scripted",
+            input_tokens=4,
+            output_tokens=2,
+            cost_usd=0.001,
+        )
+    ])
+    run_question_cycle(
+        db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=client,
+    )
+    row = db.execute(
+        "select status, answer, citations, model, cost_usd from instant_search_questions"
+    )[0]
+    citations = row["citations"]
+    if isinstance(citations, str):
+        citations = json.loads(citations)
+    assert row["status"] == "done"
+    assert row["answer"] == "Keluhan utama adalah antrean."
+    assert citations == [f"result:{result_id}"]
+    assert row["model"] == "scripted"
+    assert float(row["cost_usd"]) == 0.001
+    search = db.execute("select status, error_code from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["error_code"] is None
+
+
+def test_question_keeps_http_4xx_and_paused_and_logs_the_code(db, caplog):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    codes = (
+        ("http_4xx", "33333333-3333-4333-8333-333333333335"),
+        ("paused", "33333333-3333-4333-8333-333333333336"),
+    )
+    for code, question_id in codes:
+        _queue_question(db, "Apa keluhan utama?", question_id)
+
+        class Boom:
+            def generate_json(self, **kwargs):
+                raise GeminiError(code)
+
+        with caplog.at_level(logging.INFO):
+            run_question_cycle(
+                db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+            )
+        row = db.execute(
+            "select status, safe_detail from instant_search_questions where id=%s",
+            (question_id,),
+        )[0]
+        assert row["status"] == "failed"
+        assert row["safe_detail"] == code
+        assert f"question_detail={code}" in caplog.text
+
+
+def test_question_passes_the_connect_factory_to_gemini(db, monkeypatch):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333337")
+    seen = []
+
+    def fake_create(env, conn=None):
+        seen.append(conn)
+        return ScriptedGemini([
+            GeminiResult(
+                data={"answer": "Ada.", "citations": []},
+                model="scripted",
+                input_tokens=1,
+                output_tokens=1,
+                cost_usd=0,
+            )
+        ])
+
+    monkeypatch.setattr(instant_search, "create_gemini", fake_create)
+    factory = object()
+    run_question_cycle(
+        db,
+        env={"CARI_AI_PROVIDER": "gemini"},
+        now=datetime.now(timezone.utc),
+        connect=factory,
+    )
+    assert seen == [factory]
 
 
 def test_runner_passes_the_route_timeout_to_each_fetch(db):

@@ -25,5 +25,7 @@ describe("cari sekarang feature flags", () => {
     expect(cariAiUiEnabled({ CARI_AI_PROVIDER: "" })).toBe(false);
     expect(cariAiUiEnabled({ CARI_AI_PROVIDER: " demo " })).toBe(false);
     expect(cariAiUiEnabled({ CARI_AI_PROVIDER: "gemini" })).toBe(true);
+    expect(cariAiProvider({ CARI_AI_PROVIDER: "opencode" })).toBe("opencode");
+    expect(cariAiUiEnabled({ CARI_AI_PROVIDER: "opencode" })).toBe(true);
   });
 });

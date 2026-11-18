@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import time
 from typing import Any, Callable, Mapping
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
-from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
+from sentiment_monitor.providers.canonical import (
+    CanonicalComment,
+    CanonicalPost,
+    RouteCall,
+    comment_has_visible_text,
+)
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
 from sentiment_monitor.providers.fetch import provider_api_key
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
@@ -54,6 +59,45 @@ def _optional_text(value: Any) -> str | None:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _visible_comment_text(value: Any, depth: int = 0) -> str | None:
+    """First visible string, or the longest one when a field is a nested object."""
+    if depth > 3:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text if comment_has_visible_text(text) else None
+    if isinstance(value, dict):
+        found = [
+            piece
+            for key in ("message", "text", "body")
+            if (piece := _visible_comment_text(value.get(key), depth + 1))
+        ]
+        return max(found, key=len) if found else None
+    return None
+
+
+def _facebook_text(item: Mapping[str, Any]) -> str:
+    # Staging search a923bb0d stored text "Zhong Lun" (ASCII) for author Miki Yong.
+    # A longer message/body wins when the provider also sends one; a name-only
+    # `text` is real text and is kept.
+    found = [
+        piece
+        for key in ("text", "message", "body")
+        if (piece := _visible_comment_text(item.get(key)))
+    ]
+    return max(found, key=len) if found else ""
+
+
+def _has_media(item: Mapping[str, Any]) -> bool:
+    for key in ("attachments", "attachment", "media", "sticker"):
+        value = item.get(key)
+        if isinstance(value, (list, dict)) and len(value) > 0:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
 
 
 def _threads_text(item: Mapping[str, Any]) -> str:
@@ -117,7 +161,7 @@ def _comment(platform: str, item: Mapping[str, Any]) -> CanonicalComment:
         replies = _optional_int(engagement.get("replies"))
     elif platform == "facebook":
         external_id = str(item.get("id") or "")
-        text = _optional_text(item.get("text")) or ""
+        text = _facebook_text(item)
         author_handle = _optional_text(author.get("name"))
         author_name = _optional_text(author.get("name"))
         published_at = _optional_text(item.get("created_at"))
@@ -151,6 +195,7 @@ def fetch_comments(
     settings: Mapping[str, ProviderSetting],
     env: Mapping[str, Any],
     opener: Callable[..., Any] = safe_urlopen,
+    timeout: int = 20,
 ) -> CommentFetch:
     post_id = str(post.external_id or "")
     path = COMMENT_ENDPOINTS.get(platform)
@@ -169,7 +214,7 @@ def fetch_comments(
     route_id = f"scrapeatlas.{platform}.comments"
     started = time.monotonic()
     try:
-        payload = fetch_scrapeatlas_json(path, params, api_key, opener=opener)
+        payload = fetch_scrapeatlas_json(path, params, api_key, opener=opener, timeout=timeout)
     except ScrapeAtlasError as error:
         latency_ms = int((time.monotonic() - started) * 1000)
         call = RouteCall(
@@ -200,7 +245,17 @@ def fetch_comments(
     latency_ms = int((time.monotonic() - started) * 1000)
     raw_comments = payload.get("comments")
     items = raw_comments if isinstance(raw_comments, list) else []
-    comments = [_comment(platform, item) for item in items if isinstance(item, dict)]
+    comments = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        comment = _comment(platform, item)
+        # A sticker or photo reply can arrive with no visible text. Skip it,
+        # or label the attachment, so the card does not render a blank row.
+        if comment_has_visible_text(comment.text):
+            comments.append(comment)
+        elif platform == "facebook" and _has_media(item):
+            comments.append(replace(comment, text="lampiran media"))
     status = payload.get("status")
     call = RouteCall(
         provider="scrapeatlas",
