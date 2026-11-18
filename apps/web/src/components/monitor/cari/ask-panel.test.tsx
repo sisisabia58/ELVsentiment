@@ -77,7 +77,7 @@ describe("AskPanel", () => {
       />,
     );
     expect(screen.getByText(/rizkyhdyt · Threads/)).toBeTruthy();
-    expect(screen.getByText(/Kuota Gemini sedang penuh/)).toBeTruthy();
+    expect(screen.getByText(/Kuota AI sedang penuh/)).toBeTruthy();
     expect(screen.queryByText(/Jawaban belum tersedia/)).toBeNull();
     expect(screen.queryByText(/result:missing/)).toBeNull();
   });
@@ -105,7 +105,19 @@ describe("AskPanel", () => {
     expect(screen.queryByText("Jawaban belum tersedia")).toBeNull();
   });
 
-  it("shows a busy Gemini status instead of an empty failure", () => {
+  it("names a rejected AI key instead of an empty failure", () => {
+    render(
+      <AskPanel
+        searchId="s1"
+        questions={[{ ...failedQuestion, safeDetail: "config_error" }]}
+        suggestions={[]}
+      />,
+    );
+    expect(screen.getByText(/Konfigurasi AI ditolak/)).toBeTruthy();
+    expect(screen.queryByText("Jawaban belum tersedia")).toBeNull();
+  });
+
+  it("shows a busy AI status instead of an empty failure", () => {
     render(
       <AskPanel
         searchId="s1"
@@ -113,7 +125,7 @@ describe("AskPanel", () => {
         suggestions={[]}
       />,
     );
-    expect(screen.getByText(/Gemini sedang sibuk/)).toBeTruthy();
+    expect(screen.getByText(/AI sedang sibuk/)).toBeTruthy();
     expect(screen.queryByText("Jawaban belum tersedia")).toBeNull();
   });
 

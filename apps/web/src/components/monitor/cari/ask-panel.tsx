@@ -13,18 +13,19 @@ const ERROR_COPY: Record<string, string> = {
 };
 
 const FAILURE_COPY: Record<string, string> = {
-  http_429: "Kuota Gemini sedang penuh. Coba lagi sebentar lagi.",
-  paused: "Kuota Gemini sedang dijeda. Coba lagi sebentar lagi.",
+  http_429: "Kuota AI sedang penuh. Coba lagi sebentar lagi.",
+  paused: "Kuota AI sedang dijeda. Coba lagi sebentar lagi.",
   cycle_cap: "Terlalu banyak permintaan sekaligus. Coba lagi sebentar lagi.",
-  http_4xx: "Gemini menolak permintaan jawaban.",
-  http_5xx: "Gemini sedang gangguan. Coba lagi sebentar lagi.",
-  http_503: "Gemini sedang sibuk. Coba lagi sebentar lagi.",
-  http_504: "Gemini sedang sibuk. Coba lagi sebentar lagi.",
+  http_4xx: "AI menolak permintaan jawaban.",
+  http_5xx: "AI sedang gangguan. Coba lagi sebentar lagi.",
+  http_503: "AI sedang sibuk. Coba lagi sebentar lagi.",
+  http_504: "AI sedang sibuk. Coba lagi sebentar lagi.",
   timeout: "Jawaban terlalu lama. Coba lagi.",
   empty_answer: "Jawaban kosong. Coba lagi.",
-  missing_key: "Kunci Gemini belum diatur.",
-  malformed_json: "Jawaban Gemini tidak bisa dibaca.",
-  transport_error: "Gemini tidak terjangkau. Coba lagi.",
+  missing_key: "Kunci AI belum diatur.",
+  config_error: "Konfigurasi AI ditolak. Periksa kunci API.",
+  malformed_json: "Jawaban AI tidak bisa dibaca.",
+  transport_error: "AI tidak terjangkau. Coba lagi.",
   error: "Jawaban gagal. Coba lagi.",
 };
 

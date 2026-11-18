@@ -15,6 +15,7 @@ import time
 import uuid
 
 from sentiment_monitor.gemini import GeminiError, create_gemini
+from sentiment_monitor.opencode import create_opencode
 from sentiment_monitor.instant_ai import (
     QUESTION_MAX_OUTPUT_TOKENS,
     QUESTION_SCHEMA,
@@ -103,6 +104,7 @@ SAFE_DETAILS = frozenset(
         "queued",
         "deadline",
         "missing_key",
+        "config_error",
         "missing_url",
         "unsupported_provider",
         "unsupported_platform",
@@ -1371,12 +1373,22 @@ def _client_env(env: Mapping[str, Any], provider: str) -> dict[str, Any]:
         "GEMINI_MAX_RPM",
         "GEMINI_INPUT_USD_PER_MTOK",
         "GEMINI_OUTPUT_USD_PER_MTOK",
+        "OPENCODE_API_KEY",
+        "OPENCODE_MODEL",
+        "OPENCODE_MAX_RPM",
     ):
         if name not in client_env:
             value = os.environ.get(name)
             if value is not None:
                 client_env[name] = value
     return client_env
+
+
+def _create_llm(env: Mapping[str, Any], conn: Any = None) -> Any:
+    """Gemini stays on its own client. opencode is the only other live provider."""
+    if _ai_provider(env) == "opencode":
+        return create_opencode(env, conn)
+    return create_gemini(env, conn)
 
 
 def _summary_status(conn: Any, job: InstantSearchJob) -> str | None:
@@ -1432,7 +1444,7 @@ def summarize_search(
     data, refs, platforms, client_env = prepared
     try:
         if llm is None:
-            llm = create_gemini(client_env)
+            llm = _create_llm(client_env)
         system, user = build_summary_prompt(data)
         generated = llm.generate_json(
             system=system,
@@ -1475,7 +1487,7 @@ def _summarize_collected(
         return
     data, refs, platforms, client_env = prepared
     try:
-        client = llm if llm is not None else create_gemini(client_env, tx.connect)
+        client = llm if llm is not None else _create_llm(client_env, tx.connect)
         system, user = build_summary_prompt(data)
         generated = client.generate_json(
             system=system,
@@ -1612,7 +1624,7 @@ def _answer_question(
             data, refs = SummaryInput(job.id, job.query, [], []), {}
         else:
             data, refs, _platforms = prepared
-        client = llm if llm is not None else create_gemini(
+        client = llm if llm is not None else _create_llm(
             _client_env(env, provider), connect if connect is not None else conn
         )
         system, user = build_question_prompt(data, str(question or ""))
