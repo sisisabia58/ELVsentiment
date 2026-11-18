@@ -91,7 +91,8 @@ export type SnapshotQuestion = {
   question: string;
   status: string;
   answer: string | null;
-  citations: unknown;
+  citations: string[];
+  safeDetail: string | null;
   createdAt: string;
   answeredAt: string | null;
 };
@@ -121,6 +122,12 @@ function iso(value: string | Date | null | undefined): string | null {
   if (value instanceof Date) return value.toISOString();
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function citationIds(value: unknown): string[] {
+  const parsed = json(value);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((item): item is string => typeof item === "string");
 }
 
 function json(value: unknown): unknown {
@@ -325,10 +332,11 @@ export async function loadSearchSnapshot(
       status: string;
       answer: string | null;
       citations: unknown;
+      safe_detail: string | null;
       created_at: string | Date;
       answered_at: string | Date | null;
     }>(
-      `select id, question, status, answer, citations, created_at, answered_at
+      `select id, question, status, answer, citations, safe_detail, created_at, answered_at
        from instant_search_questions
        where search_id = $1 and customer_id = $2
        order by created_at, id`,
@@ -339,7 +347,8 @@ export async function loadSearchSnapshot(
       question: question.question,
       status: question.status,
       answer: question.answer,
-      citations: json(question.citations),
+      citations: citationIds(question.citations),
+      safeDetail: question.safe_detail,
       createdAt: iso(question.created_at) ?? new Date(0).toISOString(),
       answeredAt: iso(question.answered_at),
     }));

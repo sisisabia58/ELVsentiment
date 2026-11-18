@@ -45,8 +45,10 @@ Names only; set real values in Railway. Do not commit values.
 
 - `CARI_SEKARANG_ENABLED` — off by default. Only `1`/`true` enables the `/cari` pages, the polling route, and the nav entry.
 - `CARI_PROVIDER_MODE` — live by default. Fixture data is used only when this is explicitly `fixture`.
-- `CARI_AI_PROVIDER` — defaults to `demo` when unset. `demo` writes a zero-cost summary and hides summary, stance, quote, theme, and question UI. `gemini` shows that UI and calls Gemini. `off` stores no summary.
+- `CARI_AI_PROVIDER` — defaults to `demo` when unset. `demo` writes a zero-cost summary and hides summary, stance, quote, theme, and question UI. `gemini` and `opencode` show that UI and call that provider. `off` stores no summary.
 - `GEMINI_API_KEY` — required only when `CARI_AI_PROVIDER=gemini`. A missing key marks the summary failed and still shows the posts.
+- `OPENCODE_API_KEY` — required only when `CARI_AI_PROVIDER=opencode`.
+- `OPENCODE_MODEL` — optional, default `deepseek-v4.1-flash`.
 - `GEMINI_MODEL` — optional, default `gemini-3.5-flash-lite`.
 - `GEMINI_MAX_RPM` — optional request spacing, default 10.
 - `GEMINI_INPUT_USD_PER_MTOK` and `GEMINI_OUTPUT_USD_PER_MTOK` — optional cost rates, defaults `0.30` and `2.50`. Cost is stored for the operator and is not shown as a tenant credit.

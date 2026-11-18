@@ -82,4 +82,19 @@ describe("ConversationBreakdown", () => {
     expect(screen.getByText(/Netral 34%/)).toBeTruthy();
     expect(screen.getByText(/bukan survei/)).toBeTruthy();
   });
+
+  it("leaves quotes to the summary so the same line is not linked twice", () => {
+    const withQuote: SearchSnapshot = {
+      ...doneSnapshot,
+      ai: {
+        ...doneSnapshot.ai!,
+        quotes: [
+          { type: "pujian", text: "enak banget", ref_id: "result:r-quote", platform: "threads", author: "rina" },
+        ],
+      },
+    };
+    render(<ConversationBreakdown snapshot={withQuote} />);
+    expect(screen.queryByText("enak banget")).toBeNull();
+    expect(screen.queryByRole("link", { name: "enak banget" })).toBeNull();
+  });
 });

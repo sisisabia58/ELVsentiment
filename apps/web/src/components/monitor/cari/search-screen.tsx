@@ -14,11 +14,12 @@ import {
 } from "@/monitor/search/filters";
 import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
 import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platforms";
-import { startSearchAction } from "@/app/cari/start-action";
+import { monitorAsProjectAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
 import { AiSummary } from "./ai-summary";
 import { ConversationBreakdown } from "./conversation-breakdown";
+import { AskPanel } from "./ask-panel";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
@@ -122,6 +123,7 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
   const counts: Record<string, number> = {};
   for (const result of snapshot.results) counts[result.platform] = (counts[result.platform] ?? 0) + 1;
   const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
+  const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
   return (
     <div className="mt-5 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-5">
       <aside className="order-first mb-5 lg:order-2 lg:mb-0 lg:sticky lg:top-4">
@@ -131,11 +133,23 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
           resultCount={snapshot.totals.results}
           commentCount={snapshot.comments.length}
           platformCounts={counts}
+          results={snapshot.results}
+          comments={snapshot.comments}
         />
       </aside>
       <div className="min-w-0 lg:order-1">
         {results}
-        {snapshot.ai && snapshot.results.length > 0 ? <ConversationBreakdown snapshot={snapshot} /> : null}
+        {showBreakdown ? <ConversationBreakdown snapshot={snapshot} /> : null}
+        <div className="mt-5">
+          <AskPanel
+            searchId={snapshot.search.id}
+            questions={snapshot.questions}
+            suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Platform mana yang paling ramai?"]}
+            results={snapshot.results}
+            comments={snapshot.comments}
+            resultCount={snapshot.totals.results}
+          />
+        </div>
       </div>
     </div>
   );
@@ -154,8 +168,10 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
     props.initialSnapshot.search.id,
     props.initialSnapshot,
   );
+  const router = useRouter();
   const now = useNow(props.now);
   const search = snapshot.search;
+  const [monitorError, setMonitorError] = useState<string | null>(null);
   const running = search.status === "queued" || search.status === "running";
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
@@ -182,8 +198,36 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
           <p className="font-mono text-[12.5px] text-muted-foreground">{receipt.join(" · ")}</p>
+          {!running ? (
+            <button
+              type="button"
+              className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-[13px] font-medium text-foreground"
+              onClick={() => {
+                void (async () => {
+                  setMonitorError(null);
+                  try {
+                    const result = await monitorAsProjectAction(search.id);
+                    if (result.ok) {
+                      router.push(result.href);
+                      return;
+                    }
+                    setMonitorError("Proyek belum bisa disiapkan. Coba lagi.");
+                  } catch {
+                    setMonitorError("Proyek belum bisa disiapkan. Coba lagi.");
+                  }
+                })();
+              }}
+            >
+              Pantau sebagai proyek
+            </button>
+          ) : null}
         </div>
       </section>
+      {monitorError ? (
+        <p role="alert" className="mt-2 text-[13px] text-negatif">
+          {monitorError}
+        </p>
+      ) : null}
       {failureCopy ? (
         <p
           role="alert"

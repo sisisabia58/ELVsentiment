@@ -17,15 +17,7 @@ const STANCE_BAR: Record<string, string> = {
   faktual: "bg-info",
 };
 
-const QUOTE_LABEL: Record<string, string> = {
-  pujian: "Pujian",
-  keluhan: "Keluhan",
-  pengamatan: "Pengamatan",
-  pertanyaan: "Pertanyaan",
-};
-
 type PlatformSummary = { platform?: string; stance?: string };
-type Quote = { type?: string; text?: string; author?: string; platform?: string };
 type Theme = { title?: string; description?: string; supporting_ids?: unknown; platforms?: unknown };
 
 function asList<T>(value: unknown): T[] {
@@ -50,7 +42,6 @@ export function ConversationBreakdown(props: { snapshot: SearchSnapshot }) {
   }
   const classified = [...stanceCounts.values()].reduce((sum, count) => sum + count, 0);
   const maxCount = Math.max(1, ...resultCounts.values());
-  const quotes = asList<Quote>(snapshot.ai?.quotes).filter((item) => item.text);
   const themes = asList<Theme>(snapshot.ai?.themes).filter((item) => item.title);
   const stanceOrder = ["positif", "campuran", "negatif", "netral", "faktual"].filter(
     (stance) => stance !== "faktual" || (stanceCounts.get(stance) ?? 0) > 0,
@@ -92,20 +83,6 @@ export function ConversationBreakdown(props: { snapshot: SearchSnapshot }) {
             .map((stance) => `${STANCE_LABEL[stance]} ${Math.round(((stanceCounts.get(stance) ?? 0) / classified) * 100)}%`)
             .join(" · ")}
         </p>
-      ) : null}
-      {quotes.length > 0 ? (
-        <>
-          <h3 className="mt-5 text-[11px] font-semibold tracking-wide text-muted-foreground">APA KATA ORANG</h3>
-          <ul className="mt-2 space-y-2">
-            {quotes.map((quote, index) => (
-              <li key={`${quote.text}-${index}`} className="rounded-lg border border-border px-3 py-2">
-                <span className="text-[11px] font-semibold text-primary">{QUOTE_LABEL[quote.type ?? ""] ?? quote.type}</span>
-                <p className="text-[13px] text-foreground">{quote.text}</p>
-                {quote.author ? <p className="font-mono text-[11px] text-muted-foreground">{quote.author}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </>
       ) : null}
       {themes.length > 0 ? (
         <>

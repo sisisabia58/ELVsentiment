@@ -130,6 +130,7 @@ describe("SearchDetail", () => {
     };
     render(<SearchDetail initialSnapshot={done} />);
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
+    expect(screen.queryByText("Tanya hasil ini")).toBeNull();
     expect(screen.queryByText("kutipan-rahasia")).toBeNull();
     expect(screen.queryByText("Bagaimana percakapannya")).toBeNull();
     expect(screen.getByText("antrean barayam ciledug tadi malem")).toBeTruthy();
@@ -148,9 +149,28 @@ describe("SearchDetail", () => {
     };
     render(<SearchDetail initialSnapshot={done} aiEnabled />);
     expect(screen.getAllByText("Ringkasan AI").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tanya hasil ini")).toBeTruthy();
     expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
     const body = document.body.textContent ?? "";
     expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
+  });
+
+  it("shows each quote link once", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "positif",
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "result:r1" }],
+      quotes: [
+        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+      ],
+      themes: [],
+      model: "gemini",
+    };
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getAllByRole("link", { name: "antrean unik" })).toHaveLength(1);
   });
 
   it("shows the command receipt, progress before completion, and results after", () => {
@@ -165,6 +185,7 @@ describe("SearchDetail", () => {
     expect(screen.getByText(/7 dari 8 sumber menjawab/)).toBeTruthy();
     expect(screen.getByText("Hasil")).toBeTruthy();
     expect(screen.getByText(/antrean barayam/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pantau sebagai proyek" })).toBeTruthy();
   });
 
   it("never names a raw provider to the end user", () => {

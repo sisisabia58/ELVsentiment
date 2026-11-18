@@ -15,11 +15,16 @@ import time
 import uuid
 
 from sentiment_monitor.gemini import GeminiError, create_gemini
+from sentiment_monitor.opencode import create_opencode
 from sentiment_monitor.instant_ai import (
+    QUESTION_MAX_OUTPUT_TOKENS,
+    QUESTION_SCHEMA,
     SUMMARY_MAX_OUTPUT_TOKENS,
     SUMMARY_SCHEMA,
     SummaryInput,
+    build_question_prompt,
     build_summary_prompt,
+    validate_answer,
     validate_summary,
 )
 from sentiment_monitor.intent import Keyword
@@ -61,6 +66,9 @@ COMMENT_BUDGET_SECONDS = 12.0
 # Seven launch platforms: one search's routes must fit in a single wave.
 MAX_CONCURRENCY = 7
 MAX_INFLIGHT = 8
+# One poll answers at most this many queued questions. Failed rows stay failed
+# until the page retries them; the cycle never re-claims them.
+MAX_QUESTIONS_PER_CYCLE = 2
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
 
@@ -96,6 +104,7 @@ SAFE_DETAILS = frozenset(
         "queued",
         "deadline",
         "missing_key",
+        "config_error",
         "missing_url",
         "unsupported_provider",
         "unsupported_platform",
@@ -1364,6 +1373,9 @@ def _client_env(env: Mapping[str, Any], provider: str) -> dict[str, Any]:
         "GEMINI_MAX_RPM",
         "GEMINI_INPUT_USD_PER_MTOK",
         "GEMINI_OUTPUT_USD_PER_MTOK",
+        "OPENCODE_API_KEY",
+        "OPENCODE_MODEL",
+        "OPENCODE_MAX_RPM",
     ):
         if name not in client_env:
             value = os.environ.get(name)
@@ -1372,7 +1384,32 @@ def _client_env(env: Mapping[str, Any], provider: str) -> dict[str, Any]:
     return client_env
 
 
+def _create_llm(env: Mapping[str, Any], conn: Any = None) -> Any:
+    """Gemini stays on its own client. opencode is the only other live provider."""
+    if _ai_provider(env) == "opencode":
+        return create_opencode(env, conn)
+    return create_gemini(env, conn)
+
+
+def _summary_status(conn: Any, job: InstantSearchJob) -> str | None:
+    rows = conn.execute(
+        "select summary_status from instant_searches where id = %s and customer_id = %s",
+        (job.id, job.customer_id),
+    ) or []
+    if not rows:
+        return None
+    value = _row_value(rows[0], "summary_status", 0)
+    if value is None:
+        return "pending"
+    return str(value)
+
+
 def _prepare_summary(conn: Any, job: InstantSearchJob, env: Mapping[str, Any]) -> tuple[Any, dict[str, str], set[str], dict[str, Any]] | None:
+    # One automatic model call per search. The poll does not scan old rows.
+    # This proceeds only while summary_status is still the initial pending
+    # value; running, done, failed, and skipped are left alone.
+    if _summary_status(conn, job) != "pending":
+        return None
     provider = _ai_provider(env)
     if provider == "off":
         _set_summary_status(conn, job, "skipped")
@@ -1407,13 +1444,14 @@ def summarize_search(
     data, refs, platforms, client_env = prepared
     try:
         if llm is None:
-            llm = create_gemini(client_env)
+            llm = _create_llm(client_env)
         system, user = build_summary_prompt(data)
         generated = llm.generate_json(
             system=system,
             user=user,
             schema=SUMMARY_SCHEMA,
             purpose="summary",
+            search_id=job.id,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
         output = validate_summary(generated.data, refs, platforms)
@@ -1449,17 +1487,20 @@ def _summarize_collected(
         return
     data, refs, platforms, client_env = prepared
     try:
-        client = llm if llm is not None else create_gemini(client_env, tx.connect)
+        client = llm if llm is not None else _create_llm(client_env, tx.connect)
         system, user = build_summary_prompt(data)
         generated = client.generate_json(
             system=system,
             user=user,
             schema=SUMMARY_SCHEMA,
             purpose="summary",
+            search_id=job.id,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
         output = validate_summary(generated.data, refs, platforms)
-    except Exception:
+    except Exception as error:
+        code = error.code if isinstance(error, GeminiError) else "error"
+        _info(job.id, summary_detail=code)
         try:
             tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
         except Exception:
@@ -1476,6 +1517,42 @@ def _summarize_collected(
         except Exception:
             if tx.shared is not None:
                 _rollback_quiet(tx.shared)
+
+
+_SUMMARY_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def retry_named_summary(connect: Any, search_id: str, env: Mapping[str, Any]) -> None:
+    """Re-run one failed summary by id. This is not a scan of old searches."""
+    if not isinstance(search_id, str) or not _SUMMARY_ID.fullmatch(search_id):
+        return
+    tx = _Transactions(connect)
+
+    def reopen(conn: Any) -> InstantSearchJob | None:
+        rows = conn.execute(
+            "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
+            "language_filter, deadline_at from instant_searches where id = %s",
+            (search_id,),
+        ) or []
+        if not rows:
+            return None
+        job = _job_from_row(rows[0])
+        if job is None:
+            return None
+        _set_customer(conn, job.customer_id)
+        conn.execute(
+            "update instant_searches set summary_status = 'pending' "
+            "where id = %s and summary_status = 'failed'",
+            (job.id,),
+        )
+        return job
+
+    job = tx.run(reopen)
+    if job is None:
+        return
+    _summarize_collected(tx, job, env=env, now=datetime.now(timezone.utc), llm=None)
 
 
 def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:
@@ -1526,6 +1603,180 @@ def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, An
             )
         except Exception:
             pass
+
+
+_QUESTION_DETAILS = SAFE_DETAILS | frozenset(
+    {"empty_answer", "off", "error", "http_4xx", "paused", "cycle_cap"}
+)
+
+
+def _question_detail(value: str) -> str:
+    if value in _QUESTION_DETAILS or _HTTP_STATUS_PATTERN.fullmatch(value):
+        return value
+    return "error"
+
+
+def _fail_question(conn: Any, question_id: str, detail: str, now: datetime) -> None:
+    conn.execute(
+        "update instant_search_questions set status = 'failed', answer = null, "
+        "safe_detail = %s, answered_at = %s where id = %s",
+        (_question_detail(detail), now, question_id),
+    )
+
+
+def _load_question_job(conn: Any, search_id: str, customer_id: str) -> InstantSearchJob | None:
+    rows = conn.execute(
+        "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
+        "language_filter, deadline_at from instant_searches where id = %s and customer_id = %s",
+        (search_id, customer_id),
+    ) or []
+    if not rows:
+        return None
+    return _job_from_row(rows[0])
+
+
+def _answer_question(
+    conn: Any,
+    row: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    llm: Any,
+    connect: Any = None,
+) -> str:
+    question_id = str(_row_value(row, "id", 0))
+    search_id = str(_row_value(row, "search_id", 1))
+    customer_id = str(_row_value(row, "customer_id", 2))
+    question = _row_value(row, "question", 3)
+    try:
+        provider = _ai_provider(env)
+        if provider == "off":
+            _fail_question(conn, question_id, "off", now)
+            return "failed"
+        job = _load_question_job(conn, search_id, customer_id)
+        if job is None:
+            _fail_question(conn, question_id, "not_found", now)
+            return "failed"
+        prepared = _load_summary_input(conn, job)
+        if prepared is None:
+            data, refs = SummaryInput(job.id, job.query, [], []), {}
+        else:
+            data, refs, _platforms = prepared
+        client = llm if llm is not None else _create_llm(
+            _client_env(env, provider), connect if connect is not None else conn
+        )
+        system, user = build_question_prompt(data, str(question or ""))
+        generated = client.generate_json(
+            system=system,
+            user=user,
+            schema=QUESTION_SCHEMA,
+            purpose="question",
+            search_id=search_id,
+            max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
+        )
+        answer = validate_answer(getattr(generated, "data", None), refs)
+        if not answer.answer:
+            _fail_question(conn, question_id, "empty_answer", now)
+            return "failed"
+        conn.execute(
+            """
+            update instant_search_questions
+               set status = 'done',
+                   answer = %s,
+                   citations = %s::jsonb,
+                   model = %s,
+                   cost_usd = %s,
+                   safe_detail = null,
+                   answered_at = %s
+             where id = %s
+            """,
+            (
+                answer.answer,
+                json.dumps(answer.citations),
+                str(getattr(generated, "model", None) or "unknown"),
+                float(getattr(generated, "cost_usd", 0) or 0),
+                now,
+                question_id,
+            ),
+        )
+        return "done"
+    except GeminiError as error:
+        detail = _question_detail(error.code)
+        _fail_question(conn, question_id, detail, now)
+        _info("question", question_detail=detail, question_search=search_id)
+        return "failed"
+    except Exception:
+        _fail_question(conn, question_id, "error", now)
+        _info("question", question_detail="error", question_search=search_id)
+        return "failed"
+
+
+def _commit_question_claim(conn: Any) -> None:
+    commit = getattr(conn, "commit", None)
+    if callable(commit):
+        commit()
+
+
+def run_question_cycle(
+    conn: Any,
+    *,
+    env: Mapping[str, Any],
+    now: datetime,
+    limit: int = 2,
+    llm: Any = None,
+    connect: Any = None,
+) -> int:
+    """Answer queued questions. A failure never changes the search status."""
+    conn.execute(
+        """
+        update instant_search_questions
+           set status = 'failed', safe_detail = 'deadline', answered_at = %s
+         where status = 'running'
+           and created_at <= %s - interval '10 minutes'
+        """,
+        (now, now),
+    )
+    bounded = max(0, min(MAX_QUESTIONS_PER_CYCLE, int(limit)))
+    if bounded == 0:
+        _commit_question_claim(conn)
+        return 0
+    rows = conn.execute(
+        """
+        with claimed as (
+            select id
+            from instant_search_questions
+            where status = 'queued'
+            order by created_at, id
+            limit %s
+            for update skip locked
+        )
+        update instant_search_questions as question
+           set status = 'running'
+          from claimed
+         where question.id = claimed.id
+        returning question.id, question.search_id, question.customer_id, question.question
+        """,
+        (bounded,),
+    ) or []
+    # Commit the claim before the model call. A later error must not roll the
+    # row back to queued, or the 2 s poll would send the same question again.
+    _commit_question_claim(conn)
+    done = 0
+    failed = 0
+    for row in rows:
+        outcome = _answer_question(conn, row, env=env, now=now, llm=llm, connect=connect)
+        if outcome == "done":
+            done += 1
+        else:
+            failed += 1
+    if rows:
+        _info(
+            "questions",
+            questions_claimed=len(rows),
+            questions_done=done,
+            questions_failed=failed,
+        )
+    return len(rows)
 
 
 def run_instant_search_cycle(
@@ -1593,6 +1844,11 @@ def run_instant_search_poll(
     a long-lived pool. New arrivals therefore become claimable while an earlier
     batch is still fetching; ``for update skip locked`` plus the immediate
     per-claim commit keep multiple workers from double-claiming.
+
+    This poll does not look for old searches whose summary_status is still
+    pending or failed. A summary runs once, at the end of the run that claimed
+    that search, and a second call is refused while the status is no longer
+    pending.
     """
     del limits
     tx = _Transactions(connect)

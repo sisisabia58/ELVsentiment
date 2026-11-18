@@ -54,4 +54,55 @@ describe("AiSummary", () => {
     rerender(<AiSummary ai={null} summaryStatus="failed" />);
     expect(screen.getByText(/Ringkasan belum tersedia/)).toBeTruthy();
   });
+
+  it("follows the result distribution and links a quote to its source", () => {
+    const disagreed: SnapshotAi = {
+      ...aiFixture,
+      platformSummaries: [
+        { platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "comment:c1" },
+      ],
+    };
+    render(
+      <AiSummary
+        ai={disagreed}
+        resultCount={10}
+        commentCount={1}
+        platformCounts={{ threads: 10 }}
+        results={[{ id: "r1", url: "https://example.invalid/post" }]}
+        comments={[{ id: "c1", resultId: "r1" }]}
+      />,
+    );
+    expect(screen.getByText(/Positif 100%/)).toBeTruthy();
+    expect(screen.getByText(/Model menandai Campuran/)).toBeTruthy();
+    const link = screen.getByRole("link", { name: "kriuknya beda sih" });
+    expect(link.getAttribute("href")).toBe("https://example.invalid/post");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(screen.getAllByRole("link", { name: "kriuknya beda sih" })).toHaveLength(1);
+  });
+
+  it("links a repeated quote once", () => {
+    const repeated: SnapshotAi = {
+      ...aiFixture,
+      platformSummaries: [
+        { platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "comment:c1" },
+        { platform: "tiktok", stance: "positif", summary: "Juga pujian.", quote_id: "comment:c1" },
+      ],
+      quotes: [
+        { type: "pujian", text: "kriuknya beda sih", ref_id: "comment:c1", platform: "threads", author: "rina" },
+        { type: "pujian", text: "Kriuknya beda sih", ref_id: "comment:c2", platform: "tiktok", author: "budi" },
+      ],
+    };
+    render(
+      <AiSummary
+        ai={repeated}
+        platformCounts={{ threads: 4, tiktok: 4 }}
+        results={[{ id: "r1", url: "https://example.invalid/post" }]}
+        comments={[
+          { id: "c1", resultId: "r1" },
+          { id: "c2", resultId: "r1" },
+        ]}
+      />,
+    );
+    expect(screen.getAllByRole("link", { name: /kriuknya beda sih/i })).toHaveLength(1);
+  });
 });

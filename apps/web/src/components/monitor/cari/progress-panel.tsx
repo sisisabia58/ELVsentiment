@@ -152,6 +152,19 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
                     : "Dilewati · tidak ada balasan";
   const commentRunning = commentStatus === "running" || (running && !sourcesBusy && commentStatus === "pending");
   const commentDone = commentStatus === "done" || commentCount > 0;
+  const summaryStatus = snapshot.search.summaryStatus ?? "pending";
+  const summaryCopy =
+    summaryStatus === "done"
+      ? "Selesai"
+      : summaryStatus === "running"
+        ? "Menulis ringkasan"
+        : summaryStatus === "failed"
+          ? "Gagal · hasil tetap tampil"
+          : summaryStatus === "skipped"
+            ? "Dilewati"
+            : "Menunggu · setelah komentar";
+  const summaryDone = summaryStatus === "done";
+  const summaryRunning = summaryStatus === "running";
 
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -242,12 +255,27 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
         ) : null}
         {props.aiEnabled ? (
           <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-            <span className="grid h-7 w-7 place-items-center rounded-full border border-border text-[12px] font-semibold text-muted-foreground">
-              3
+            <span
+              className={cn(
+                "grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold",
+                summaryDone
+                  ? "bg-positif-bg text-positif"
+                  : summaryRunning
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-muted-foreground",
+              )}
+            >
+              {summaryDone ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : summaryRunning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                "3"
+              )}
             </span>
             <div>
               <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
-              <p className="text-[11.5px] text-muted-foreground">Menunggu · setelah komentar</p>
+              <p className="text-[11.5px] text-muted-foreground">{summaryCopy}</p>
             </div>
           </li>
         ) : null}

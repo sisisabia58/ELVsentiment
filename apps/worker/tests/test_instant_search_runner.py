@@ -23,6 +23,8 @@ from sentiment_monitor.instant_search import (
     run_instant_search_cycle,
     search_status,
     set_source_state,
+    run_instant_search_poll,
+    run_question_cycle,
     summarize_search,
 )
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
@@ -795,6 +797,55 @@ class FailingGemini:
         raise GeminiError("http_500")
 
 
+def test_summary_is_attempted_once_and_a_failed_one_is_not_retried(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    calls = []
+
+    class Once:
+        def generate_json(self, **kwargs):
+            calls.append(kwargs.get("search_id"))
+            raise GeminiError("http_500")
+
+    now = datetime.now(timezone.utc)
+    summarize_search(db, job, llm=Once(), now=now)
+    summarize_search(db, job, llm=Once(), now=now)
+    assert calls == [job.id]
+    assert db.execute(
+        "select summary_status from instant_searches where id=%s", (job.id,)
+    )[0]["summary_status"] == "failed"
+
+
+def test_poll_does_not_backfill_an_old_pending_summary(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    db.commit()
+
+    def fetcher(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("a finished search must not be claimed again")
+
+    def submit(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("a finished search must not be submitted")
+
+    started = run_instant_search_poll(
+        db,
+        env={"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
+        now=datetime.now(timezone.utc),
+        limits=None,
+        submit=submit,
+        in_flight=set(),
+        fetcher=fetcher,
+    )
+    assert started == 0
+    assert db.execute(
+        "select status, summary_status from instant_searches where id=%s", (job.id,)
+    )[0] == {"status": "succeeded", "summary_status": "pending"}
+
+
 def test_summary_failure_leaves_search_succeeded_but_marks_summary_failed(db):
     job = claim_instant_search(db, "worker-1")
     set_source_state(db, job, "youtube", "answered", result_count=1, credits_charged=1, latency_ms=10)
@@ -884,6 +935,232 @@ def test_summary_keeps_only_a_verbatim_quote(db):
         "platform": "threads", "author": "rina",
     }]
     assert stored["cost_usd"] == 0
+
+
+def _queue_question(db, question: str, question_id: str) -> None:
+    db.execute(
+        """
+        insert into instant_search_questions
+          (id, search_id, customer_id, question, status, user_credits)
+        values (%s, %s, %s, %s, 'queued', 1)
+        """,
+        (question_id, SEARCH, CUSTOMER, question),
+    )
+
+
+def test_question_cycle_claims_at_most_two_and_does_not_reclaim_a_failure(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    ids = [
+        "33333333-3333-4333-8333-333333333341",
+        "33333333-3333-4333-8333-333333333342",
+        "33333333-3333-4333-8333-333333333343",
+        "33333333-3333-4333-8333-333333333344",
+        "33333333-3333-4333-8333-333333333345",
+    ]
+    for question_id in ids:
+        _queue_question(db, "Apa keluhan utama?", question_id)
+    calls = []
+
+    class Boom:
+        def generate_json(self, **kwargs):
+            calls.append(kwargs.get("search_id"))
+            raise GeminiError("http_500")
+
+    now = datetime.now(timezone.utc)
+    claimed = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom(), limit=9)
+    assert claimed == 2
+    assert calls == [job.id, job.id]
+    again = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom(), limit=9)
+    assert again == 2
+    assert len(calls) == 4
+    failed = db.execute(
+        "select count(*) as n from instant_search_questions where status = 'failed'"
+    )[0]["n"]
+    queued = db.execute(
+        "select count(*) as n from instant_search_questions where status = 'queued'"
+    )[0]["n"]
+    assert failed == 4
+    assert queued == 1
+    third = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom())
+    assert third == 1
+    assert len(calls) == 5
+    parked = run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=now, llm=Boom())
+    assert parked == 0
+    assert len(calls) == 5
+
+
+def test_a_store_error_after_the_claim_does_not_requeue_the_question(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    question_id = "33333333-3333-4333-8333-333333333346"
+    _queue_question(db, "Apa keluhan utama?", question_id)
+
+    class Guard:
+        def execute(self, sql, params=None):
+            text = " ".join(sql.split())
+            # The deadline sweep also writes status = 'failed'. Only the answer
+            # update, which clears the answer, is the store this test breaks.
+            if "answer = null" in text or "status = 'done'" in text:
+                raise RuntimeError("store failed")
+            return db.execute(sql, params)
+
+        def commit(self):
+            return db.commit()
+
+        def rollback(self):
+            return db.rollback()
+
+    class Boom:
+        def generate_json(self, **kwargs):
+            raise GeminiError("http_500")
+
+    with pytest.raises(RuntimeError, match="store failed"):
+        run_question_cycle(
+            Guard(), env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+        )
+    row = db.execute(
+        "select status from instant_search_questions where id=%s", (question_id,)
+    )[0]
+    assert row["status"] == "running"
+    calls = []
+
+    class Counting:
+        def generate_json(self, **kwargs):
+            calls.append(1)
+            raise GeminiError("http_500")
+
+    assert run_question_cycle(
+        db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Counting(),
+    ) == 0
+    assert calls == []
+
+
+def test_question_failure_does_not_change_the_search(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333333")
+
+    class Boom:
+        def generate_json(self, **kwargs):
+            raise GeminiError("http_500")
+
+    claimed = run_question_cycle(
+        db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+    )
+    assert claimed == 1
+    search = db.execute(
+        "select status, error_code from instant_searches where id=%s", (job.id,)
+    )[0]
+    assert search["status"] == "succeeded"
+    assert search["error_code"] is None
+    row = db.execute(
+        "select status, answer, safe_detail from instant_search_questions where id=%s",
+        ("33333333-3333-4333-8333-333333333333",),
+    )[0]
+    assert row["status"] == "failed"
+    assert row["answer"] is None
+    assert row["safe_detail"] == "http_500"
+
+
+def test_question_stores_known_citations_and_drops_the_rest(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [replace(post("threads", "th-1"), text="antrean panjang")])
+    finish_search(db, job, "succeeded")
+    result_id = db.execute(
+        "select id from instant_search_results where search_id=%s", (job.id,)
+    )[0]["id"]
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333334")
+    client = ScriptedGemini([
+        GeminiResult(
+            data={
+                "answer": "Keluhan utama adalah antrean.",
+                "citations": [f"result:{result_id}", "result:missing"],
+            },
+            model="scripted",
+            input_tokens=4,
+            output_tokens=2,
+            cost_usd=0.001,
+        )
+    ])
+    run_question_cycle(
+        db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=client,
+    )
+    row = db.execute(
+        "select status, answer, citations, model, cost_usd from instant_search_questions"
+    )[0]
+    citations = row["citations"]
+    if isinstance(citations, str):
+        citations = json.loads(citations)
+    assert row["status"] == "done"
+    assert row["answer"] == "Keluhan utama adalah antrean."
+    assert citations == [f"result:{result_id}"]
+    assert row["model"] == "scripted"
+    assert float(row["cost_usd"]) == 0.001
+    search = db.execute("select status, error_code from instant_searches where id=%s", (job.id,))[0]
+    assert search["status"] == "succeeded"
+    assert search["error_code"] is None
+
+
+def test_question_keeps_http_4xx_and_paused_and_logs_the_code(db, caplog):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    codes = (
+        ("http_4xx", "33333333-3333-4333-8333-333333333335"),
+        ("paused", "33333333-3333-4333-8333-333333333336"),
+    )
+    for code, question_id in codes:
+        _queue_question(db, "Apa keluhan utama?", question_id)
+
+        class Boom:
+            def generate_json(self, **kwargs):
+                raise GeminiError(code)
+
+        with caplog.at_level(logging.INFO):
+            run_question_cycle(
+                db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Boom(),
+            )
+        row = db.execute(
+            "select status, safe_detail from instant_search_questions where id=%s",
+            (question_id,),
+        )[0]
+        assert row["status"] == "failed"
+        assert row["safe_detail"] == code
+        assert f"question_detail={code}" in caplog.text
+
+
+def test_question_passes_the_connect_factory_to_gemini(db, monkeypatch):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    _queue_question(db, "Apa keluhan utama?", "33333333-3333-4333-8333-333333333337")
+    seen = []
+
+    def fake_create(env, conn=None):
+        seen.append(conn)
+        return ScriptedGemini([
+            GeminiResult(
+                data={"answer": "Ada.", "citations": []},
+                model="scripted",
+                input_tokens=1,
+                output_tokens=1,
+                cost_usd=0,
+            )
+        ])
+
+    monkeypatch.setattr(instant_search, "create_gemini", fake_create)
+    factory = object()
+    run_question_cycle(
+        db,
+        env={"CARI_AI_PROVIDER": "gemini"},
+        now=datetime.now(timezone.utc),
+        connect=factory,
+    )
+    assert seen == [factory]
 
 
 def test_runner_passes_the_route_timeout_to_each_fetch(db):

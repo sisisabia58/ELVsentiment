@@ -1,8 +1,12 @@
 """Gemini JSON transport, quota gate, and offline fakes.
 
-Exceptions and this module's control flow keep only a short safe code.
-Prompts, response bodies, and API keys are never stored on the exception
-or written to a log.
+Exceptions keep only a short safe code. A non-200 response logs its HTTP
+status, error.status, and a short redacted message. A successful call logs
+purpose, search id, and token counts. Prompts, API keys, and response text
+are not logged.
+
+A quota pause lasts until RetryInfo retryDelay (capped at 24 hours). The
+worker does not shorten that to a minute or two and then call again.
 """
 
 from __future__ import annotations
@@ -10,11 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Mapping
+
+_log = logging.getLogger("sentiment_monitor.gemini")
 
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
@@ -25,11 +33,67 @@ GEMINI_DEFAULT_OUTPUT_USD_PER_MTOK = 2.50
 GEMINI_TIMEOUT_SECONDS = 20
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_ERROR_BYTES = 65_536
+# One poll is 2 seconds. A cycle may finish every in-flight search (8) and
+# answer the question cap (2). Anything beyond that is a loop, not a search.
+GEMINI_CALLS_PER_CYCLE = 10
+GEMINI_CYCLE_SECONDS = 2.0
+_BACKOFF_BASE_MS = 30_000
+_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000
+_MESSAGE_CHARS = 500
+_DETAILS_CHARS = 1000
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 _JAKARTA = timezone(timedelta(hours=7))
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 _SAFE_CODE = re.compile(r"^[a-z0-9_]{1,40}$")
+_budget_lock = threading.Lock()
+_cycle_started = 0.0
+_cycle_count = 0
+_backoff_ms = 0
+
+
+def reset_gemini_budget() -> None:
+    """Clear the in-process cycle counter and backoff. Tests start from zero."""
+    global _cycle_started, _cycle_count, _backoff_ms
+    with _budget_lock:
+        _cycle_started = 0.0
+        _cycle_count = 0
+        _backoff_ms = 0
+
+
+def _take_cycle_slot() -> bool:
+    """Allow at most GEMINI_CALLS_PER_CYCLE HTTP calls in one poll window."""
+    global _cycle_started, _cycle_count
+    now = time.monotonic()
+    with _budget_lock:
+        if _cycle_started <= 0.0 or now - _cycle_started >= GEMINI_CYCLE_SECONDS:
+            _cycle_started = now
+            _cycle_count = 0
+        if _cycle_count >= GEMINI_CALLS_PER_CYCLE:
+            return False
+        _cycle_count += 1
+        return True
+
+
+def _pause_delay_ms(info: GeminiErrorInfo) -> int:
+    """Honor RetryInfo. Without one, double the previous delay from 30 seconds."""
+    global _backoff_ms
+    with _budget_lock:
+        if info.retry_after_ms is not None:
+            delay = max(0, min(int(info.retry_after_ms), _BACKOFF_MAX_MS))
+            _backoff_ms = delay
+            return delay
+        if _backoff_ms <= 0:
+            _backoff_ms = _BACKOFF_BASE_MS
+        else:
+            _backoff_ms = min(_backoff_ms * 2, _BACKOFF_MAX_MS)
+        return _backoff_ms
+
+
+def _log_token(value: object, fallback: str) -> str:
+    if isinstance(value, str) and _MODEL_PATTERN.fullmatch(value):
+        return value
+    return fallback
 
 _DEMO_SUMMARY: dict[str, Any] = {
     "overall_summary": "Percakapan ini tercatat dari hasil pencarian.",
@@ -163,6 +227,86 @@ def parse_gemini_error_body(payload: Any) -> GeminiErrorInfo:
     return GeminiErrorInfo(retry_after_ms, per_day, limit, quota_id, quota_metric)
 
 
+def _error_fields(raw: bytes) -> tuple[GeminiErrorInfo, str, str, str]:
+    empty = GeminiErrorInfo(None, False, None, None, None)
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return empty, "", "", ""
+    if not isinstance(parsed, dict):
+        return empty, "", "", ""
+    error = parsed.get("error")
+    error_status = ""
+    message = ""
+    if isinstance(error, dict):
+        status = error.get("status")
+        if isinstance(status, str):
+            error_status = status.strip()
+        text = error.get("message")
+        if isinstance(text, str):
+            message = " ".join(text.split())
+    return parse_gemini_error_body(parsed), error_status[:80], message, _quota_details(parsed)
+
+
+def _redact(text: str, api_key: str) -> str:
+    if api_key:
+        text = text.replace(api_key, "[redacted]")
+    return re.sub(r"AIza[0-9A-Za-z_\-]{8,}", "[redacted]", text)
+
+
+def _quota_details(payload: Any) -> str:
+    """RetryInfo and every QuotaFailure violation, not only the first."""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(details, list):
+        return ""
+    parts: list[str] = []
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        delay = item.get("retryDelay")
+        if isinstance(delay, str) and delay.strip():
+            parts.append(f"retryDelay={delay.strip()}")
+        violations = item.get("violations")
+        if not isinstance(violations, list):
+            continue
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            metric = violation.get("quotaMetric")
+            quota_id = violation.get("quotaId")
+            value = violation.get("quotaValue")
+            parts.append(
+                "metric={metric} id={quota_id} value={value}".format(
+                    metric=metric if isinstance(metric, str) else "-",
+                    quota_id=quota_id if isinstance(quota_id, str) else "-",
+                    value=value if value is not None else "-",
+                )
+            )
+    return "; ".join(parts)
+
+
+def _log_rejection(
+    http_status: int,
+    error_status: str,
+    message: str,
+    details: str,
+    api_key: str,
+    model: str,
+) -> None:
+    safe_status = error_status if re.fullmatch(r"[A-Z0-9_]{1,40}", error_status or "") else "-"
+    text = _redact(message, api_key)[:_MESSAGE_CHARS]
+    quota = _redact(details, api_key)[:_DETAILS_CHARS]
+    _log.info(
+        "gemini_http status=%s model=%s error_status=%s message=%s details=%s",
+        http_status,
+        model or "-",
+        safe_status,
+        text or "-",
+        quota or "-",
+    )
+
+
 def format_gemini_pause(until: datetime, now: datetime) -> str:
     local = _aware(until).astimezone(_JAKARTA)
     clock = local.strftime("%H:%M")
@@ -188,6 +332,14 @@ def acquire_gemini_slot(
     if not rows:
         return
     paused = _aware_or_none(_row_value(rows[0], "paused_until", 0))
+    # A pause that is already over can be cleared. A future pause is the
+    # server's retryDelay, including a multi-hour free-tier daily reset,
+    # and must not be cleared just because it is longer than two minutes.
+    if paused is not None and paused <= now:
+        conn.execute(
+            "update gemini_gate set paused_until = null, pause_kind = null where id = 1"
+        )
+        paused = None
     if paused is not None and paused > now:
         raise GeminiError(
             "paused",
@@ -272,6 +424,70 @@ def _response_json(payload: Mapping[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _with_property_ordering(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Gemini's responseSchema accepts an object once its properties are ordered.
+
+    The live model documents propertyOrdering as the field that makes this
+    OpenAPI subset valid. Summary and questions share this builder so the
+    question body cannot drift into a shape the summary call does not use.
+    """
+    copied: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "properties" and isinstance(value, Mapping):
+            ordered: dict[str, Any] = {}
+            for name, child in value.items():
+                ordered[str(name)] = _with_property_ordering(child) if isinstance(child, Mapping) else child
+            copied["properties"] = ordered
+            copied["propertyOrdering"] = list(ordered)
+        elif key == "items" and isinstance(value, Mapping):
+            copied["items"] = _with_property_ordering(value)
+        else:
+            copied[key] = value
+    return copied
+
+
+def build_generate_content_request(
+    *,
+    model: str,
+    system: str,
+    user: str,
+    schema: Mapping[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    """URL and body shared by the summary and question calls.
+
+    No tools, cached content, thinking config, or service tier. Those are
+    separate Gemini quotas, and the summary call that succeeds does not send them.
+    """
+    return {
+        "url": f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        "body": build_generation_body(
+            system=system,
+            user=user,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        ),
+    }
+
+
+def build_generation_body(
+    *,
+    system: str,
+    user: str,
+    schema: Mapping[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    return {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _with_property_ordering(schema),
+            "maxOutputTokens": max_output_tokens,
+        },
+    }
+
+
 class GeminiClient:
     def __init__(
         self,
@@ -296,25 +512,29 @@ class GeminiClient:
         user: str,
         schema: Mapping[str, Any],
         purpose: str,
+        search_id: str | None = None,
         max_output_tokens: int = 4096,
     ) -> GeminiResult:
-        del purpose
         if self.connect is not None:
             _run_short(self.connect, lambda conn: acquire_gemini_slot(
                 conn, datetime.now(timezone.utc), self.max_rpm
             ))
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        body = json.dumps(
-            {
-                "systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "responseSchema": schema,
-                    "maxOutputTokens": max_output_tokens,
-                },
-            }
-        ).encode("utf-8")
+        if not _take_cycle_slot():
+            _log.info(
+                "gemini_cycle_cap purpose=%s search=%s",
+                _log_token(purpose, "other"),
+                _log_token(search_id, "-"),
+            )
+            raise GeminiError("cycle_cap", counts_as_attempt=False)
+        request_parts = build_generate_content_request(
+            model=self.model,
+            system=system,
+            user=user,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        )
+        url = str(request_parts["url"])
+        body = json.dumps(request_parts["body"]).encode("utf-8")
         request = urllib.request.Request(
             url,
             data=body,
@@ -338,12 +558,8 @@ class GeminiClient:
             raise
         except Exception as error:
             raise GeminiError("transport_error") from error
-        if status in (429, 503, 504):
-            self._raise_http(status, raw[:MAX_ERROR_BYTES])
-        if status >= 500:
-            raise GeminiError("http_5xx", counts_as_attempt=True)
         if status >= 400:
-            raise GeminiError("http_4xx")
+            self._raise_http(status, raw[:MAX_ERROR_BYTES])
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -351,19 +567,25 @@ class GeminiClient:
         if not isinstance(payload, dict):
             raise GeminiError("malformed_json")
         prompt, output, cost = _usage_cost(payload, self.env)
+        _log.info(
+            "gemini_ok purpose=%s search=%s model=%s input_tokens=%s output_tokens=%s",
+            _log_token(purpose, "other"),
+            _log_token(search_id, "-"),
+            _log_token(self.model, "unknown"),
+            int(prompt),
+            int(output),
+        )
         return GeminiResult(_response_json(payload), self.model, prompt, output, cost)
 
     def _raise_http(self, status: int, raw: bytes) -> None:
-        info = GeminiErrorInfo(None, False, None, None, None)
-        try:
-            parsed = json.loads(raw.decode("utf-8")) if raw else {}
-            if isinstance(parsed, dict):
-                info = parse_gemini_error_body(parsed)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            info = GeminiErrorInfo(None, False, None, None, None)
-        if info.retry_after_ms is not None or info.per_day:
+        info, error_status, message, details = _error_fields(raw)
+        _log_rejection(status, error_status, message, details, self._api_key, self.model)
+        quota = status == 429 or error_status == "RESOURCE_EXHAUSTED"
+        if quota:
             self._record_pause(info)
-        if status in (429, 503, 504):
+            code = "http_429"
+            attempt = True
+        elif status in (503, 504):
             code = f"http_{status}"
             attempt = True
         elif status >= 500:
@@ -385,7 +607,7 @@ class GeminiClient:
     def _record_pause(self, info: GeminiErrorInfo) -> None:
         if self.connect is None:
             return
-        delay_ms = info.retry_after_ms if info.retry_after_ms is not None else 3_600_000
+        delay_ms = _pause_delay_ms(info)
         until = datetime.now(timezone.utc) + timedelta(milliseconds=delay_ms)
         try:
             _run_short(
@@ -407,7 +629,25 @@ class DemoGemini:
     model = "demo"
 
     def generate_json(self, **kwargs: Any) -> GeminiResult:
-        del kwargs
+        if kwargs.get("purpose") == "question":
+            user = kwargs.get("user") if isinstance(kwargs.get("user"), str) else ""
+            citations: list[str] = []
+            for match in re.finditer(r'"(?:id)":"((?:result|comment):[^"]+)"', user):
+                ref = match.group(1)
+                if ref not in citations:
+                    citations.append(ref)
+                if len(citations) == 3:
+                    break
+            return GeminiResult(
+                {
+                    "answer": "Dari hasil yang tersimpan, ini yang paling sering disebut.",
+                    "citations": citations,
+                },
+                "demo",
+                0,
+                0,
+                0.0,
+            )
         return GeminiResult(json.loads(json.dumps(_DEMO_SUMMARY)), "demo", 0, 0, 0.0)
 
 

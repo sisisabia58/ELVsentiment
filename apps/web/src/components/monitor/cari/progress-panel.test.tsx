@@ -75,6 +75,25 @@ describe("ProgressPanel", () => {
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
   });
 
+  it("drives the AI step from the summary status", () => {
+    const { rerender } = render(
+      <ProgressPanel
+        snapshot={snapshot({ search: { ...snapshot().search, summaryStatus: "running" } })}
+        aiEnabled
+      />,
+    );
+    expect(screen.getByText("Ringkasan AI")).toBeTruthy();
+    expect(screen.getByText("Menulis ringkasan")).toBeTruthy();
+    rerender(
+      <ProgressPanel
+        snapshot={snapshot({ search: { ...snapshot().search, summaryStatus: "done" } })}
+        aiEnabled
+      />,
+    );
+    expect(screen.getByText("Selesai")).toBeTruthy();
+    expect(screen.queryByText("Menunggu · setelah komentar")).toBeNull();
+  });
+
   it("shows an empty answer and a skipped comment pass distinctly", () => {
     render(
       <ProgressPanel
