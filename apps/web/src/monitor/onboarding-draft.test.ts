@@ -117,6 +117,93 @@ describe("onboarding draft", () => {
     ).toMatchObject({ step: 1, brand: "", keywords: [], sources: ["threads"] });
   });
 
+  it("advances a Pantau prefill to the source and schedule steps", () => {
+    const saved = draft({
+      projectId: null,
+      step: 1,
+      brand: "indomie",
+      keywords: ["indomie"],
+      sources: ["threads"],
+    });
+    const credentials = { x: true, threads: true, instagram: true, tiktok: true };
+    const step3 = resolveOnboardingState({
+      fresh: true,
+      langkah: "3",
+      draft: saved,
+      customerId: customerA,
+      existing: null,
+      credentials,
+    });
+    expect(step3).toMatchObject({
+      step: 3,
+      brand: "indomie",
+      keywords: ["indomie"],
+      sources: ["threads"],
+    });
+    expect(onboardingLangkahRedirect({ langkah: "3", fresh: true, resolvedStep: step3.step })).toBeNull();
+    const step4 = resolveOnboardingState({
+      fresh: true,
+      langkah: "4",
+      draft: saved,
+      customerId: customerA,
+      existing: null,
+      credentials,
+    });
+    expect(step4.step).toBe(4);
+    expect(onboardingLangkahRedirect({ langkah: "4", fresh: true, resolvedStep: step4.step })).toBeNull();
+  });
+
+  it("follows langkah for a blank fresh wizard once its draft has a brand", () => {
+    const saved = draft({
+      projectId: null,
+      step: 2,
+      brand: "indomie",
+      keywords: ["indomie"],
+      sources: ["threads"],
+    });
+    const restored = resolveOnboardingState({
+      fresh: true,
+      langkah: "3",
+      draft: saved,
+      customerId: customerA,
+      existing: null,
+      credentials: { x: false, threads: true },
+    });
+    expect(restored.step).toBe(3);
+    expect(onboardingLangkahRedirect({ langkah: "3", fresh: true, resolvedStep: restored.step })).toBeNull();
+  });
+
+  it("keeps a new-project draft when a fresh wizard opens", () => {
+    const saved = draft({
+      projectId: null,
+      step: 2,
+      brand: "barayam",
+      keywords: ["barayam"],
+      sources: ["threads", "tiktok"],
+    });
+    expect(
+      resolveOnboardingState({
+        fresh: true,
+        langkah: null,
+        draft: saved,
+        customerId: customerA,
+        existing: {
+          projectId: "mine",
+          brandName: "lama",
+          keywords: ["lama"],
+          sources: ["x"],
+          schedule,
+        },
+        credentials: { x: true, threads: true, tiktok: true },
+      }),
+    ).toMatchObject({
+      step: 1,
+      brand: "barayam",
+      keywords: ["barayam"],
+      sources: ["threads", "tiktok"],
+    });
+  });
+
   it("hides a draft with no project from a different signed-in customer", () => {
     const saved = draft({ projectId: null, brand: "rahasia merek", keywords: ["rahasia"] });
     expect(

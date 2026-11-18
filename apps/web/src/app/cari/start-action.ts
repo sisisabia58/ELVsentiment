@@ -1,13 +1,16 @@
 "use server";
 
 import { withSessionDeps } from "@/auth/request-session";
+import { writeOnboardingDraftCookie } from "@/monitor/onboarding-draft-cookie";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { readSearchLimits } from "@/monitor/search/limits";
 import {
   askQuestionForCustomer,
+  monitorAsProjectForCustomer,
   retryQuestionForCustomer,
   startSearchForCustomer,
   type AskQuestionResult,
+  type MonitorProjectResult,
   type StartSearchInput,
   type StartSearchResult,
 } from "./actions";
@@ -75,5 +78,26 @@ export async function retryQuestionAction(
       questionId,
       env: process.env,
     });
+  });
+}
+
+export async function monitorAsProjectAction(searchId: string): Promise<MonitorProjectResult> {
+  return withSessionDeps(async (deps) => {
+    let customerId: string;
+    try {
+      customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
+    } catch {
+      return { ok: false as const, error: "unauthenticated" };
+    }
+    const prepared = await monitorAsProjectForCustomer({
+      db: deps.db,
+      customerId,
+      searchId,
+      env: process.env,
+    });
+    if (!prepared.ok) return prepared;
+    const wrote = await writeOnboardingDraftCookie(prepared.fields);
+    if (!wrote) return { ok: false as const, error: "unauthenticated" };
+    return prepared;
   });
 }

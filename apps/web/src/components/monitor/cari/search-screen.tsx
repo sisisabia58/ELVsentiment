@@ -14,7 +14,7 @@ import {
 } from "@/monitor/search/filters";
 import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
 import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platforms";
-import { startSearchAction } from "@/app/cari/start-action";
+import { monitorAsProjectAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
 import { AiSummary } from "./ai-summary";
@@ -168,8 +168,10 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
     props.initialSnapshot.search.id,
     props.initialSnapshot,
   );
+  const router = useRouter();
   const now = useNow(props.now);
   const search = snapshot.search;
+  const [monitorError, setMonitorError] = useState<string | null>(null);
   const running = search.status === "queued" || search.status === "running";
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
@@ -196,8 +198,36 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
           <p className="font-mono text-[12.5px] text-muted-foreground">{receipt.join(" · ")}</p>
+          {!running ? (
+            <button
+              type="button"
+              className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-[13px] font-medium text-foreground"
+              onClick={() => {
+                void (async () => {
+                  setMonitorError(null);
+                  try {
+                    const result = await monitorAsProjectAction(search.id);
+                    if (result.ok) {
+                      router.push(result.href);
+                      return;
+                    }
+                    setMonitorError("Proyek belum bisa disiapkan. Coba lagi.");
+                  } catch {
+                    setMonitorError("Proyek belum bisa disiapkan. Coba lagi.");
+                  }
+                })();
+              }}
+            >
+              Pantau sebagai proyek
+            </button>
+          ) : null}
         </div>
       </section>
+      {monitorError ? (
+        <p role="alert" className="mt-2 text-[13px] text-negatif">
+          {monitorError}
+        </p>
+      ) : null}
       {failureCopy ? (
         <p
           role="alert"
