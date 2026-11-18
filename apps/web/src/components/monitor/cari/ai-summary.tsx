@@ -82,6 +82,7 @@ export function AiSummary(props: {
   platformCounts?: Record<string, number>;
   results?: Pick<SnapshotResult, "id" | "url">[];
   comments?: Pick<SnapshotComment, "id" | "resultId">[];
+  hideQuotes?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = props.summaryStatus ?? (props.ai ? "done" : "pending");
@@ -157,7 +158,7 @@ export function AiSummary(props: {
                 ) : null}
               </div>
               <p className="mt-1 text-[13px] leading-5 text-foreground">{item.summary}</p>
-              {quote?.text ? (
+              {quote?.text && !props.hideQuotes ? (
                 <blockquote className="mt-1 border-l-2 border-border pl-2 text-[12.5px] text-muted-foreground">
                   <QuoteText
                     text={quote.text}

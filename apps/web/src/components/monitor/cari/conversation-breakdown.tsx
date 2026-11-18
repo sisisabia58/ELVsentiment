@@ -33,6 +33,16 @@ function asList<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function uniqueQuotes(quotes: Quote[]): Quote[] {
+  const seen = new Set<string>();
+  return quotes.filter((quote) => {
+    const key = `${quote.ref_id ?? ""}:${quote.text ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function QuoteLine(props: { text: string; href: string | null }) {
   if (!props.href) return props.text;
   const external = props.href.startsWith("http");
@@ -108,7 +118,7 @@ export function ConversationBreakdown(props: { snapshot: SearchSnapshot }) {
         <>
           <h3 className="mt-5 text-[11px] font-semibold tracking-wide text-muted-foreground">APA KATA ORANG</h3>
           <ul className="mt-2 space-y-2">
-            {quotes.map((quote, index) => (
+            {uniqueQuotes(quotes).map((quote, index) => (
               <li key={`${quote.text}-${index}`} className="rounded-lg border border-border px-3 py-2">
                 <span className="text-[11px] font-semibold text-primary">{QUOTE_LABEL[quote.type ?? ""] ?? quote.type}</span>
                 <p className="text-[13px] text-foreground">

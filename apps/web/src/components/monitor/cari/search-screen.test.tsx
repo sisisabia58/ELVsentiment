@@ -155,6 +155,24 @@ describe("SearchDetail", () => {
     expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
   });
 
+  it("shows each quote link once", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "done";
+    done.ai = {
+      overallSummary: "Ringkasan rahasia",
+      overallStance: "positif",
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "result:r1" }],
+      quotes: [
+        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+      ],
+      themes: [],
+      model: "gemini",
+    };
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getAllByRole("link", { name: "antrean unik" })).toHaveLength(1);
+  });
+
   it("shows the command receipt, progress before completion, and results after", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const { rerender } = render(<SearchDetail initialSnapshot={snapshot()} />);

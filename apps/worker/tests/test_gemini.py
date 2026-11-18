@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import io
 import json
+import logging
 import urllib.error
 
 import pytest
@@ -124,17 +125,19 @@ def test_gemini_cost_includes_thought_tokens():
     assert result.cost_usd == pytest.approx(0.000675)
 
 
-def test_acquire_honors_a_pause_and_a_later_pause_replaces_an_earlier_one(db):
+def test_acquire_honors_a_short_pause_and_clears_one_past_the_ttl(db):
     now = datetime.now(timezone.utc)
-    record_gemini_pause(db, now + timedelta(minutes=30), kind="retry")
+    record_gemini_pause(db, now + timedelta(seconds=30), kind="retry")
     with pytest.raises(GeminiError, match="paused"):
         acquire_gemini_slot(db, now, 10, sleep=lambda _seconds: None)
-    record_gemini_pause(db, now + timedelta(minutes=5), kind="retry")
-    row = db.execute("select paused_until from gemini_gate where id = 1")[0]
-    assert row["paused_until"] > now + timedelta(minutes=20)
-    record_gemini_pause(db, now + timedelta(hours=2), kind="per_day")
-    row = db.execute("select pause_kind from gemini_gate where id = 1")[0]
-    assert row["pause_kind"] == "per_day"
+    db.execute(
+        "update gemini_gate set paused_until = %s, pause_kind = 'per_day' where id = 1",
+        (now + timedelta(hours=1),),
+    )
+    acquire_gemini_slot(db, now, 10, sleep=lambda _seconds: None)
+    row = db.execute("select paused_until, pause_kind from gemini_gate where id = 1")[0]
+    assert row["paused_until"] is None
+    assert row["pause_kind"] is None
 
 
 def test_acquire_caps_the_spacing_sleep_at_sixty_seconds(db):
@@ -151,6 +154,98 @@ def test_acquire_caps_the_spacing_sleep_at_sixty_seconds(db):
     db.execute("update gemini_gate set last_request_at = %s where id = 1", (now,))
     acquire_gemini_slot(db, now, 1, sleep=slept.append)
     assert slept == [pytest.approx(60.0)]
+
+
+class _Gate:
+    def __init__(self):
+        self.statements: list[tuple[str, object]] = []
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+        if "select paused_until" in sql:
+            return [{"paused_until": None, "last_request_at": None}]
+        return []
+
+    def commit(self):
+        return None
+
+
+def _reject(status: int, body: dict):
+    def opener(request, timeout):
+        del timeout
+        raise urllib.error.HTTPError(
+            request.full_url,
+            status,
+            "error",
+            hdrs=None,
+            fp=io.BytesIO(json.dumps(body).encode()),
+        )
+
+    return opener
+
+
+def test_invalid_argument_is_logged_and_does_not_pause(caplog):
+    gate = _Gate()
+    client = create_gemini(
+        {"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
+        gate,
+    )
+    message = "Invalid JSON payload received. " + ("x" * 250)
+    client.opener = _reject(400, {
+        "error": {
+            "status": "INVALID_ARGUMENT",
+            "message": message,
+            "details": [{"retryDelay": "30s"}],
+        },
+    })
+    with caplog.at_level(logging.INFO, logger="sentiment_monitor.gemini"):
+        with pytest.raises(GeminiError, match="http_4xx"):
+            client.generate_json(
+                system="s", user="u", schema={"type": "object", "properties": {}}, purpose="question",
+            )
+    assert "gemini_http status=400 error_status=INVALID_ARGUMENT" in caplog.text
+    assert "Invalid JSON payload received." in caplog.text
+    assert "xxx" * 80 not in caplog.text
+    assert not any("paused_until" in sql and sql.strip().startswith("insert") for sql, _params in gate.statements)
+
+
+def test_resource_exhausted_pauses_for_at_most_two_minutes(caplog):
+    gate = _Gate()
+    client = create_gemini(
+        {"CARI_AI_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-key"},
+        gate,
+    )
+    client.opener = _reject(429, {
+        "error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "Quota exceeded for synthetic-key",
+            "details": [
+                {"retryDelay": "3600s"},
+                {"violations": [{
+                    "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                    "quotaMetric": "generate_requests",
+                    "quotaValue": "20",
+                }]},
+            ],
+        },
+    })
+    before = datetime.now(timezone.utc)
+    with caplog.at_level(logging.INFO, logger="sentiment_monitor.gemini"):
+        with pytest.raises(GeminiError, match="http_429") as caught:
+            client.generate_json(
+                system="s", user="u", schema={"type": "object", "properties": {}}, purpose="question",
+            )
+    assert caught.value.code == "http_429"
+    inserts = [
+        params for sql, params in gate.statements
+        if "paused_until" in sql and sql.strip().startswith("insert")
+    ]
+    assert len(inserts) == 1
+    until = inserts[0][0]
+    assert before < until <= before + timedelta(seconds=121)
+    assert "status=429" in caplog.text
+    assert "error_status=RESOURCE_EXHAUSTED" in caplog.text
+    assert "synthetic-key" not in caplog.text
 
 
 def test_question_request_matches_the_summary_envelope():
@@ -219,3 +314,4 @@ def test_question_request_matches_the_summary_envelope():
         assert banned not in encoded
     assert question_schema["propertyOrdering"] == ["answer", "citations"]
     assert question_schema["properties"]["citations"]["items"]["type"] == "string"
+    assert question["generationConfig"]["responseSchema"]["type"] == summary["generationConfig"]["responseSchema"]["type"] == "object"

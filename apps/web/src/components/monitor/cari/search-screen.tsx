@@ -123,6 +123,7 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
   const counts: Record<string, number> = {};
   for (const result of snapshot.results) counts[result.platform] = (counts[result.platform] ?? 0) + 1;
   const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
+  const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
   return (
     <div className="mt-5 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-5">
       <aside className="order-first mb-5 lg:order-2 lg:mb-0 lg:sticky lg:top-4">
@@ -134,11 +135,12 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
           platformCounts={counts}
           results={snapshot.results}
           comments={snapshot.comments}
+          hideQuotes={showBreakdown}
         />
       </aside>
       <div className="min-w-0 lg:order-1">
         {results}
-        {snapshot.ai && snapshot.results.length > 0 ? <ConversationBreakdown snapshot={snapshot} /> : null}
+        {showBreakdown ? <ConversationBreakdown snapshot={snapshot} /> : null}
         <div className="mt-5">
           <AskPanel
             searchId={snapshot.search.id}

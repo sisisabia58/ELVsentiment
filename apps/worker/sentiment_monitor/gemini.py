@@ -1,8 +1,8 @@
 """Gemini JSON transport, quota gate, and offline fakes.
 
-Exceptions and this module's control flow keep only a short safe code.
-Prompts, response bodies, and API keys are never stored on the exception
-or written to a log.
+Exceptions keep only a short safe code. A non-200 response logs its HTTP
+status, error.status, and the first 200 characters of error.message.
+Prompts, API keys, and the rest of the body are not logged.
 """
 
 from __future__ import annotations
@@ -10,11 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import re
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Mapping
+
+_log = logging.getLogger("sentiment_monitor.gemini")
 
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
@@ -25,6 +28,10 @@ GEMINI_DEFAULT_OUTPUT_USD_PER_MTOK = 2.50
 GEMINI_TIMEOUT_SECONDS = 20
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_ERROR_BYTES = 65_536
+# A quota pause is a short retry hint. Anything longer is the old one-hour
+# hold and is cleared on the next acquire, including the row already stored.
+_MAX_PAUSE = timedelta(seconds=120)
+_MESSAGE_CHARS = 200
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 _JAKARTA = timezone(timedelta(hours=7))
@@ -163,6 +170,41 @@ def parse_gemini_error_body(payload: Any) -> GeminiErrorInfo:
     return GeminiErrorInfo(retry_after_ms, per_day, limit, quota_id, quota_metric)
 
 
+def _error_fields(raw: bytes) -> tuple[GeminiErrorInfo, str, str]:
+    empty = GeminiErrorInfo(None, False, None, None, None)
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return empty, "", ""
+    if not isinstance(parsed, dict):
+        return empty, "", ""
+    error = parsed.get("error")
+    error_status = ""
+    message = ""
+    if isinstance(error, dict):
+        status = error.get("status")
+        if isinstance(status, str):
+            error_status = status.strip()
+        text = error.get("message")
+        if isinstance(text, str):
+            message = " ".join(text.split())
+    return parse_gemini_error_body(parsed), error_status[:80], message
+
+
+def _log_rejection(http_status: int, error_status: str, message: str, api_key: str) -> None:
+    safe_status = error_status if re.fullmatch(r"[A-Z0-9_]{1,40}", error_status or "") else "-"
+    text = message[:_MESSAGE_CHARS]
+    if api_key:
+        text = text.replace(api_key, "[redacted]")
+    text = re.sub(r"AIza[0-9A-Za-z_\-]{8,}", "[redacted]", text)
+    _log.info(
+        "gemini_http status=%s error_status=%s message=%s",
+        http_status,
+        safe_status,
+        text or "-",
+    )
+
+
 def format_gemini_pause(until: datetime, now: datetime) -> str:
     local = _aware(until).astimezone(_JAKARTA)
     clock = local.strftime("%H:%M")
@@ -188,6 +230,11 @@ def acquire_gemini_slot(
     if not rows:
         return
     paused = _aware_or_none(_row_value(rows[0], "paused_until", 0))
+    if paused is not None and (paused <= now or paused > now + _MAX_PAUSE):
+        conn.execute(
+            "update gemini_gate set paused_until = null, pause_kind = null where id = 1"
+        )
+        paused = None
     if paused is not None and paused > now:
         raise GeminiError(
             "paused",
@@ -375,12 +422,8 @@ class GeminiClient:
             raise
         except Exception as error:
             raise GeminiError("transport_error") from error
-        if status in (429, 503, 504):
-            self._raise_http(status, raw[:MAX_ERROR_BYTES])
-        if status >= 500:
-            raise GeminiError("http_5xx", counts_as_attempt=True)
         if status >= 400:
-            raise GeminiError("http_4xx")
+            self._raise_http(status, raw[:MAX_ERROR_BYTES])
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -391,16 +434,14 @@ class GeminiClient:
         return GeminiResult(_response_json(payload), self.model, prompt, output, cost)
 
     def _raise_http(self, status: int, raw: bytes) -> None:
-        info = GeminiErrorInfo(None, False, None, None, None)
-        try:
-            parsed = json.loads(raw.decode("utf-8")) if raw else {}
-            if isinstance(parsed, dict):
-                info = parse_gemini_error_body(parsed)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            info = GeminiErrorInfo(None, False, None, None, None)
-        if info.retry_after_ms is not None or info.per_day:
+        info, error_status, message = _error_fields(raw)
+        _log_rejection(status, error_status, message, self._api_key)
+        quota = status == 429 or error_status == "RESOURCE_EXHAUSTED"
+        if quota:
             self._record_pause(info)
-        if status in (429, 503, 504):
+            code = "http_429"
+            attempt = True
+        elif status in (503, 504):
             code = f"http_{status}"
             attempt = True
         elif status >= 500:
@@ -422,7 +463,8 @@ class GeminiClient:
     def _record_pause(self, info: GeminiErrorInfo) -> None:
         if self.connect is None:
             return
-        delay_ms = info.retry_after_ms if info.retry_after_ms is not None else 3_600_000
+        delay_ms = info.retry_after_ms if info.retry_after_ms is not None else 60_000
+        delay_ms = max(0, min(int(delay_ms), int(_MAX_PAUSE.total_seconds() * 1000)))
         until = datetime.now(timezone.utc) + timedelta(milliseconds=delay_ms)
         try:
             _run_short(
