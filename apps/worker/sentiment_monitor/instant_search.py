@@ -1498,7 +1498,9 @@ def _summarize_collected(
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
         output = validate_summary(generated.data, refs, platforms)
-    except Exception:
+    except Exception as error:
+        code = error.code if isinstance(error, GeminiError) else "error"
+        _info(job.id, summary_detail=code)
         try:
             tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
         except Exception:
@@ -1515,6 +1517,42 @@ def _summarize_collected(
         except Exception:
             if tx.shared is not None:
                 _rollback_quiet(tx.shared)
+
+
+_SUMMARY_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def retry_named_summary(connect: Any, search_id: str, env: Mapping[str, Any]) -> None:
+    """Re-run one failed summary by id. This is not a scan of old searches."""
+    if not isinstance(search_id, str) or not _SUMMARY_ID.fullmatch(search_id):
+        return
+    tx = _Transactions(connect)
+
+    def reopen(conn: Any) -> InstantSearchJob | None:
+        rows = conn.execute(
+            "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
+            "language_filter, deadline_at from instant_searches where id = %s",
+            (search_id,),
+        ) or []
+        if not rows:
+            return None
+        job = _job_from_row(rows[0])
+        if job is None:
+            return None
+        _set_customer(conn, job.customer_id)
+        conn.execute(
+            "update instant_searches set summary_status = 'pending' "
+            "where id = %s and summary_status = 'failed'",
+            (job.id,),
+        )
+        return job
+
+    job = tx.run(reopen)
+    if job is None:
+        return
+    _summarize_collected(tx, job, env=env, now=datetime.now(timezone.utc), llm=None)
 
 
 def _fail_deadline_missed_searches(conn: Any, now: datetime) -> None:

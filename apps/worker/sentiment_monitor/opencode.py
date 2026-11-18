@@ -109,24 +109,50 @@ def _message_text(message: Mapping[str, Any]) -> str:
     return ""
 
 
+def _load_object(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _load_first_object(text: str) -> dict[str, Any] | None:
+    """The first balanced object. A decoy '{' before the JSON must not win."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start >= 0:
+        try:
+            parsed, _end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        start = text.find("{", start + 1)
+    return None
+
+
 def _parse_json_content(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     cleaned = _FENCE_START.sub("", cleaned)
     cleaned = _FENCE_END.sub("", cleaned).strip()
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start < 0 or end <= start:
-            raise GeminiError("malformed_json") from None
-        try:
-            parsed = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError:
-            raise GeminiError("malformed_json") from None
-    if not isinstance(parsed, dict):
+    parsed = _load_object(cleaned)
+    if parsed is None:
+        parsed = _load_first_object(cleaned)
+    if parsed is None:
         raise GeminiError("malformed_json")
     return parsed
+
+
+def _finish_reason(payload: Mapping[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return "-"
+    reason = choices[0].get("finish_reason")
+    if isinstance(reason, str) and _MODEL_PATTERN.fullmatch(reason):
+        return reason
+    return "-"
 
 
 def _retry_after_ms(headers: Any) -> int | None:
@@ -220,6 +246,11 @@ class OpenCodeClient:
             ],
             "response_format": {"type": "json_object"},
             "max_tokens": max_output_tokens,
+            # DeepSeek V4 thinks by default, and those tokens share max_tokens.
+            # On this Go gateway a long trace either comes back as empty content
+            # (finish_reason=length) or holds the socket past the timeout.
+            # "none" keeps the JSON in content. reasoning_content is still unread.
+            "reasoning_effort": "none",
         }
         request = urllib.request.Request(
             OPENCODE_URL,
@@ -237,14 +268,23 @@ class OpenCodeClient:
                 status = int(getattr(response, "status", 200) or 200)
                 raw = response.read(2_000_001)
                 response_headers = getattr(response, "headers", None)
-        except TimeoutError as error:
-            raise GeminiError("timeout", counts_as_attempt=True) from error
+        except TimeoutError:
+            self._log_status("timeout", "timeout")
+            raise GeminiError("timeout", counts_as_attempt=True) from None
         except urllib.error.HTTPError as error:
             self._raise_http(error)
+        except urllib.error.URLError as error:
+            reason = getattr(error, "reason", None)
+            if isinstance(reason, TimeoutError):
+                self._log_status("timeout", "timeout")
+                raise GeminiError("timeout", counts_as_attempt=True) from None
+            self._log_status("transport", "transport_error")
+            raise GeminiError("transport_error") from None
         except GeminiError:
             raise
-        except Exception as error:
-            raise GeminiError("transport_error") from error
+        except Exception:
+            self._log_status("transport", "transport_error")
+            raise GeminiError("transport_error") from None
         if status >= 400:
             self._raise_status(status, raw[:65_536], response_headers)
         return self._success(raw, purpose, search_id)
@@ -260,12 +300,7 @@ class OpenCodeClient:
     def _raise_status(self, status: int, raw: bytes, headers: Any) -> None:
         message = _error_message(raw)
         safe = _redact(message, self._api_key)[:_MESSAGE_CHARS]
-        _log.info(
-            "opencode_http status=%s model=%s message=%s",
-            status,
-            _log_token(self.model, "unknown"),
-            safe or "-",
-        )
+        self._log_status(status, safe)
         if status in (401, 403):
             raise GeminiError("config_error", counts_as_attempt=False)
         if _is_quota(status, message):
@@ -276,6 +311,27 @@ class OpenCodeClient:
         if status >= 500:
             raise GeminiError("http_5xx", counts_as_attempt=True)
         raise GeminiError("http_4xx", counts_as_attempt=False)
+
+    def _log_status(self, status: object, message: str) -> None:
+        safe_status = status if isinstance(status, int) else _log_token(str(status), "error")
+        _log.info(
+            "opencode_http status=%s model=%s message=%s",
+            safe_status,
+            _log_token(self.model, "unknown"),
+            message or "-",
+        )
+
+    def _log_parse(self, payload: Mapping[str, Any], text: str, purpose: str, search_id: str | None) -> None:
+        """Shape only. The body and reasoning_content are not logged."""
+        _log.info(
+            "opencode_parse purpose=%s search=%s finish=%s content_chars=%s fence=%s blank=%s",
+            _log_token(purpose, "other"),
+            _log_token(search_id, "-"),
+            _finish_reason(payload),
+            len(text),
+            1 if "```" in text else 0,
+            1 if not text.strip() else 0,
+        )
 
     def _record_pause(self, retry_after_ms: int | None) -> None:
         if self.connect is None:
@@ -300,8 +356,14 @@ class OpenCodeClient:
         choices = payload.get("choices")
         message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
         if not isinstance(message, dict):
+            self._log_parse(payload, "", purpose, search_id)
             raise GeminiError("malformed_json")
-        parsed = _parse_json_content(_message_text(message))
+        text = _message_text(message)
+        try:
+            parsed = _parse_json_content(text)
+        except GeminiError:
+            self._log_parse(payload, text, purpose, search_id)
+            raise
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
         prompt = int(usage.get("prompt_tokens") or 0)
         output = int(usage.get("completion_tokens") or 0)

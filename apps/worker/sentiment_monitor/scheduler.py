@@ -13,7 +13,7 @@ import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
-from sentiment_monitor.instant_search import MAX_INFLIGHT, run_instant_search_poll, run_question_cycle
+from sentiment_monitor.instant_search import MAX_INFLIGHT, retry_named_summary, run_instant_search_poll, run_question_cycle
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
 from sentiment_monitor.sources.routes import scrapecreators_request_count
@@ -947,10 +947,18 @@ def start_instant_search_worker(
             max_workers=MAX_INFLIGHT, thread_name_prefix="instant-search-job"
         )
         in_flight = set()
+        named_summary = os.environ.get("CARI_SUMMARIZE_SEARCH_ID", "").strip()
+        summarized = False
         # Let the JEV loop claim its first tick first; the worker then polls
         # independently of the 20 s collection sleep.
         try:
             while not stop_event.wait(interval):
+                if named_summary and not summarized:
+                    summarized = True
+                    try:
+                        retry_named_summary(connect, named_summary, os.environ)
+                    except Exception:
+                        _safe_log(log, lambda: format_log("instant_summary_retry_failed"))
                 in_flight = {future for future in in_flight if not future.done()}
                 try:
                     run_instant_search_poll(

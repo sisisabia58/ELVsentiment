@@ -180,6 +180,7 @@ def test_opencode_request_uses_the_go_endpoint_and_ignores_reasoning(caplog):
     assert body["messages"][0]["content"].startswith(SUMMARY_SYSTEM)
     assert body["response_format"] == {"type": "json_object"}
     assert body["max_tokens"] == 2048
+    assert body["reasoning_effort"] == "none"
     assert result.data == {"answer": "Antrean.", "citations": []}
     assert result.input_tokens == 11
     assert result.output_tokens == 7
@@ -202,6 +203,63 @@ def test_opencode_strips_json_fences_and_a_leading_sentence():
     )
     assert result.data == {"overall_summary": "Ringkas."}
     assert "DO-NOT-SHOW-REASONING" not in json.dumps(result.data)
+
+
+def test_opencode_skips_a_decoy_brace_before_the_json_object():
+    def opener(request, timeout):
+        del request, timeout
+        return _Response(_chat(
+            'lihat {ini.\n```json\n{"answer":"Antrean.","citations":[]}\n```\ncatatan'
+        ))
+
+    client = create_opencode({"OPENCODE_API_KEY": KEY}, opener=opener)
+    result = client.generate_json(
+        system="s", user="u", schema={}, purpose="question", search_id=SEARCH,
+    )
+    assert result.data == {"answer": "Antrean.", "citations": []}
+
+
+def test_blank_content_is_logged_without_the_reasoning_text(caplog):
+    def opener(request, timeout):
+        del request, timeout
+        payload = _chat("   ")
+        payload["choices"][0]["finish_reason"] = "length"
+        return _Response(payload)
+
+    client = create_opencode({"OPENCODE_API_KEY": KEY}, opener=opener)
+    with caplog.at_level(logging.INFO, logger="sentiment_monitor.opencode"):
+        with pytest.raises(GeminiError, match="malformed_json"):
+            client.generate_json(
+                system="s", user="u", schema={}, purpose="question", search_id=SEARCH,
+            )
+    assert "opencode_parse purpose=question" in caplog.text
+    assert "finish=length" in caplog.text
+    assert "blank=1" in caplog.text
+    assert "DO-NOT-SHOW-REASONING" not in caplog.text
+    assert "opencode_ok" not in caplog.text
+
+
+def test_timeout_is_logged(caplog):
+    def opener(request, timeout):
+        del request, timeout
+        raise TimeoutError("slow")
+
+    client = create_opencode({"OPENCODE_API_KEY": KEY}, opener=opener)
+    with caplog.at_level(logging.INFO, logger="sentiment_monitor.opencode"):
+        with pytest.raises(GeminiError, match="timeout"):
+            client.generate_json(
+                system="s", user="u", schema={}, purpose="summary", search_id=SEARCH,
+            )
+    assert "opencode_http status=timeout model=deepseek-v4.1-flash message=timeout" in caplog.text
+
+
+def test_named_summary_retry_ignores_a_bad_id():
+    from sentiment_monitor.instant_search import retry_named_summary
+
+    def connect():
+        raise AssertionError("connect")
+
+    retry_named_summary(connect, "not-a-search", {})
 
 
 def test_usage_limit_pauses_for_retry_after_and_hides_the_key(caplog):
