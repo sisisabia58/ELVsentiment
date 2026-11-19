@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
 import pg from "pg";
 
 const stagingId = "21ed6a58-5ece-4499-a657-3e814ba65767";
-const mode = process.argv[2];
+const serve = process.argv[2] === "restore-and-serve";
+const mode = serve ? "restore" : process.argv[2];
 if (process.env.RAILWAY_ENVIRONMENT_ID !== stagingId || !["snapshot", "restore", "audit"].includes(mode)) {
   throw new Error("The paid search routing helper only runs on the approved staging environment.");
 }
@@ -81,4 +83,12 @@ try {
 
 if (mode === "snapshot" && !process.exitCode) {
   await import("../src/db/migrate-cli.mjs");
+}
+
+if (serve && !process.exitCode) {
+  const web = spawn("npm", ["run", "start"], {stdio: "inherit"});
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => web.kill(signal));
+  }
+  web.on("exit", (code) => { process.exitCode = code ?? 1; });
 }
