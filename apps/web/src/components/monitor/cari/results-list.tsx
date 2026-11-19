@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MessageSquareText } from "lucide-react";
 import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
@@ -168,6 +168,31 @@ export function ResultsList(props: {
   now?: Date;
 }) {
   const [platform, setPlatform] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  useEffect(() => {
+    function revealLocalCitation() {
+      const hash = window.location.hash;
+      const result = props.results.find((row) => hash === `#hasil-${row.id}`);
+      setAnchor(result ? hash.slice(1) : null);
+      if (result) setPlatform((selected) => selected === null ? null : result.platform);
+    }
+    window.addEventListener("hashchange", revealLocalCitation);
+    return () => window.removeEventListener("hashchange", revealLocalCitation);
+  }, [props.results]);
+
+  useEffect(() => {
+    if (anchor) document.getElementById(anchor)?.scrollIntoView?.();
+  }, [anchor, platform]);
+
+  function selectPlatform(next: string | null) {
+    const hash = window.location.hash;
+    if (next && props.results.some((row) => row.platform !== next && hash === `#hasil-${row.id}`)) {
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+      setAnchor(null);
+    }
+    setPlatform(next);
+  }
+
   const now = props.now ?? new Date();
   if (props.results.length === 0) return null;
   const groups = PLATFORM_ORDER.map((key) => ({
@@ -186,7 +211,7 @@ export function ResultsList(props: {
       <div className="flex flex-wrap gap-1.5 px-5 pt-3">
         <button
           type="button"
-          onClick={() => setPlatform(null)}
+          onClick={() => selectPlatform(null)}
           className={cn(
             "rounded-full px-3 py-1 text-[12.5px] font-medium",
             platform === null ? "bg-foreground text-background" : "border border-border hover:bg-surface-subtle",
@@ -198,7 +223,7 @@ export function ResultsList(props: {
           <button
             key={group.key}
             type="button"
-            onClick={() => setPlatform(group.key)}
+            onClick={() => selectPlatform(group.key)}
             className={cn(
               "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium",
               platform === group.key ? "bg-foreground text-background" : "border border-border hover:bg-surface-subtle",

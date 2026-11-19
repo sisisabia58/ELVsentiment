@@ -83,6 +83,32 @@ describe("ResultsList", () => {
     ]);
   });
 
+  it("reveals a locally cited post from a different platform tab", () => {
+    render(
+      <ResultsList
+        results={[
+          result({ id: "threads-one", platform: "threads", text: "Hasil Threads", url: null }),
+          result({ id: "youtube-one", platform: "youtube", text: "Hasil YouTube", url: null }),
+        ]}
+        commentsByResult={{}}
+        sortMode="relevance"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Threads 1/ }));
+    expect(screen.queryByRole("heading", { name: "Hasil YouTube" })).toBeNull();
+
+    try {
+      window.history.replaceState(null, "", "#hasil-youtube-one");
+      fireEvent(window, new HashChangeEvent("hashchange"));
+      expect(screen.getByRole("heading", { name: "Hasil YouTube" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Hasil Threads" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /Threads 1/ }));
+      expect(window.location.hash).toBe("");
+    } finally {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  });
+
   it("shows at most three top replies and the remaining count", () => {
     const fourComments = [0, 1, 2, 3].map((index) => ({
       id: `c${index}`,
