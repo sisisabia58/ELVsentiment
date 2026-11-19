@@ -48,3 +48,7 @@ try {
 } finally {
   await db.end().catch(() => {});
 }
+
+if (mode === "snapshot" && !process.exitCode) {
+  await import("../src/db/migrate-cli.mjs");
+}
