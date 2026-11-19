@@ -4,6 +4,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV CONFIG_DIR=/app/config
 WORKDIR /app
 COPY config ./config
+COPY apps/worker/tests/fixtures/scrapeatlas/relevance.json ./apps/worker/tests/fixtures/scrapeatlas/relevance.json
 COPY apps/web/package.json apps/web/package-lock.json ./apps/web/
 WORKDIR /app/apps/web
 RUN npm ci --no-audit --no-fund
