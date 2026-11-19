@@ -27,15 +27,13 @@ describe("instant search schema", () => {
     }>("select platform, provider, fallback_provider from provider_settings order by platform");
     expect(rows.rows.find((row) => row.platform === "instagram")).toEqual({
       platform: "instagram",
-      provider: "scrapecreators",
+      provider: "scrapeatlas",
       fallback_provider: null,
     });
     expect(rows.rows.find((row) => row.platform === "youtube")?.provider).toBe("scrapeatlas");
     expect(rows.rows.find((row) => row.platform === "web")?.provider).toBe("off");
     expect(rows.rows.find((row) => row.platform === "comments")?.provider).toBe("scrapeatlas");
-    expect(rows.rows.find((row) => row.platform === "threads")?.fallback_provider).toBe(
-      "scrapeatlas",
-    );
+    expect(rows.rows.find((row) => row.platform === "threads")?.fallback_provider).toBeNull();
     expect(rows.rows).toHaveLength(10);
     await expect(
       db.query("update provider_settings set provider = 'nope' where platform = 'youtube'"),

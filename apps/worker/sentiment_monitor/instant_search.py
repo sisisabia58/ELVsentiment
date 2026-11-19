@@ -108,6 +108,8 @@ SAFE_DETAILS = frozenset(
         "missing_url",
         "unsupported_provider",
         "hashtag_only",
+        "partial_coverage",
+        "malformed_records",
         "web_index_selection",
         "unsupported_platform",
         "not_found",

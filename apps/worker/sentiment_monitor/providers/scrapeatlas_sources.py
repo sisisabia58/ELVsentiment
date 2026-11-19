@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import re
 import time
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 from typing import Any, Callable, Mapping
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
@@ -21,7 +22,7 @@ from sentiment_monitor.providers.canonical import (
 )
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
 from sentiment_monitor.providers.canonical import PlatformFetch
-from sentiment_monitor.sources.scrapecreators import unix_to_iso
+from sentiment_monitor.sources.normalization import unix_to_iso
 from sentiment_monitor.sources.tiktok import normalize_tiktok_item
 from sentiment_monitor.sources.threads import normalize_threads_item
 
@@ -126,6 +127,10 @@ def _fetch(
     web_index_from_warnings: bool = False,
     cursor_field: str | None = None,
 ) -> PlatformFetch:
+    if date_window_days is not None and platform in {"threads", "tiktok", "youtube", "reddit", "linkedin"}:
+        since = _cutoff(collected_at, date_window_days)
+        if since:
+            params = {**params, "since": since, "until": collected_at}
     started = time.monotonic()
     try:
         payload = fetch_scrapeatlas_json(path, params, api_key, opener=opener)
@@ -138,7 +143,7 @@ def _fetch(
                 route=route_id,
                 outcome="success",
                 http_status=error.http_status,
-                credits_charged=0,
+                credits_charged=error.credits_charged,
                 body_length=error.body_length,
                 latency_ms=latency_ms,
                 safe_detail="not_found",
@@ -180,10 +185,20 @@ def _fetch(
         latency_ms=latency_ms,
         safe_detail="ok",
     )
+    list_keys = {"youtube": ("videos", "shorts"), "tiktok": ("search_item_list", "item_list", "data")}.get(platform, ("posts",))
+    present = [key for key in list_keys if isinstance(payload.get(key), list)]
+    if not present:
+        call = replace(call, outcome="failed", safe_detail="malformed_envelope")
+        return PlatformFetch(platform, "scrapeatlas", [], [call], "failed", "malformed_envelope", latency_ms)
+    # TikTok aliases describe a single collection. YouTube has two independent collections.
+    if platform == "tiktok":
+        present = [next((key for key in present if payload[key]), present[0])]
+    raw_items = [(key, item) for key in present for item in payload[key]]
     try:
         posts: list[CanonicalPost] = []
-        for item in extract(payload, collected_at):
+        for key, raw in raw_items:
             try:
+                item, = extract({key: [raw]}, collected_at)
                 post = _canonical_from(
                     platform,
                     item,
@@ -197,6 +212,12 @@ def _fetch(
             except Exception:
                 # One malformed record is dropped; its siblings survive.
                 continue
+        if raw_items and not posts:
+            call = replace(call, outcome="failed", safe_detail="malformed_records")
+            return PlatformFetch(platform, "scrapeatlas", [], [call], "failed", "malformed_records", latency_ms)
+        partial = outcome == "partial" or len(posts) < len(raw_items)
+        if partial:
+            call = replace(call, outcome="partial")
         if date_window_days is not None:
             cutoff = _cutoff(collected_at, date_window_days)
             if cutoff is not None:
@@ -207,7 +228,7 @@ def _fetch(
         )
     return PlatformFetch(
         platform, "scrapeatlas", posts, [call], "answered",
-        "web_index_selection" if web_index else "ok", latency_ms,
+        "web_index_selection" if web_index else "partial_coverage" if partial else "ok", latency_ms,
         next_cursor=payload.get(cursor_field) if isinstance(payload.get(cursor_field), str) else None,
     )
 
@@ -261,7 +282,7 @@ def fetch_scrapeatlas_tiktok(
     return _fetch(
         "tiktok",
         "/v1/tiktok/search/keyword",
-        {"query": str(keyword), "region": "ID"},
+        {"query": str(keyword), "region": "ID", "sort_by": "relevance"},
         api_key,
         opener=opener,
         keyword=keyword,
@@ -389,13 +410,23 @@ def _facebook_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[
     return items
 
 
+def _linkedin_activity_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    url = urlsplit(value)
+    if url.scheme != "https" or not (url.hostname == "linkedin.com" or (url.hostname or "").endswith(".linkedin.com")):
+        return None
+    match = re.search(r"(?:-activity-|/urn:li:activity:)([0-9]+)(?:[-/]|$)", url.path)
+    return match.group(1) if match else None
+
+
 def _linkedin_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for item in _list_items(payload, "posts"):
         author = item.get("author") if isinstance(item.get("author"), dict) else {}
         items.append(
             {
-                "external_id": item.get("id") or item.get("urn"),
+                "external_id": item.get("id") or item.get("urn") or _linkedin_activity_id(item.get("url")),
                 "text": _optional_text(item.get("description")) or "",
                 "title": None,
                 "author_name": author.get("name"),
@@ -424,7 +455,7 @@ def fetch_scrapeatlas_youtube(
     return _fetch(
         "youtube",
         "/v1/youtube/search",
-        {"query": str(keyword), "region": "ID"},
+        {"query": str(keyword), "region": "ID", "sortBy": "relevance"},
         api_key,
         opener=opener,
         keyword=keyword,
@@ -446,7 +477,7 @@ def fetch_scrapeatlas_reddit(
     return _fetch(
         "reddit",
         "/v1/reddit/search",
-        {"query": str(keyword), "sort": "relevance"},
+        {"query": str(keyword), "sort": "relevance", "filter": "posts"},
         api_key,
         opener=opener,
         keyword=keyword,
@@ -457,6 +488,12 @@ def fetch_scrapeatlas_reddit(
     )
 
 
+def facebook_hashtag(keyword: Keyword) -> str | None:
+    tag = str(keyword).removeprefix("#")
+    intent = getattr(keyword, "intent", "hashtag" if str(keyword).startswith("#") else "phrase")
+    return tag if intent == "hashtag" and re.fullmatch(r"\w+", tag) else None
+
+
 def fetch_scrapeatlas_facebook(
     keyword: Keyword,
     *,
@@ -465,9 +502,8 @@ def fetch_scrapeatlas_facebook(
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
 ) -> PlatformFetch:
-    tag = str(keyword).removeprefix("#")
-    intent = getattr(keyword, "intent", "hashtag" if str(keyword).startswith("#") else "phrase")
-    if intent != "hashtag" or not re.fullmatch(r"\w+", tag):
+    tag = facebook_hashtag(keyword)
+    if tag is None:
         return PlatformFetch("facebook", "scrapeatlas", state="unavailable", safe_detail="hashtag_only")
     return _fetch(
         "facebook",
@@ -494,7 +530,7 @@ def fetch_scrapeatlas_linkedin(
     return _fetch(
         "linkedin",
         "/v1/linkedin/search/posts",
-        {"query": str(keyword), "date_posted": "last-week"},
+        {"query": str(keyword)},
         api_key,
         opener=opener,
         keyword=keyword,

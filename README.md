@@ -21,7 +21,7 @@ apps/worker/.venv/bin/pip install -e "apps/worker[dev]"
 apps/worker/.venv/bin/python -m sentiment_monitor.scheduler
 ```
 
-The Railway worker runs that module and stays up. `python -m sentiment_monitor.collect_once` only runs the approval gate and exits. ScrapeCreators sources (`threads`, `instagram`, `tiktok`) can run when `config/credential-policy.json` is approved and `SCRAPECREATORS_API_KEY` is set (or `THREADS_ACCESS_TOKEN` for legacy Threads compatibility). X still waits on `config/x-budget.json` plus `X_BEARER_TOKEN`. The scheduler still writes `worker_heartbeat`.
+The Railway worker runs that module and stays up. `python -m sentiment_monitor.collect_once` only runs the approval gate and exits. Scheduled Threads, Instagram, and TikTok use ScrapeAtlas when shared operator credentials are approved and the worker has `SCRAPEATLAS_API_KEY`. Both the project source selection and disabled provider settings are honored. Each poll requests a fresh first page per selected platform and variant. The shared `SCHEDULED_REQUESTS_ROLLING_24H` cap counts admitted requests across all three platforms (defaulting to the configured Threads reserve, normally 1,500). The worker commits reservations before dispatch and records missing charges as unknown. Actual response charges and HTTP status are recorded in `scheduled_provider_calls`. Indexed Instagram and instant X offer partial coverage. Scheduled X remains unavailable pending cursor and budget validation. Facebook instant search accepts explicit hashtags. Keep legacy credentials available for deployment rollback until staging and cutover are verified. The scheduler still writes `worker_heartbeat`.
 
 ## Tests
 
@@ -35,7 +35,7 @@ PYTHONPATH=eval apps/worker/.venv/bin/pytest eval -v
 
 Copy `.env.example` for local names. Do not commit a `.env` file. Production values are Railway service variables. Secret values are never printed. `format_log` replaces them with `[redacted]`.
 
-Names: `DATABASE_URL`, `CONFIG_DIR`, `WORKER_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `APP_DB_PASSWORD`, `WORKER_DB_PASSWORD`, `X_BEARER_TOKEN`, `SCRAPECREATORS_API_KEY`, `THREADS_ACCESS_TOKEN`, `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `BACKUP_DESTINATION`, `X_MONTHLY_GLOBAL_POST_READS`, `X_MONTHLY_PER_CUSTOMER_POST_READS`, `THREADS_ROLLING_24H_RESERVE`, `SCHEDULE_MIN_INTERVAL_HOURS`, `MANUAL_MIN_INTERVAL_SECONDS`, `MAX_JOBS_PER_TICK`, `WORKER_POLL_SECONDS`, `WORKER_HEARTBEAT_STALE_SECONDS`, `WORKER_HEARTBEAT_LOG_SECONDS`, `SCORE_INTERVAL_SECONDS`.
+Names: `DATABASE_URL`, `CONFIG_DIR`, `WORKER_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `APP_DB_PASSWORD`, `WORKER_DB_PASSWORD`, `SCRAPEATLAS_API_KEY`, `SCHEDULED_REQUESTS_ROLLING_24H`, `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `BACKUP_DESTINATION`, `X_MONTHLY_GLOBAL_POST_READS`, `X_MONTHLY_PER_CUSTOMER_POST_READS`, `THREADS_ROLLING_24H_RESERVE`, `SCHEDULE_MIN_INTERVAL_HOURS`, `MANUAL_MIN_INTERVAL_SECONDS`, `MAX_JOBS_PER_TICK`, `WORKER_POLL_SECONDS`, `WORKER_HEARTBEAT_STALE_SECONDS`, `WORKER_HEARTBEAT_LOG_SECONDS`, `SCORE_INTERVAL_SECONDS`.
 
 `SCORE_INTERVAL_SECONDS` is optional. It defaults to 20. The scoring loop sleeps that many seconds after a batch finds no pending mentions. Values below 5, above 3600, or not a number use 20. `npm run score` ignores it. See `docs/operator-scoring.md`.
 

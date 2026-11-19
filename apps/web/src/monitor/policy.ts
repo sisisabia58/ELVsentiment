@@ -97,12 +97,6 @@ export function reviewTopicChoices(
 export function sourceCredentials(
   env: Record<string, string | undefined> = process.env,
 ): Record<SourceId, boolean> {
-  const sc = Boolean(env.SCRAPECREATORS_API_KEY?.trim() || env.THREADS_ACCESS_TOKEN?.trim());
-  const scOnly = Boolean(env.SCRAPECREATORS_API_KEY?.trim());
-  return {
-    x: Boolean(env.X_BEARER_TOKEN?.trim()),
-    threads: sc,
-    instagram: scOnly,
-    tiktok: scOnly,
-  };
+  const available = Boolean(env.SCRAPEATLAS_API_KEY?.trim());
+  return { x: false, threads: available, instagram: available, tiktok: available };
 }

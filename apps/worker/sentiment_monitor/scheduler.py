@@ -1,3 +1,5 @@
+import uuid
+from functools import partial
 import json
 import os
 import re
@@ -12,13 +14,14 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
-from sentiment_monitor.incremental import collect_newer_x, numeric_since_id
 from sentiment_monitor.instant_search import MAX_INFLIGHT, retry_named_summary, run_instant_search_poll, run_question_cycle
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
-from sentiment_monitor.sources.routes import scrapecreators_request_count
-from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
-from sentiment_monitor.x_cost import admit_collection, admit_threads_query, admit_x_read
+from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
+from sentiment_monitor.providers.fetch import fetch_platform
+from sentiment_monitor.providers.http import urlopen as safe_urlopen
+from sentiment_monitor.providers.settings import load_provider_settings
+from sentiment_monitor.sources.normalization import CollectionProviderError
 
 # Asia/Jakarta is a fixed UTC+7 offset. The daily schedule uses that civil
 # minute, not "24 hours after the worker happened to tick".
@@ -104,6 +107,7 @@ _SECRET_NAMES = (
     "WORKER_DB_PASSWORD",
     "X_BEARER_TOKEN",
     "SCRAPECREATORS_API_KEY",
+    "SCRAPEATLAS_API_KEY",
     "THREADS_ACCESS_TOKEN",
     "TYPESAFE_API_KEY",
     "OPENROUTER_API_KEY",
@@ -142,7 +146,7 @@ def load_enabled_sources(conn, project_id: str) -> list[str]:
     if not isinstance(raw, (list, tuple)):
         return list(ALL_SOURCES)
     filtered = [item for item in raw if item in ALL_SOURCES]
-    return filtered or list(ALL_SOURCES)
+    return filtered
 
 
 def heartbeat_sql() -> str:
@@ -252,7 +256,7 @@ _SAFE_ERROR_CLASSES = frozenset(
         "TypeError",
         "KeyError",
         "OSError",
-        "ScrapeCreatorsError",
+        "CollectionProviderError",
         "SourceFetchError",
         "HTTPError",
     }
@@ -303,7 +307,7 @@ def _log_route_events(log, job, source: str, events: Any) -> None:
         if not isinstance(route, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", route):
             route = "other"
         outcome = event.get("outcome")
-        if outcome not in ("success", "failed", "empty_or_success"):
+        if outcome not in ("success", "partial", "failed", "empty_or_success"):
             outcome = "other"
         status = event.get("http_status")
         credits = event.get("credits_charged")
@@ -428,7 +432,7 @@ def record_source_success(conn, customer_id: str, project_id: str, source: str) 
 
 
 def _failure_detail(error: Exception, source: str = "threads") -> str:
-    if isinstance(error, ScrapeCreatorsError):
+    if isinstance(error, CollectionProviderError):
         return f"{source}_{error.code}"
     if isinstance(error, urllib.error.HTTPError):
         url_str = getattr(error, "url", None) or ""
@@ -456,7 +460,7 @@ def _failure_detail(error: Exception, source: str = "threads") -> str:
             return f"threads_http_{status}"
         if host == "api.x.com":
             return f"x_http_{status}"
-        if host == "api.scrapecreators.com":
+        if host == "api.scrapeatlas.com":
             return f"{source}_http_{status}"
     return "collection_failed"
 
@@ -702,7 +706,7 @@ def _guarded_fetch(source: str, fetch):
         return fetch()
     except SourceFetchError:
         raise
-    except ScrapeCreatorsError as error:
+    except CollectionProviderError as error:
         raise SourceFetchError(
             f"{source}_{error.code}",
             source_failure_state(error.code, error.http_status),
@@ -906,13 +910,6 @@ def _log_job_finalize_failed(log, job, error: Exception) -> None:
     )
 
 
-def admit_threads_queries(conn, limits) -> tuple[bool, str | None]:
-    blocked = admit_threads_query(conn, limits)
-    if blocked is not None:
-        return False, blocked.detail
-    return True, None
-
-
 DEFAULT_INSTANT_SEARCH_POLL_SECONDS = 2.0
 
 
@@ -993,6 +990,59 @@ def start_instant_search_worker(
     return thread
 
 
+def reserve_scheduled_call(conn, job_id, platform, cap):
+    # Two-key transaction locks serialize a rolling-window count plus insert.
+    # Each call to _call commits this reservation before the provider request.
+    conn.execute("select pg_advisory_xact_lock(814158, 2)")
+    used = conn.execute(
+        "select count(*) from scheduled_provider_calls "
+        "where reserved_at > clock_timestamp() - interval '24 hours'"
+    )
+    if used >= cap:
+        return None
+    call_id = str(uuid.uuid4())
+    conn.execute(
+        "insert into scheduled_provider_calls (id, job_id, platform) values (%s, %s, %s)",
+        (call_id, job_id, platform),
+    )
+    return call_id
+
+
+def finish_scheduled_call(conn, call_id, outcome, credits, status):
+    conn.execute(
+        "update scheduled_provider_calls set outcome=%s, credits_charged=%s, http_status=%s where id=%s",
+        (outcome, credits, status, call_id),
+    )
+
+
+def scheduled_fetch(platform, variant, *, api_key=None, collected_at=None, opener=safe_urlopen):
+    collected_at = collected_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = fetch_platform(
+        platform, variant, DEFAULT_SETTINGS, collected_at=collected_at,
+        env={"SCRAPEATLAS_API_KEY": api_key or os.environ.get("SCRAPEATLAS_API_KEY"), "CARI_PROVIDER_MODE": "live"},
+        date_window_days=8, opener=opener,
+    )
+    call = result.calls[0] if result.calls else None
+    events = [{
+        "route": item.route, "outcome": item.outcome, "http_status": item.http_status,
+        "credits_charged": item.credits_charged, "detail": item.safe_detail, "body_length": item.body_length,
+    } for item in result.calls]
+    if result.state != "answered":
+        status = call.http_status if call else None
+        raise CollectionProviderError(
+            result.safe_detail,
+            http_status=status, credits_charged=call.credits_charged if call else None, route_events=events,
+        )
+    mentions = [{
+        "external_id": post.external_id, "excerpt": post.text, "url": post.url,
+        "author": post.author_handle or post.author_name, "posted_at": post.published_at,
+        "variant": variant, "route_ids": post.routes, "intent": getattr(variant, "intent", "phrase"),
+    } for post in result.posts]
+    # Poll a fresh relevance page. A page token is scoped to its search, not a high-water mark.
+    return {"mentions": mentions, "next_cursor": None, "route_events": events,
+            "credits_charged": call.credits_charged, "http_status": call.http_status}
+
+
 def serve(
     connect,
     sleep,
@@ -1007,6 +1057,8 @@ def serve(
     fetch_instagram: Callable[[str], Any] | None = None,
     fetch_tiktok: Callable[[str], Any] | None = None,
 ) -> None:
+    # Keep the historical injection signature for callers; scheduled X has no admitted route.
+    del fetch_x
     if monotonic is None:
         monotonic = time.monotonic
     interval = _heartbeat_log_seconds(heartbeat_log_seconds)
@@ -1020,7 +1072,9 @@ def serve(
                 record_heartbeat(conn, worker_id)
                 enqueue_due_schedules(conn, limits)
                 jobs = claim_due_jobs(conn, worker_id, limits.max_jobs_per_tick)
+                settings = load_provider_settings(conn) if jobs else {}
                 for job in jobs:
+                    job["settings"] = settings
                     job["variants"] = load_active_variants(conn, job["project_id"])
                     job["sources"] = load_enabled_sources(conn, job["project_id"])
                 return gate(root), jobs
@@ -1048,9 +1102,9 @@ def serve(
                         )
                         deferred = True
                     else:
-                        selected = [item for item in (job.get("sources") or list(ALL_SOURCES)) if item in ALL_SOURCES]
+                        selected = [item for item in job["sources"] if item in ALL_SOURCES]
                         allowed = sources_allowed(root, os.environ)
-                        sources = [item for item in selected if item in allowed]
+                        sources = [item for item in selected if item in allowed and job["settings"][item].provider != "off"]
                         if not sources:
                             _call(
                                 connect,
@@ -1062,7 +1116,7 @@ def serve(
                                 Keyword(str(item), getattr(item, "intent", "phrase"))
                                 for item in job["variants"]
                             ]
-                            routes = scrapecreators_request_count(plan_keywords, sources)
+                            routes = len(plan_keywords) * len(sources)
                             _safe_log(
                                 log,
                                 lambda: format_log(
@@ -1072,228 +1126,43 @@ def serve(
                             )
                             for variant in job["variants"]:
                                 key = f"{job['customer_id']}:{job['project_id']}:{variant}"
-                                collected = None
-                                if "x" in sources:
-                                    _reset_source_attempt(context, "x")
-                                    def read_state(conn, key=key):
-                                        return PostgresStore(conn).source_state(key, "x") or {}
-
-                                    state = _call(connect, read_state) or {}
-                                    floor_id = numeric_since_id(state.get("incremental_cursor"))
-                                    floor_since = state.get("incremental_since")
-
-                                    def admit_first(conn, job=job):
-                                        return admit_x_read(conn, job["customer_id"], 10, limits)
-
-                                    admission = _call(connect, admit_first)
-                                    if not isinstance(admission, int):
-                                        blocked_detail = admission.detail
+                                fetchers = {"threads": fetch_threads, "instagram": fetch_instagram, "tiktok": fetch_tiktok}
+                                for source, fetcher in fetchers.items():
+                                    if source not in sources or fetcher is None:
+                                        continue
+                                    _reset_source_attempt(context, source)
+                                    call_id = _call(connect, lambda conn: reserve_scheduled_call(
+                                        conn, job["id"], source, limits.scheduled_requests_rolling_24h
+                                    ))
+                                    if call_id is None:
+                                        blocked_detail = "scheduled_request_cap"
                                         break
-
-                                    def fetch_page(cursor, since, since_id, limit, variant=variant):
-                                        return _guarded_fetch(
-                                            "x",
-                                            lambda: fetch_x(variant, limit, cursor, since, since_id),
-                                        )
-
-                                    def admit_page(job=job):
-                                        return _call(
-                                            connect,
-                                            lambda conn, job=job: admit_x_read(conn, job["customer_id"], 10, limits),
-                                        )
-
                                     try:
                                         context["attempt"] = True
-                                        collected = collect_newer_x(
-                                            fetch_page,
-                                            admit_page,
-                                            floor_id=floor_id,
-                                            floor_since=floor_since,
-                                            first_limit=admission,
-                                        )
-                                        x_mentions = list(collected.mentions)
-                                        x_counts = {
-                                            "returned": len(x_mentions),
-                                            "parsed": len(x_mentions),
-                                            "deduplicated": 0,
-                                        }
-                                        context["counts"] = x_counts
-                                        context["credits"] = None
-                                        context["http_status"] = None
-
-                                        def store_x(
-                                            conn,
-                                            job=job,
-                                            mentions=x_mentions,
-                                            key=key,
-                                            floor=collected.floor_id,
-                                            marker_since=collected.floor_since,
-                                        ):
-                                            return store_source(conn, job, mentions, key, "x", floor, marker_since)
-
+                                        result = _guarded_fetch(source, lambda: fetcher(variant))
+                                        events = _route_events_from(result)
+                                        _log_route_events(log, job, source, events)
+                                        mentions, cursor, counts, credits, status = _unpack_fetched(result, variant)
+                                        context.update(counts=counts, credits=credits, http_status=status)
+                                        outcome = "partial" if any(e.get("outcome") == "partial" for e in events) else "success"
+                                        _call(connect, lambda conn: finish_scheduled_call(
+                                            conn, call_id, outcome, credits, status
+                                        ))
                                         _commit_source(
-                                            connect,
-                                            log,
-                                            job,
-                                            context,
-                                            store_x,
-                                            counts=x_counts,
-                                            credits=None,
-                                            http_status=None,
+                                            connect, log, job, context,
+                                            lambda conn: store_source(conn, job, mentions, key, source, cursor),
+                                            counts=counts, credits=credits, http_status=status,
                                         )
                                         committed_sources += 1
                                     except SourceFetchError as error:
+                                        _call(connect, lambda conn: finish_scheduled_call(
+                                            conn, call_id, "failed", error.credits_charged, error.http_status
+                                        ))
                                         if not error.recoverable:
                                             raise
-                                        _record_source_failure(connect, log, job, "x", error)
-                                        failures.append(_source_failure_note("x", variant, error.detail))
-
-                                if "threads" in sources and fetch_threads is not None:
-                                    _reset_source_attempt(context, "threads")
-                                    try:
-                                        context["attempt"] = True
-                                        threads_result = _guarded_fetch("threads", lambda: fetch_threads(variant))
-                                        _log_route_events(
-                                            log,
-                                            job,
-                                            "threads",
-                                            _route_events_from(threads_result),
-                                        )
-                                        (
-                                            threads_mentions,
-                                            threads_cursor,
-                                            threads_counts,
-                                            threads_credits,
-                                            threads_http_status,
-                                        ) = _unpack_fetched(threads_result, variant)
-                                        context["counts"] = threads_counts
-                                        context["credits"] = threads_credits
-                                        context["http_status"] = threads_http_status
-
-                                        def store_threads(
-                                            conn,
-                                            job=job,
-                                            key=key,
-                                            threads_mentions=threads_mentions,
-                                            threads_cursor=threads_cursor,
-                                        ):
-                                            return store_source(conn, job, threads_mentions, key, "threads", threads_cursor)
-
-                                        _commit_source(
-                                            connect,
-                                            log,
-                                            job,
-                                            context,
-                                            store_threads,
-                                            counts=threads_counts,
-                                            credits=threads_credits,
-                                            http_status=threads_http_status,
-                                        )
-                                        committed_sources += 1
-                                    except SourceFetchError as error:
-                                        if not error.recoverable:
-                                            raise
-                                        _record_source_failure(connect, log, job, "threads", error)
-                                        failures.append(_source_failure_note("threads", variant, error.detail))
-
-                                if "instagram" in sources and fetch_instagram is not None:
-                                    _reset_source_attempt(context, "instagram")
-                                    try:
-                                        context["attempt"] = True
-                                        ig_result = _guarded_fetch("instagram", lambda: fetch_instagram(variant))
-                                        _log_route_events(
-                                            log,
-                                            job,
-                                            "instagram",
-                                            _route_events_from(ig_result),
-                                        )
-                                        (
-                                            ig_mentions,
-                                            ig_cursor,
-                                            ig_counts,
-                                            ig_credits,
-                                            ig_http_status,
-                                        ) = _unpack_fetched(ig_result, variant)
-                                        context["counts"] = ig_counts
-                                        context["credits"] = ig_credits
-                                        context["http_status"] = ig_http_status
-
-                                        def store_instagram(
-                                            conn,
-                                            job=job,
-                                            key=key,
-                                            ig_mentions=ig_mentions,
-                                            ig_cursor=ig_cursor,
-                                        ):
-                                            return store_source(conn, job, ig_mentions, key, "instagram", ig_cursor)
-
-                                        _commit_source(
-                                            connect,
-                                            log,
-                                            job,
-                                            context,
-                                            store_instagram,
-                                            counts=ig_counts,
-                                            credits=ig_credits,
-                                            http_status=ig_http_status,
-                                        )
-                                        committed_sources += 1
-                                    except SourceFetchError as error:
-                                        if not error.recoverable:
-                                            raise
-                                        _record_source_failure(connect, log, job, "instagram", error)
-                                        failures.append(_source_failure_note("instagram", variant, error.detail))
-
-                                if "tiktok" in sources and fetch_tiktok is not None:
-                                    _reset_source_attempt(context, "tiktok")
-                                    try:
-                                        context["attempt"] = True
-                                        tt_result = _guarded_fetch("tiktok", lambda: fetch_tiktok(variant))
-                                        _log_route_events(
-                                            log,
-                                            job,
-                                            "tiktok",
-                                            _route_events_from(tt_result),
-                                        )
-                                        (
-                                            tt_mentions,
-                                            tt_cursor,
-                                            tt_counts,
-                                            tt_credits,
-                                            tt_http_status,
-                                        ) = _unpack_fetched(tt_result, variant)
-                                        context["counts"] = tt_counts
-                                        context["credits"] = tt_credits
-                                        context["http_status"] = tt_http_status
-
-                                        def store_tiktok(
-                                            conn,
-                                            job=job,
-                                            key=key,
-                                            tt_mentions=tt_mentions,
-                                            tt_cursor=tt_cursor,
-                                        ):
-                                            return store_source(conn, job, tt_mentions, key, "tiktok", tt_cursor)
-
-                                        _commit_source(
-                                            connect,
-                                            log,
-                                            job,
-                                            context,
-                                            store_tiktok,
-                                            counts=tt_counts,
-                                            credits=tt_credits,
-                                            http_status=tt_http_status,
-                                        )
-                                        committed_sources += 1
-                                    except SourceFetchError as error:
-                                        if not error.recoverable:
-                                            raise
-                                        _record_source_failure(connect, log, job, "tiktok", error)
-                                        failures.append(_source_failure_note("tiktok", variant, error.detail))
-
-                                if collected is not None and collected.blocked_detail:
-                                    blocked_detail = collected.blocked_detail
+                                        _record_source_failure(connect, log, job, source, error)
+                                        failures.append(_source_failure_note(source, variant, error.detail))
+                                if blocked_detail:
                                     break
                 except _CommitFailed:
                     source = context["source"] or "threads"
@@ -1435,7 +1304,7 @@ def _is_counter_select(compact: str) -> bool:
         return False
     if "from x_read_counters" in compact and "for update" in compact:
         return True
-    return "count" in compact and "from threads_query_log" in compact
+    return "count" in compact and ("from threads_query_log" in compact or "from scheduled_provider_calls" in compact)
 
 
 def _counter_value(row) -> int:
@@ -1472,78 +1341,10 @@ if __name__ == "__main__":
             )
         )
 
-    def fetch_x(variant: str, limit: int, cursor: str | None, since=None, since_id: str | None = None):
-        from datetime import datetime
-
-        from sentiment_monitor.collect import fetch_x_with_cursor
-
-        if isinstance(since, str):
-            since = datetime.fromisoformat(since.replace("Z", "+00:00"))
-        rows, next_cursor = fetch_x_with_cursor(
-            variant,
-            os.environ["X_BEARER_TOKEN"],
-            cursor=cursor,
-            since=since,
-            since_id=since_id,
-            limit=limit,
-        )
-        mentions = [
-            {
-                "external_id": row.external_id,
-                "excerpt": row.text,
-                "url": row.url,
-                "author": row.author,
-                "posted_at": row.created_at,
-                "variant": row.variant,
-                "intent": getattr(variant, "intent", "phrase"),
-                "route_id": "x.keyword",
-            }
-            for row in rows
-        ]
-        return mentions, next_cursor
-
-    def fetch_threads(variant: str):
-        from sentiment_monitor.sources.threads import fetch_threads_mentions
-
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return fetch_threads_mentions(
-            variant,
-            os.environ["SCRAPECREATORS_API_KEY"],
-            now_iso,
-            intent=getattr(variant, "intent", "phrase"),
-        )
-
-    def fetch_instagram(variant: str):
-        from sentiment_monitor.sources.instagram import fetch_instagram_mentions
-
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return fetch_instagram_mentions(
-            variant,
-            os.environ["SCRAPECREATORS_API_KEY"],
-            now_iso,
-            intent=getattr(variant, "intent", "phrase"),
-        )
-
-    def fetch_tiktok(variant: str):
-        from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions
-
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return fetch_tiktok_mentions(
-            variant,
-            os.environ["SCRAPECREATORS_API_KEY"],
-            now_iso,
-            intent=getattr(variant, "intent", "phrase"),
-        )
-
     serve(
-        connect,
-        time.sleep,
-        limits,
-        worker_id,
-        root,
-        fetch_x,
-        fetch_threads,
-        fetch_instagram=fetch_instagram,
-        fetch_tiktok=fetch_tiktok,
+        connect, time.sleep, limits, worker_id, root,
+        fetch_x=None,
+        fetch_threads=partial(scheduled_fetch, "threads"),
+        fetch_instagram=partial(scheduled_fetch, "instagram"),
+        fetch_tiktok=partial(scheduled_fetch, "tiktok"),
     )
-

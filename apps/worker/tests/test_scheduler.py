@@ -29,7 +29,7 @@ def collection_source_tokens(monkeypatch):
     """Serve tests that approve both files still need non-blank source tokens."""
     monkeypatch.setenv("X_BEARER_TOKEN", "test-x-bearer")
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", "test-threads-token")
-    monkeypatch.setenv("SCRAPECREATORS_API_KEY", "test-scrapecreators-key")
+    monkeypatch.setenv("SCRAPEATLAS_API_KEY", "test-scrapeatlas-key")
 
 
 class JobLock:
@@ -421,7 +421,7 @@ class _LoopConn:
             }
         if "from x_read_counters" in lowered and "for update" in lowered:
             return 0
-        if "from threads_query_log" in lowered and "count" in lowered:
+        if ("from threads_query_log" in lowered or "from scheduled_provider_calls" in lowered) and "count" in lowered:
             return 0
         return None
 
@@ -456,65 +456,12 @@ def _due_job():
     }
 
 
-def test_x_incremental_fetch_starts_after_the_newest_seen_id(tmp_path):
-    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor="100")
-    world.since = datetime(2026, 10, 28, 0, 0, tzinfo=timezone.utc)
-    seen = []
-
-    def fetch_x(variant, limit, cursor, since=None, since_id=None):
-        seen.append({"variant": variant, "limit": limit, "cursor": cursor, "since": since, "since_id": since_id})
-        if cursor is None:
-            return (
-                [{
-                    "external_id": "250",
-                    "excerpt": "baru",
-                    "url": "https://x.com/i/status/250",
-                    "author": "ani",
-                    "posted_at": "2026-11-01T02:00:00+00:00",
-                    "variant": variant,
-                }],
-                "older-page-token",
-            )
-        return (
-            [{
-                "external_id": "100",
-                "excerpt": "lama",
-                "url": "https://x.com/i/status/100",
-                "author": "ani",
-                "posted_at": "2026-10-28T00:00:00+00:00",
-                "variant": variant,
-            }],
-            "even-older",
-        )
-
-    def stop(_seconds):
-        raise SystemExit
-
-    limits = load_limits(Path("config/limits.json"), {})
-    with pytest.raises(SystemExit):
-        serve(world.connect, stop, limits, "worker-1", _policy_root(tmp_path, True), fetch_x, lambda _variant: ([], None))
-
-    assert seen[0]["cursor"] is None
-    assert seen[0]["since_id"] == "100"
-    assert seen[0]["since"] == world.since
-    assert seen[1]["cursor"] == "older-page-token"
-    assert seen[1]["since_id"] == "100"
-    assert all(call["cursor"] != "even-older" for call in seen)
-    x_writes = [
-        params
-        for sql, params in world.calls
-        if "insert into source_cursors" in sql and params and params[2] == "x"
-    ]
-    assert x_writes
-    assert "250" in x_writes[0]
-    assert "older-page-token" not in x_writes[0]
-    assert "even-older" not in x_writes[0]
 
 
 class _ThreadsCappedConn(_LoopConn):
     def execute(self, sql, params=None):
         lowered = " ".join(sql.lower().split())
-        if "from threads_query_log" in lowered and "count" in lowered:
+        if ("from threads_query_log" in lowered or "from scheduled_provider_calls" in lowered) and "count" in lowered:
             self.world.calls.append((sql, params))
             return 1500
         return super().execute(sql, params)
@@ -537,13 +484,13 @@ def test_log_redacts_scrapecreators_api_key() -> None:
     assert "[REDACTED]" in line
 
 
-def test_serve_collects_threads_instagram_and_tiktok_without_threads_reserve_cap(tmp_path):
+def test_serve_collects_threads_instagram_and_tiktok_with_one_reservation_per_platform(tmp_path):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     world.sources = ["threads", "instagram", "tiktok"]
     fetched = []
 
     def connect():
-        return _ThreadsCappedConn(world)
+        return world.connect()
 
     def stop(_seconds):
         raise SystemExit
@@ -568,7 +515,7 @@ def test_serve_collects_threads_instagram_and_tiktok_without_threads_reserve_cap
         ("tiktok", "geprek gembus"),
     ]
     joined = "\n".join(sql for sql, _params in world.calls).lower()
-    assert "threads_query_log" not in joined
+    assert joined.count("insert into scheduled_provider_calls") == 3
     cursor_sources = [
         params[2]
         for sql, params in world.calls
@@ -589,62 +536,6 @@ class _SecondXPageCapped(_LoopConn):
         return super().execute(sql, params)
 
 
-def test_x_budget_stop_stores_the_reserved_page_and_keeps_the_floor(tmp_path):
-    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor="100")
-    seen = []
-
-    def fetch_x(variant, limit, cursor, since=None, since_id=None):
-        seen.append({"cursor": cursor, "since_id": since_id})
-        return (
-            [{
-                "external_id": "250",
-                "excerpt": "baru",
-                "url": "https://x.com/i/status/250",
-                "author": "ani",
-                "posted_at": "2026-11-01T02:00:00+00:00",
-                "variant": variant,
-            }],
-            "older-page-token",
-        )
-
-    def connect():
-        return _SecondXPageCapped(world)
-
-    def stop(_seconds):
-        raise SystemExit
-
-    limits = load_limits(Path("config/limits.json"), {})
-    with pytest.raises(SystemExit):
-        serve(
-            connect,
-            stop,
-            limits,
-            "worker-1",
-            _policy_root(tmp_path, True),
-            fetch_x,
-            lambda _variant: ([], None),
-        )
-
-    assert seen == [{"cursor": None, "since_id": "100"}]
-    mention_params = [
-        params for sql, params in world.calls if "insert into mentions" in sql and params
-    ]
-    assert mention_params and "250" in mention_params[0]
-    x_writes = [
-        params
-        for sql, params in world.calls
-        if "insert into source_cursors" in sql and params and params[2] == "x"
-    ]
-    assert x_writes
-    assert "100" in x_writes[0]
-    assert "250" not in x_writes[0]
-    assert "older-page-token" not in x_writes[0]
-    assert any(
-        params and "x_customer_cap" in params
-        for sql, params in world.calls
-        if "status = 'deferred'" in sql.lower()
-    )
-    assert not any("last_collected_at" in sql.lower() for sql, _params in world.calls)
 
 
 def test_one_pass_reads_the_cursor_and_commits_it_with_the_mentions(tmp_path):
@@ -678,7 +569,7 @@ def test_one_pass_reads_the_cursor_and_commits_it_with_the_mentions(tmp_path):
         serve(world.connect, stop, limits, "worker-1", _policy_root(tmp_path, True), fetch_x, fetch_threads)
 
     assert seen["slept"] == 20
-    assert seen["x"] == ("geprek gembus", 10, None, None, None)
+    assert "x" not in seen
     assert seen["threads"] == "geprek gembus"
 
 
@@ -699,7 +590,7 @@ def test_job_succeeds_only_after_every_variant_is_stored(tmp_path):
         )
 
     def fetch_threads(variant):
-        return ([], None)
+        return fetch_x(variant, 10, None)
 
     def stop(seconds):
         raise SystemExit
@@ -723,7 +614,7 @@ def test_job_succeeds_only_after_every_variant_is_stored(tmp_path):
     )
     commit_at = next(i for i, (sql, _params) in enumerate(world.calls) if i > cursor_at and sql == "COMMIT")
     assert mention_at < cursor_at < commit_at
-    assert "100" in world.calls[cursor_at][1]
+    assert world.calls[cursor_at][1][3] is None
     assert "cursor-2" not in world.calls[cursor_at][1]
     assert "claim_expired" in sql_text
     assert "for update skip locked" in sql_text.lower()
@@ -934,7 +825,7 @@ def test_failure_detail_and_record_source_failure_for_scrapecreators_and_x():
     import urllib.error
     from sentiment_monitor.scheduler import (
         ALL_SOURCES,
-        ScrapeCreatorsError,
+        CollectionProviderError,
         load_enabled_sources,
         record_source_failure,
         record_source_success,
@@ -974,9 +865,9 @@ def test_failure_detail_and_record_source_failure_for_scrapecreators_and_x():
     )
     assert _failure_detail(ig_402, source="instagram") == "instagram_http_402"
     assert _failure_detail(x_429, source="instagram") == "x_http_429"
-    assert _failure_detail(ScrapeCreatorsError("success_false"), source="threads") == "threads_success_false"
+    assert _failure_detail(CollectionProviderError("success_false"), source="threads") == "threads_success_false"
     assert (
-        _failure_detail(ScrapeCreatorsError("http_402", http_status=402), source="instagram")
+        _failure_detail(CollectionProviderError("http_402", http_status=402), source="instagram")
         == "instagram_http_402"
     )
 
@@ -1092,7 +983,7 @@ def test_failed_status_update_is_redacted_and_the_loop_continues(tmp_path, monke
     monkeypatch.setenv("X_BEARER_TOKEN", token)
     quoted = quote(token, safe="")
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
-    world.sources = ["x"]
+    world.sources = ["threads"]
     message = f"{token} {quoted}"
 
     def connect():
@@ -1112,8 +1003,8 @@ def test_failed_status_update_is_redacted_and_the_loop_continues(tmp_path, monke
             limits,
             "worker-1",
             _policy_root(tmp_path, True),
-            fetch_x,
-            lambda *_args: ([], None),
+            None,
+            lambda variant: fetch_x(variant, 1, None),
         )
 
     captured = capfd.readouterr()
@@ -1353,13 +1244,13 @@ def test_serve_writes_ready_after_success_and_logs_safe_counts(tmp_path):
 
 
 def test_provider_failure_writes_failure_and_fails_with_safe_detail(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     world.sources = ["threads"]
 
     def fetch_threads(_variant):
-        raise ScrapeCreatorsError("success_false", credits_charged=4)
+        raise CollectionProviderError("success_false", credits_charged=4)
 
     def stop(_seconds):
         raise SystemExit
@@ -1382,7 +1273,7 @@ def test_provider_failure_writes_failure_and_fails_with_safe_detail(tmp_path):
 
 
 def test_status_write_failure_does_not_replace_provider_detail(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     class StatusFailConn(_LoopConn):
         def execute(self, sql, params=None):
@@ -1394,7 +1285,7 @@ def test_status_write_failure_does_not_replace_provider_detail(tmp_path):
     world.sources = ["threads"]
 
     def fetch_threads(_variant):
-        raise ScrapeCreatorsError("http_401", http_status=401)
+        raise CollectionProviderError("http_401", http_status=401)
 
     def stop(_seconds):
         raise SystemExit
@@ -1500,7 +1391,7 @@ def test_safe_error_label_never_prints_raw_provider_text():
 
 def test_safe_error_label_uses_fixed_allowlists_and_bounds_length():
     from sentiment_monitor.scheduler import _safe_error_label
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     for token in ["private_keyword", "this_is_private_post_text", "abc123", "a" * 500]:
         error = Exception("not emitted")
@@ -1510,8 +1401,8 @@ def test_safe_error_label_uses_fixed_allowlists_and_bounds_length():
         assert label == "Exception other"
         assert len(label) <= 64
 
-    assert _safe_error_label(ScrapeCreatorsError("success_false")) == "ScrapeCreatorsError success_false"
-    assert _safe_error_label(ScrapeCreatorsError("http_401", http_status=401)) == "ScrapeCreatorsError http_401"
+    assert _safe_error_label(CollectionProviderError("success_false")) == "CollectionProviderError success_false"
+    assert _safe_error_label(CollectionProviderError("http_401", http_status=401)) == "CollectionProviderError http_401"
     assert _safe_error_label(RuntimeError("boom")) == "RuntimeError other"
 
     class MysteryError(Exception):
@@ -1632,14 +1523,14 @@ def test_collection_log_keeps_zero_credit_distinct_from_unknown(tmp_path):
 
 
 def test_malformed_failure_logs_known_credits_and_counts(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     world.sources = ["threads"]
     lines = []
 
     def fetch_threads(_variant):
-        raise ScrapeCreatorsError(
+        raise CollectionProviderError(
             "malformed_posts",
             credits_charged=3,
             counts={"returned": 1, "parsed": 1, "deduplicated": 1},
@@ -1671,14 +1562,14 @@ def test_malformed_failure_logs_known_credits_and_counts(tmp_path):
 
 
 def test_partial_multi_endpoint_failure_logs_known_counts_credits_and_status(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     world.sources = ["instagram"]
     lines = []
 
     def fetch_instagram(_variant):
-        raise ScrapeCreatorsError(
+        raise CollectionProviderError(
             "http_500",
             http_status=500,
             credits_charged=3,
@@ -1713,7 +1604,7 @@ def test_partial_multi_endpoint_failure_logs_known_counts_credits_and_status(tmp
 
 
 def test_status_write_failure_on_provider_failure_logs_one_structured_line(tmp_path, capsys):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     class StatusFailConn(_LoopConn):
         def execute(self, sql, params=None):
@@ -1728,7 +1619,7 @@ def test_status_write_failure_on_provider_failure_logs_one_structured_line(tmp_p
     lines = []
 
     def fetch_threads(_variant):
-        raise ScrapeCreatorsError("http_401", http_status=401)
+        raise CollectionProviderError("http_401", http_status=401)
 
     def stop(_seconds):
         raise SystemExit
@@ -1788,12 +1679,12 @@ def test_early_deferral_failure_does_not_crash_serve_and_fails_job(tmp_path):
 
 def test_budget_and_no_sources_deferrals_emit_no_source_attempt(tmp_path):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
-    world.sources = ["x"]
+    world.sources = ["threads"]
     lines, providers = [], []
 
     class BudgetBlock(_LoopConn):
         def execute(self, sql, params=None):
-            if "from x_read_counters" in " ".join(sql.lower().split()) and "for update" in sql.lower():
+            if "count(*) from scheduled_provider_calls" in sql.lower():
                 return 100000
             return super().execute(sql, params)
 
@@ -1815,7 +1706,7 @@ def test_budget_and_no_sources_deferrals_emit_no_source_attempt(tmp_path):
 
     assert providers == []
     assert not any(line.startswith("source_collection") for line in lines)
-    assert any(params and "x_customer_cap" in params for sql, params in world.calls if "status = 'deferred'" in sql)
+    assert any(params and "scheduled_request_cap" in params for sql, params in world.calls if "status = 'deferred'" in sql)
 
     from unittest.mock import patch
 
@@ -1848,11 +1739,11 @@ def test_consecutive_jobs_reset_attempt_context(tmp_path):
     lines, calls = [], {"n": 0}
 
     def fetch_threads(_variant):
-        from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+        from sentiment_monitor.sources.normalization import CollectionProviderError
 
         calls["n"] += 1
         if calls["n"] == 1:
-            raise ScrapeCreatorsError(
+            raise CollectionProviderError(
                 "http_429",
                 http_status=429,
                 credits_charged=4,
@@ -2145,7 +2036,7 @@ def _collect_source(source, connect, tmp_path, log, world=None):
     return world
 
 
-@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok"])
 def test_committed_close_failure_keeps_success_and_succeeds_job(tmp_path, source):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     lines = []
@@ -2161,7 +2052,7 @@ def test_committed_close_failure_keeps_success_and_succeeds_job(tmp_path, source
     assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
 
 
-@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok"])
 def test_logger_failure_after_commit_keeps_one_success_line_and_job(tmp_path, source):
     lines = []
 
@@ -2182,7 +2073,7 @@ def test_logger_failure_after_commit_keeps_one_success_line_and_job(tmp_path, so
     assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
 
 
-@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok"])
 def test_logger_failure_before_recording_success_never_invents_rollback(tmp_path, source):
     lines = []
 
@@ -2201,7 +2092,7 @@ def test_logger_failure_before_recording_success_never_invents_rollback(tmp_path
     assert not any("status = 'failed'" in sql and "claim_expired" not in sql for sql, _params in world.calls)
 
 
-@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok"])
 def test_commit_failure_logs_commit_unknown_not_false_rollback(tmp_path, source):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     lines = []
@@ -2217,7 +2108,7 @@ def test_commit_failure_logs_commit_unknown_not_false_rollback(tmp_path, source)
     assert failed == [("storage_commit_unknown", "job-1")]
 
 
-@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok"])
 def test_write_failure_before_commit_still_logs_true_rollback(tmp_path, source):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     lines = []
@@ -2285,7 +2176,7 @@ class _TransactionCommitFail(_WroteConn):
         return self._Scope()
 
 
-@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok", "x"])
+@pytest.mark.parametrize("source", ["threads", "instagram", "tiktok"])
 def test_transaction_exit_commit_failure_is_commit_unknown(tmp_path, source):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
     lines = []
@@ -2379,7 +2270,7 @@ def test_collection_plan_logs_keywords_and_fixed_route_count(tmp_path):
         )
 
     assert any(
-        "collection_plan" in line and "keywords=1" in line and "routes=6" in line
+        "collection_plan" in line and "keywords=1" in line and "routes=3" in line
         for line in lines
     )
 
@@ -2400,7 +2291,7 @@ def test_unpack_fetched_carries_keyword_intent_and_route_provenance():
 
 
 def test_barayam_partial_source_failure_continues_sources_and_keywords(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     world = LoopWorld(jobs=[_due_job()], variants=["ayam barayam", "ayam geprek", "sambal"], cursor=None)
     world.sources = ["threads", "instagram", "tiktok"]
@@ -2424,7 +2315,7 @@ def test_barayam_partial_source_failure_continues_sources_and_keywords(tmp_path)
     def fetch_instagram(variant):
         calls.append(("instagram", variant))
         if variant == "ayam barayam":
-            raise ScrapeCreatorsError("http_404", http_status=404)
+            raise CollectionProviderError("http_404", http_status=404)
         return post("instagram", variant), None
 
     def fetch_tiktok(variant):
@@ -2483,13 +2374,13 @@ def test_barayam_partial_source_failure_continues_sources_and_keywords(tmp_path)
 
 
 def test_every_source_failing_fails_the_job_with_a_summary(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     world = LoopWorld(jobs=[_due_job()], variants=["ayam barayam"], cursor=None)
     world.sources = ["instagram"]
 
     def fetch_instagram(_variant):
-        raise ScrapeCreatorsError("http_404", http_status=404)
+        raise CollectionProviderError("http_404", http_status=404)
 
     def stop(_seconds):
         raise SystemExit
@@ -2628,18 +2519,18 @@ def _x_transport_error(kind):
         "http500",
     ],
 )
-def test_x_transport_failures_are_recoverable_and_continue_to_threads(tmp_path, kind):
+def test_transport_failures_are_recoverable_and_continue_to_instagram(tmp_path, kind):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
-    world.sources = ["x", "threads"]
+    world.sources = ["threads", "instagram"]
     calls = []
     lines = []
 
-    def fetch_x(_variant, _limit, _cursor, _since=None, _since_id=None):
-        calls.append("x")
+    def fetch_first(_variant):
+        calls.append("threads")
         raise _x_transport_error(kind)
 
-    def fetch_threads(variant):
-        calls.append("threads")
+    def fetch_instagram(variant):
+        calls.append("instagram")
         return [{
             "external_id": "threads-1",
             "excerpt": variant,
@@ -2659,18 +2550,19 @@ def test_x_transport_failures_are_recoverable_and_continue_to_threads(tmp_path, 
             load_limits(Path("config/limits.json"), {}),
             "worker-1",
             _policy_root(tmp_path, True),
-            fetch_x,
-            fetch_threads,
+            None,
+            fetch_first,
+            fetch_instagram=fetch_instagram,
             log=lines.append,
         )
 
-    assert calls == ["x", "threads"]
+    assert calls == ["threads", "instagram"]
     succeeded = [
         params for sql, params in world.calls
         if "update jobs set status = 'succeeded'" in sql.lower()
     ]
     assert len(succeeded) == 1
-    assert succeeded[0][0].startswith("partial_failures:x:geprek%20gembus:")
+    assert succeeded[0][0].startswith("partial_failures:threads:geprek%20gembus:")
     assert not any(
         "update jobs set status = 'failed'" in sql.lower()
         and "claim_expired" not in sql.lower()
@@ -2681,15 +2573,15 @@ def test_x_transport_failures_are_recoverable_and_continue_to_threads(tmp_path, 
 @pytest.mark.parametrize("error_type", [FileNotFoundError, PermissionError])
 def test_nontransport_oserror_fails_job_without_continuing(tmp_path, error_type):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
-    world.sources = ["x", "threads"]
+    world.sources = ["threads", "instagram"]
     calls = []
 
-    def fetch_x(_variant, _limit, _cursor, _since=None, _since_id=None):
-        calls.append("x")
+    def fetch_first(_variant):
+        calls.append("threads")
         raise error_type("synthetic local filesystem error")
 
-    def fetch_threads(_variant):
-        calls.append("threads")
+    def fetch_instagram(_variant):
+        calls.append("instagram")
         return [], None
 
     def stop(_seconds):
@@ -2702,11 +2594,12 @@ def test_nontransport_oserror_fails_job_without_continuing(tmp_path, error_type)
             load_limits(Path("config/limits.json"), {}),
             "worker-1",
             _policy_root(tmp_path, True),
-            fetch_x,
-            fetch_threads,
+            None,
+            fetch_first,
+            fetch_instagram=fetch_instagram,
         )
 
-    assert calls == ["x"]
+    assert calls == ["threads"]
     failed = [
         params for sql, params in world.calls
         if "update jobs set status = 'failed'" in sql.lower()
@@ -2730,94 +2623,6 @@ def test_provider_transport_classification_narrows_plain_oserror(error, expected
     assert _is_provider_transport_failure(error, "collection_failed") is expected
 
 
-def test_instagram_paid_context_survives_unexpected_error_and_job_fails(
-    tmp_path, monkeypatch
-):
-    import json
-
-    import sentiment_monitor.sources.instagram as instagram
-
-    original = instagram.normalize_instagram_item
-    calls = {"n": 0}
-
-    def normalize(item, collected_at):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise AttributeError("synthetic parser error")
-        return original(item, collected_at)
-
-    monkeypatch.setattr(instagram, "normalize_instagram_item", normalize)
-
-    class Response:
-        status = 200
-
-        def __init__(self, payload):
-            self.payload = json.dumps(payload)
-
-        def read(self, size=-1):
-            data = self.payload.encode()
-            return data if size is None or size < 0 else data[:size]
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-    def opener(request, timeout=0):
-        if "/v2/instagram/reels/search" in request.full_url:
-            return Response(
-                {
-                    "reels": [{"pk": "one", "caption": "kopi"}],
-                    "credits_charged": 2,
-                }
-            )
-        return Response(
-            {
-                "posts": [{"pk": "two", "caption": "kopi"}],
-                "credits_charged": 3,
-            }
-        )
-
-    def fetch_instagram(variant):
-        return instagram.fetch_instagram_mentions(
-            variant, "synthetic", "2026-11-08T00:00:00Z", opener=opener
-        )
-
-    world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor=None)
-    world.sources = ["instagram"]
-    lines = []
-
-    def stop(_seconds):
-        raise SystemExit
-
-    with pytest.raises(SystemExit):
-        serve(
-            world.connect,
-            stop,
-            load_limits(Path("config/limits.json"), {}),
-            "worker-1",
-            _policy_root(tmp_path, True),
-            lambda *_args, **_kwargs: ([], None),
-            lambda *_args, **_kwargs: ([], None),
-            log=lines.append,
-            fetch_instagram=fetch_instagram,
-        )
-
-    failed = [
-        params for sql, params in world.calls
-        if "update jobs set status = 'failed'" in sql.lower()
-        and "claim_expired" not in sql.lower()
-    ]
-    assert failed == [("collection_failed", "job-1")]
-    source_line = next(
-        line for line in lines
-        if line.startswith("source_collection") and "source=instagram" in line
-    )
-    assert "outcome=failed" in source_line
-    assert "returned=2" in source_line
-    assert "parsed=1" in source_line
-    assert "credits_charged=5" in source_line
 
 
 def test_route_telemetry_logs_status_credits_length_and_no_provider_text(monkeypatch):
@@ -2899,14 +2704,14 @@ def test_route_telemetry_without_body_uses_dash_without_raw_exception_text():
 
 
 def test_serve_logs_each_failed_route_individually(tmp_path):
-    from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+    from sentiment_monitor.sources.normalization import CollectionProviderError
 
     world = LoopWorld(jobs=[_due_job()], variants=["ayam barayam"], cursor=None)
     world.sources = ["instagram"]
     lines = []
 
     def fetch_instagram(_variant):
-        error = ScrapeCreatorsError("http_404", http_status=404)
+        error = CollectionProviderError("http_404", http_status=404)
         error.route_events = [
             {
                 "route": "instagram.reels",

@@ -99,6 +99,8 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
       <span className="text-right text-[11px] text-muted-foreground">
         {source.safeDetail === "hashtag_only" ? (
           <span>Hanya mendukung tagar</span>
+        ) : source.safeDetail === "partial_coverage" ? (
+          <span>Cakupan sebagian</span>
         ) : source.safeDetail === "web_index_selection" ? (
           <span>Cakupan indeks terbatas</span>
         ) : source.state === "answered" && source.resultCount === 0 ? (

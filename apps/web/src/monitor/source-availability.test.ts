@@ -14,23 +14,23 @@ describe("source availability without an X token", () => {
   it("reports Threads from its token and leaves X unavailable", () => {
     expect(sourceCredentials({ THREADS_ACCESS_TOKEN: "test-threads-token" })).toEqual({
       x: false,
-      threads: true,
+      threads: false,
       instagram: false,
       tiktok: false,
     });
     expect(
       sourceCredentials({
         X_BEARER_TOKEN: "x-token",
-        SCRAPECREATORS_API_KEY: "sc-key",
+        SCRAPEATLAS_API_KEY: "sa-key",
       }),
     ).toEqual({
-      x: true,
+      x: false,
       threads: true,
       instagram: true,
       tiktok: true,
     });
     expect(sourceCredentials({ X_BEARER_TOKEN: "x-token" })).toEqual({
-      x: true,
+      x: false,
       threads: false,
       instagram: false,
       tiktok: false,

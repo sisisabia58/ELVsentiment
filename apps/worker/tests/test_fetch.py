@@ -23,3 +23,9 @@ def test_provider_api_key_maps_only_active_provider():
     assert provider_api_key("scrapeatlas", env) == "sa"
     assert provider_api_key("scrapecreators", env) is None
     assert provider_api_key("official_x", env) is None
+
+
+def test_facebook_phrase_is_unavailable_even_in_fixture_mode():
+    result = fetch_platform("facebook", Keyword("kopi keliling"), {"facebook": ProviderSetting("facebook","scrapeatlas")},
+        env={"CARI_PROVIDER_MODE":"fixture"}, collected_at="2026-11-15T00:00:00Z")
+    assert result.state == "unavailable" and result.safe_detail == "hashtag_only" and not result.calls

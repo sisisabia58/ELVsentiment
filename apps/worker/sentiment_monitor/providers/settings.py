@@ -25,6 +25,9 @@ def load_provider_settings(conn: Any) -> dict[str, ProviderSetting]:
             if platform not in DEFAULT_SETTINGS:
                 continue
             provider = row["provider"]
+            if provider == "off":
+                settings[platform] = ProviderSetting(platform=platform, provider="off")
+                continue
             fallback_provider = row["fallback_provider"]
             fallback_on_failure = bool(row["fallback_on_failure"])
             validate_choice(platform, provider, fallback_provider, fallback_on_failure)

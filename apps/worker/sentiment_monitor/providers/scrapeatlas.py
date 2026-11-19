@@ -222,7 +222,7 @@ def fetch_scrapeatlas_json(
             raise ScrapeAtlasError(
                 "not_found",
                 http_status=404,
-                credits_charged=0,
+                credits_charged=charged if charged is not None else 0,
                 credits_remaining=remaining,
                 body_length=body_length,
                 latency_ms=latency_ms,
@@ -299,7 +299,7 @@ def fetch_scrapeatlas_json(
         raise ScrapeAtlasError(
             safe,
             http_status=http_status,
-            credits_charged=0 if safe == "not_found" else charged,
+            credits_charged=0 if charged is None and safe == "not_found" else charged,
             credits_remaining=remaining,
             body_length=body_length,
             latency_ms=latency_ms,

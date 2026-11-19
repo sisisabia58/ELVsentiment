@@ -9,8 +9,8 @@ import pytest
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.scheduler import _log_route_events, _safe_error_label
-from sentiment_monitor.sources.instagram import fetch_instagram_mentions
-from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError
+from sentiment_monitor.scheduler import scheduled_fetch
+
 
 KNOWN = "qa_security_known_1234567890"
 UNKNOWN = "qa_security_unknown_1234567890"
@@ -46,7 +46,7 @@ def _assert_body_contract(line: str, expected_length: int, case_id: str) -> None
 
 def _log_one(body: str) -> str:
     lines = []
-    with patch.dict(os.environ, {"SCRAPECREATORS_API_KEY": KNOWN}):
+    with patch.dict(os.environ, {"SCRAPEATLAS_API_KEY": KNOWN}):
         _log_route_events(
             lines.append,
             {"id": "qa-job", "project_id": "qa-project"},
@@ -79,18 +79,9 @@ def _ig404_events(body: str):
             io.BytesIO(body.encode("utf-8")),
         )
 
-    with patch.dict(os.environ, {"SCRAPECREATORS_API_KEY": KNOWN}):
-        with pytest.raises(ScrapeCreatorsError) as caught:
-            fetch_instagram_mentions(
-                Keyword("#barayam", "hashtag"),
-                "synthetic",
-                "2026-11-10T00:00:00Z",
-                opener=opener,
-            )
-    error = caught.value
-    if error.http_status != 404 or len(calls) != 1:
-        pytest.fail("ig404_full_pipeline_harness_failed")
-    return error.route_events
+    result = scheduled_fetch("instagram", Keyword("barayam"), api_key="fixture", opener=opener)
+    assert result["http_status"] == 404 and len(calls) == 1
+    return result["route_events"]
 
 
 CASES = [
@@ -261,7 +252,7 @@ def test_route_log_never_contains_provider_body_text(case_id, body, marker, pref
 def test_ig404_full_pipeline_never_logs_provider_body_text(case_id, body, marker):
     events = _ig404_events(body)
     lines = []
-    with patch.dict(os.environ, {"SCRAPECREATORS_API_KEY": KNOWN}):
+    with patch.dict(os.environ, {"SCRAPEATLAS_API_KEY": KNOWN}):
         _log_route_events(
             lines.append,
             {"id": "qa-job", "project_id": "qa-project"},

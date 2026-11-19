@@ -1,4 +1,4 @@
-"""Provider-agnostic fetch with a capability guard and optional fallback."""
+"""Route a supported search to the configured ScrapeAtlas adapter."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from sentiment_monitor.providers.capabilities import (
     resolve_chain,
 )
 from sentiment_monitor.providers.scrapeatlas_sources import (
+    facebook_hashtag,
     fetch_scrapeatlas_facebook,
     fetch_scrapeatlas_instagram,
     fetch_scrapeatlas_x,
@@ -62,6 +63,8 @@ def fetch_platform(
         return PlatformFetch(
             platform, "off", [], [], "unavailable", "unsupported_provider", 0, ()
         )
+    if platform == "facebook" and facebook_hashtag(keyword) is None:
+        return PlatformFetch(platform, "scrapeatlas", state="unavailable", safe_detail="hashtag_only")
     mode = env.get("CARI_PROVIDER_MODE") if isinstance(env, Mapping) else None
     if not isinstance(mode, str) or not mode:
         mode = os.environ.get("CARI_PROVIDER_MODE", "live")

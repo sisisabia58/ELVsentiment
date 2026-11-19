@@ -627,6 +627,7 @@ class _RealCommitMixedConn:
             "from source_cursors",
             "x_read_counters",
             "threads_query_log",
+            "scheduled_provider_calls",
         )
         if any(token in compact for token in persisted) or compact in ("begin", "commit", "rollback"):
             return self.adapter.execute(sql, params)
@@ -742,7 +743,7 @@ def test_postgres16_commit_receipt_statuses_for_all_sources(pg16, tmp_path, faul
     from test_scheduler import _policy_root
 
     root = _policy_root(tmp_path, True)
-    for index, source in enumerate(("threads", "instagram", "tiktok", "x"), start=1):
+    for index, source in enumerate(("threads", "instagram", "tiktok"), start=1):
         job_id, external_id, lines, world = _run_real_commit_scenario(conn, root, source, fault, index)
         observer = psycopg.connect(_db_url("sm_pg16"))
         try:
@@ -951,12 +952,12 @@ def test_postgres16_fetch_pipeline_keeps_two_keywords_times_three_routes(pg16):
     from sentiment_monitor.intent import Keyword
     from sentiment_monitor.pg_store import PostgresStore
     from sentiment_monitor.scheduler import CursorRowAdapter, _unpack_fetched
-    from sentiment_monitor.sources.tiktok import fetch_tiktok_mentions
+    from sentiment_monitor.scheduler import scheduled_fetch
 
     conn = pg16
     _seed(conn)
     payload = {
-        "items": [
+        "item_list": [
             {
                 "aweme_id": "pipeline-same",
                 "desc": "alpha beta",
@@ -974,13 +975,13 @@ def test_postgres16_fetch_pipeline_keeps_two_keywords_times_three_routes(pg16):
 
             return io.StringIO(json.dumps(payload))
 
-        result = fetch_tiktok_mentions(
-            Keyword(keyword, "phrase"), "synthetic", "2026-11-09T00:00:00Z", opener=opener
+        result = scheduled_fetch(
+            "tiktok", Keyword(keyword, "phrase"), api_key="synthetic", collected_at="2026-11-09T00:00:00Z", opener=opener
         )
         mentions, _cursor, counts, _credits, _status = _unpack_fetched(
             result, Keyword(keyword, "phrase")
         )
-        assert counts == {"returned": 3, "parsed": 3, "deduplicated": 2}
+        assert counts == {"returned": 1, "parsed": 1, "deduplicated": 0}
         return mentions
 
     def store(keyword):
@@ -1010,14 +1011,8 @@ def test_postgres16_fetch_pipeline_keeps_two_keywords_times_three_routes(pg16):
     associations = conn.execute(
         "select keyword_text, route_id from mention_keyword_associations order by keyword_text, route_id"
     ).fetchall()
-    assert associations == [
-        ("alpha", "tiktok.keyword"),
-        ("alpha", "tiktok.keyword_page2"),
-        ("alpha", "tiktok.top"),
-        ("beta", "tiktok.keyword"),
-        ("beta", "tiktok.keyword_page2"),
-        ("beta", "tiktok.top"),
-    ]
+    assert associations == [("alpha", "scrapeatlas.tiktok.keyword"), ("beta", "scrapeatlas.tiktok.keyword")]
+
 
 
 def test_postgres16_conflict_status_matches_retained_excerpt(pg16):
@@ -1073,7 +1068,7 @@ def test_postgres16_mixed_dated_and_undated_fetch_persists_both_and_cursor(pg16)
 
     from sentiment_monitor.pg_store import PostgresStore
     from sentiment_monitor.scheduler import CursorRowAdapter, _unpack_fetched
-    from sentiment_monitor.sources.threads import fetch_threads_mentions
+    from sentiment_monitor.scheduler import scheduled_fetch
 
     conn = pg16
     _seed(conn)
@@ -1090,8 +1085,8 @@ def test_postgres16_mixed_dated_and_undated_fetch_persists_both_and_cursor(pg16)
             )
         )
 
-    result = fetch_threads_mentions(
-        "kopi", "synthetic", "2026-11-09T00:00:00Z", intent="phrase", opener=opener
+    result = scheduled_fetch(
+        "threads", "kopi", api_key="synthetic", collected_at="2026-11-09T00:00:00Z", opener=opener
     )
     mentions, _cursor, _counts, _credits, _status = _unpack_fetched(result, "kopi")
     assert len(mentions) == 2
@@ -1233,3 +1228,44 @@ def test_postgres16_migration_012_seeds_routing_and_gates_admin_writes(pg16):
     conn.execute("set local role worker_role")
     assert conn.execute("select count(*) from provider_settings").fetchone()[0] == 10
     conn.rollback()
+
+
+def test_concurrent_scheduled_reservations_share_one_request_cap(pg16):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from sentiment_monitor.scheduler import CursorRowAdapter, reserve_scheduled_call, finish_scheduled_call
+
+    ready = Barrier(2)
+    def reserve(platform):
+        with psycopg.connect(_db_url("sm_pg16")) as conn:
+            conn.execute("set local role worker_role")
+            ready.wait(timeout=5)
+            return reserve_scheduled_call(CursorRowAdapter(conn), JOB_A, platform, 1)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.map(reserve, ["threads", "instagram"])
+    assert (first is None) != (second is None)
+    call_id = first or second
+    assert pg16.execute("select credits_charged, outcome from scheduled_provider_calls").fetchall() == [(None, "reserved")]
+    finish_scheduled_call(CursorRowAdapter(pg16), call_id, "partial", 2, 200)
+    assert pg16.execute("select credits_charged, outcome from scheduled_provider_calls").fetchall() == [(2, "partial")]
+
+
+def test_route_migration_as_owner_without_bypassrls(pg16):
+    # Roll back the isolated role and schema along with the simulated upgrade.
+    pg16.execute("create role test_route_migration_owner nobypassrls")
+    pg16.execute("create schema migration_test authorization test_route_migration_owner")
+    pg16.execute("set local role test_route_migration_owner")
+    pg16.execute("set local search_path to migration_test")
+    previous = (SQL_DIR / "012_instant_search.sql").read_text()
+    pg16.execute(previous[previous.index("create table provider_settings ("):previous.index("create table provider_settings_audit")])
+    pg16.execute("update provider_settings set provider='off' where platform='tiktok'")
+    pg16.execute("alter table provider_settings enable row level security")
+    pg16.execute("alter table provider_settings force row level security")
+    assert pg16.execute("select count(*) from provider_settings").fetchone() == (0,)
+    pg16.execute((SQL_DIR / "015_scrapeatlas_routes.sql").read_text())
+    assert pg16.execute("select count(*) from provider_settings").fetchone() == (0,)
+    pg16.execute("alter table provider_settings no force row level security")
+    assert pg16.execute("select platform from provider_settings where provider='off' order by platform").fetchall() == [("tiktok",), ("web",)]
+    assert pg16.execute("select count(*) from provider_settings where provider='scrapeatlas'").fetchone() == (8,)
+    pg16.rollback()

@@ -296,3 +296,10 @@ def test_comment_fetch_fields_match_contract():
     assert fetch.post_id == "p1"
     assert fetch.comments == []
     assert fetch.call is None
+
+
+def test_invalid_comments_envelope_retains_accounted_failure():
+    result = fetch_comments("threads", post(), settings=SETTINGS, env={"SCRAPEATLAS_API_KEY":"fixture"},
+        opener=lambda *a, **k: Response({"success":True, "comments":{}}, headers={"x-credits-charged":"2"}))
+    assert result.state == "failed" and result.safe_detail == "malformed_envelope"
+    assert result.call.credits_charged == 2

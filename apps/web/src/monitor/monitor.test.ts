@@ -381,16 +381,17 @@ describe("truthful workspace source state", () => {
     const project = await createProject(db, owner.customerId, "Kopi Uji");
     const previous = {
       X_BEARER_TOKEN: process.env.X_BEARER_TOKEN,
-      SCRAPECREATORS_API_KEY: process.env.SCRAPECREATORS_API_KEY,
+      SCRAPEATLAS_API_KEY: process.env.SCRAPEATLAS_API_KEY,
     };
     process.env.X_BEARER_TOKEN = "test-x";
-    process.env.SCRAPECREATORS_API_KEY = "test-sc";
+    process.env.SCRAPEATLAS_API_KEY = "test-sc";
     try {
       const workspace = await loadWorkspace(db, owner.customerId, project.projectId, new Date(), readLimits());
-      const x = workspace.sources.find((item) => item.source === "x");
+      const x = workspace.sources.find((item) => item.source === "threads");
       expect(x).toMatchObject({ configured: true, state: "untested", detail: "", lastSuccessAt: null });
-      expect(workspace.sources.every((item) => item.state === "untested")).toBe(true);
-      expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(false);
+      expect(workspace.sources.filter((item) => item.source !== "x").every((item) => item.state === "untested")).toBe(true);
+      expect(workspace.sources.find((item) => item.source === "x")).toMatchObject({ configured: false, state: "unavailable" });
+      expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(true);
     } finally {
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name];

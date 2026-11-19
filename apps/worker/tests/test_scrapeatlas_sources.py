@@ -265,7 +265,7 @@ def test_facebook_phrase_is_unavailable_without_request():
     assert not seen
 
 
-def test_linkedin_fixture_uses_last_week_filter_and_web_index():
+def test_linkedin_all_time_omits_date_filter_and_marks_web_index():
     seen = []
 
     def opener(request, timeout=0):
@@ -274,7 +274,7 @@ def test_linkedin_fixture_uses_last_week_filter_and_web_index():
 
     result = fetch_scrapeatlas_linkedin("barayam", api_key="synthetic",
         collected_at="2026-11-15T00:00:00Z", opener=opener)
-    assert "date_posted=last-week" in seen[0]
+    assert "date_posted" not in seen[0]
     assert all(post.web_index for post in result.posts)
     assert result.calls[0].outcome == "partial"
 
@@ -333,3 +333,75 @@ def test_indexed_search_contract(platform, path, expected):
     assert empty.state == "answered" and empty.posts == [] and empty.next_cursor is None
     assert seen[0]["query"] == ["example"] and "cursor" not in seen[0]
     assert seen[1]["cursor"] == [page.next_cursor]
+
+
+@pytest.mark.parametrize(("platform", "sample", "charge"), [
+    ("instagram", "instagram_posts.json", 2), ("tiktok", "tiktok_keyword.json", 1),
+    ("threads", "threads_recent.json", 1),
+])
+def test_scheduled_sources_use_one_fresh_atlas_page_with_actual_credits(platform, sample, charge):
+    from sentiment_monitor import scheduler
+    urls = []
+    def opener(request, timeout=0):
+        urls.append(request.full_url)
+        return Response(fixture(sample), headers={"x-credits-charged": str(charge)})
+
+    fetch = getattr(scheduler, "scheduled_fetch", None)
+    assert callable(fetch)
+    result = fetch(platform, "example", api_key="fixture", collected_at="2026-11-15T00:00:00Z", opener=opener)
+    assert len(urls) == 1 and urls[0].startswith("https://api.scrapeatlas.com/")
+    assert "cursor=" not in urls[0] and result.get("next_cursor") is None
+    assert result["route_events"][0]["credits_charged"] == charge
+    assert result["credits_charged"] == charge
+
+
+def test_linkedin_uses_a_stable_identity_from_documented_permalink():
+    url = "https://www.linkedin.com/posts/member_topic-activity-1234567890-abc"
+    result = fetch_scrapeatlas_linkedin("topic", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response({"success": True, "status": "partial",
+            "posts": [{"url": url + "?tracking=sample", "description": "Topic"}]}))
+    post, = result.posts
+    assert post.external_id == "1234567890"
+    assert result.safe_detail == "partial_coverage"
+
+
+@pytest.mark.parametrize("value", [None, {}, "unparseable"])
+def test_missing_or_malformed_post_collection_fails_and_retains_charge(value):
+    payload = {"success": True, "status": "success"}
+    if value is not None:
+        payload["posts"] = value
+    result = fetch_scrapeatlas_threads("topic", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response(payload, headers={"x-credits-charged": "2"}))
+    assert result.state == "failed" and result.safe_detail == "malformed_envelope"
+    assert result.calls[0].credits_charged == 2
+
+
+def test_one_malformed_threads_caption_preserves_valid_sibling():
+    payload = {"success": True, "status": "success", "posts": [
+        {"pk": "bad", "text_post_app_info": {"text_fragments": ["broken"]}},
+        {"pk": "ok", "caption": {"text": "example"}}
+    ]}
+    result = fetch_scrapeatlas_threads("example", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response(payload))
+    assert [post.external_id for post in result.posts] == ["ok"]
+
+
+@pytest.mark.parametrize("fetch", [fetch_scrapeatlas_threads, fetch_scrapeatlas_tiktok,
+                                  fetch_scrapeatlas_youtube, fetch_scrapeatlas_reddit, fetch_scrapeatlas_linkedin])
+def test_native_window_uses_documented_bounds_and_excludes_legacy_filters(fetch):
+    from urllib.parse import parse_qs, urlsplit
+    seen = []
+    def opener(request, timeout=0):
+        seen.append(parse_qs(urlsplit(request.full_url).query))
+        return Response({"success": True, "posts": [], "videos": [], "item_list": []})
+    fetch("topic", api_key="fixture", collected_at="2026-11-15T00:00:00Z", date_window_days=7, opener=opener)
+    assert seen[0]["since"] == ["2026-11-08T00:00:00Z"]
+    assert seen[0]["until"] == ["2026-11-15T00:00:00Z"]
+    assert "date_posted" not in seen[0]
+
+
+def test_not_found_preserves_explicit_charge():
+    def opener(request, timeout=0):
+        raise urllib.error.HTTPError(request.full_url, 404, "missing", {"x-credits-charged": "2"}, io.BytesIO(b"{}"))
+    result = fetch_scrapeatlas_threads("fixture", api_key="fixture", collected_at="2026-11-15T00:00:00Z", opener=opener)
+    assert result.calls[0].credits_charged == 2

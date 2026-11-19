@@ -8,7 +8,6 @@ import pytest
 
 from sentiment_monitor.providers import http as provider_http
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
-from sentiment_monitor.sources.scrapecreators import ScrapeCreatorsError, fetch_scrapecreators_json
 
 
 def test_redirect_handler_refuses_to_follow():
@@ -48,13 +47,3 @@ def test_scrapeatlas_treats_3xx_as_a_safe_failure():
     assert caught.value.http_status == 302
     assert caught.value.credits_charged == 1
     assert "evil" not in str(caught.value)
-
-
-def test_scrapecreators_treats_3xx_as_a_safe_failure():
-    def opener(request, timeout=0):
-        raise urllib.error.HTTPError(request.full_url, 307, "Temporary Redirect", {}, io.BytesIO(b""))
-
-    with pytest.raises(ScrapeCreatorsError) as caught:
-        fetch_scrapecreators_json("/v1/x", {"query": "x"}, "synthetic", opener=opener)
-    assert caught.value.http_status == 307
-    assert caught.value.code in ("http_3xx", "http_307")

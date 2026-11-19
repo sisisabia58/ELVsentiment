@@ -281,7 +281,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
       <section className="mx-auto max-w-[760px] pt-4 text-center lg:pt-10">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-[12px] font-medium text-muted-foreground shadow-card">
           <span className="h-1.5 w-1.5 rounded-full bg-positif" aria-hidden="true" />
-          {LAUNCH_PLATFORMS.length} sumber siap · hasil dalam ±30 detik
+          Hingga {LAUNCH_PLATFORMS.length} sumber · hasil dalam ±30 detik
         </span>
         <h2 className="mt-5 text-[28px] font-semibold leading-tight tracking-tight text-foreground lg:text-[36px]">
           Apa kata orang tentang merek Anda?
@@ -327,8 +327,8 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
           {[
             {
               icon: Search,
-              title: `Cari di ${LAUNCH_PLATFORMS.length} sumber`,
-              body: `${LAUNCH_SOURCE_SUMMARY} — semuanya sekaligus.`,
+              title: `Cari di hingga ${LAUNCH_PLATFORMS.length} sumber`,
+              body: `${LAUNCH_SOURCE_SUMMARY}. Facebook hanya mendukung tagar. Instagram dan X menggunakan indeks dengan cakupan terbatas.`,
             },
             {
               icon: MessageSquareText,

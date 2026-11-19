@@ -315,7 +315,7 @@ describe("SearchScreen", () => {
       expect(text, phrase).not.toContain(phrase);
     }
     expect(screen.queryByText("campuran")).toBeNull();
-    expect(screen.getByText("Cari di 7 sumber")).toBeTruthy();
+    expect(screen.getByText("Cari di hingga 8 sumber")).toBeTruthy();
     expect(screen.getByText("Baca komentar teratas")).toBeTruthy();
     expect(screen.getByText(/Balasan pada 3 pos teratas tiap sumber/)).toBeTruthy();
     expect(screen.queryByText(/paling disukai ikut diambil/)).toBeNull();
@@ -330,18 +330,17 @@ describe("SearchScreen", () => {
 
   it("describes and illustrates only the launch sources", () => {
     render(<SearchScreen history={[]} now="2026-11-16T10:00:00Z" />);
-    expect(screen.getByText("7 sumber siap · hasil dalam ±30 detik")).toBeTruthy();
-    expect(screen.getByText("Cari di 7 sumber")).toBeTruthy();
+    expect(screen.getByText("Hingga 8 sumber · hasil dalam ±30 detik")).toBeTruthy();
+    expect(screen.getByText("Cari di hingga 8 sumber")).toBeTruthy();
     expect(
       screen.getByText(
-        "Threads, Instagram, TikTok, YouTube, Facebook, Reddit, dan LinkedIn — semuanya sekaligus.",
+        "Threads, Instagram, TikTok, YouTube, Facebook, Reddit, LinkedIn, dan X. Facebook hanya mendukung tagar. Instagram dan X menggunakan indeks dengan cakupan terbatas.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/8 sumber/)).toBeNull();
+    expect(screen.queryByText(/9 sumber/)).toBeNull();
     expect(screen.queryByText(/Facebook, X, Reddit/)).toBeNull();
     expect(screen.queryByText(/dan web — semuanya/)).toBeNull();
     for (const button of screen.getAllByRole("button")) {
-      expect(within(button).queryByText("X")).toBeNull();
       expect(within(button).queryByText("W")).toBeNull();
     }
   });

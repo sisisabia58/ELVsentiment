@@ -57,6 +57,10 @@ export async function loadProviderSettings(
   const settings = { ...DEFAULT_PROVIDER_SETTINGS };
   for (const row of result.rows) {
     if (!isTarget(row.platform)) continue;
+    if (row.provider === "off") {
+      settings[row.platform] = { provider: "off", fallbackProvider: null, fallbackOnFailure: false };
+      continue;
+    }
     if (validationError(row.platform, row.provider, row.fallback_provider, row.fallback_on_failure)) {
       continue;
     }

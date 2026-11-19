@@ -25,15 +25,9 @@ def sources_allowed(root: Path, env: Mapping[str, str]) -> set[str]:
     if gate(root) != 0:
         return set()
 
-    allowed: set[str] = set()
-    if str(env.get("SCRAPECREATORS_API_KEY") or "").strip():
-        allowed.update(("threads", "instagram", "tiktok"))
-
-    x_budget = _read_json(root / "config" / "x-budget.json")
-    if x_budget.get("approved") is True and str(env.get("X_BEARER_TOKEN") or "").strip():
-        allowed.add("x")
-
-    return allowed
+    if str(env.get("SCRAPEATLAS_API_KEY") or "").strip():
+        return {"threads", "instagram", "tiktok"}
+    return set()
 
 
 def main() -> int:

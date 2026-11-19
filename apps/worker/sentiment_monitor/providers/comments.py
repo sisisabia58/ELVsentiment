@@ -16,7 +16,7 @@ from sentiment_monitor.providers.canonical import (
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
 from sentiment_monitor.providers.fetch import provider_api_key
 from sentiment_monitor.providers.scrapeatlas import ScrapeAtlasError, fetch_scrapeatlas_json
-from sentiment_monitor.sources.scrapecreators import unix_to_iso
+from sentiment_monitor.sources.normalization import unix_to_iso
 
 COMMENT_ENDPOINTS = {
     "threads": "/v1/threads/post/comments",
@@ -235,7 +235,7 @@ def fetch_comments(
                 route=route_id,
                 outcome="success",
                 http_status=error.http_status,
-                credits_charged=0,
+                credits_charged=error.credits_charged,
                 body_length=error.body_length,
                 latency_ms=latency_ms,
                 safe_detail="not_found",
@@ -268,4 +268,8 @@ def fetch_comments(
         latency_ms=latency_ms,
         safe_detail="ok",
     )
-    return CommentFetch(post_id, comments, call, "answered", "ok")
+    if not isinstance(raw_comments, list):
+        return CommentFetch(post_id, [], replace(call, outcome="failed", safe_detail="malformed_envelope"),
+                            "failed", "malformed_envelope")
+    detail = "partial_coverage" if status == "partial" else "ok"
+    return CommentFetch(post_id, comments, call, "answered", detail)

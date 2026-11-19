@@ -16,6 +16,7 @@ class Limits:
     worker_poll_seconds: int
     worker_heartbeat_stale_seconds: int
     cari_daily_search_limit: int
+    scheduled_requests_rolling_24h: int = 1500
 
 
 def load_limits(path: Path, env: dict[str, str] | None = None) -> Limits:
@@ -40,6 +41,7 @@ def load_limits(path: Path, env: dict[str, str] | None = None) -> Limits:
         max_jobs_per_tick=value("MAX_JOBS_PER_TICK", "max_jobs_per_tick"),
         worker_poll_seconds=value("WORKER_POLL_SECONDS", "worker_poll_seconds"),
         worker_heartbeat_stale_seconds=value("WORKER_HEARTBEAT_STALE_SECONDS", "worker_heartbeat_stale_seconds"),
+        scheduled_requests_rolling_24h=optional_value("SCHEDULED_REQUESTS_ROLLING_24H", "scheduled_requests_rolling_24h", value("THREADS_ROLLING_24H_RESERVE", "threads_rolling_24h_reserve")),
         cari_daily_search_limit=optional_value("CARI_DAILY_SEARCH_LIMIT", "cari_daily_search_limit", 20),
     )
     if limits.threads_rolling_24h_reserve > limits.threads_rolling_24h_platform:

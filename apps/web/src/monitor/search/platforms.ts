@@ -8,7 +8,7 @@ export type SearchPlatform =
   | "linkedin"
   | "x"
   | "web";
-export type ProviderId = "scrapecreators" | "scrapeatlas" | "official_x" | "off";
+export type ProviderId = "scrapeatlas" | "off";
 export type ProviderMode = "keyword" | "comments";
 export type SettingTarget = SearchPlatform | "comments";
 
@@ -43,9 +43,7 @@ export const SEARCH_PLATFORM_NAME: Record<SearchPlatform, string> = {
 };
 
 export const PROVIDER_NAME: Record<ProviderId, string> = {
-  scrapecreators: "ScrapeCreators",
   scrapeatlas: "ScrapeAtlas",
-  official_x: "X resmi",
   off: "Nonaktif",
 };
 

@@ -152,9 +152,7 @@ type ResultSeed = {
 
 async function insertResult(searchId: string, seed: ResultSeed): Promise<string> {
   const id = randomUUID();
-  const provider = seed.platform === "threads" || seed.platform === "tiktok" || seed.platform === "instagram"
-    ? "scrapecreators"
-    : "scrapeatlas";
+  const provider = "scrapeatlas";
   await client.query(
     `insert into instant_search_results
        (id, search_id, customer_id, platform, external_id, author_name, author_handle, url,
@@ -242,10 +240,10 @@ await insertSearch({
 });
 
 const completedSources: Array<[string, string, "answered" | "unavailable", number, number | null, string]> = [
-  ["threads", "scrapecreators", "answered", 2, 3200, "ok"],
-  ["tiktok", "scrapecreators", "answered", 2, 4800, "ok"],
+  ["threads", "scrapeatlas", "answered", 2, 3200, "ok"],
+  ["tiktok", "scrapeatlas", "answered", 2, 4800, "ok"],
   ["youtube", "scrapeatlas", "answered", 2, 2600, "ok"],
-  ["instagram", "scrapecreators", "answered", 1, 4100, "ok"],
+  ["instagram", "scrapeatlas", "answered", 1, 4100, "ok"],
   ["facebook", "scrapeatlas", "answered", 1, 5100, "ok"],
   ["linkedin", "scrapeatlas", "answered", 0, 3300, "ok"],
   ["reddit", "scrapeatlas", "unavailable", 0, null, "deadline"],
@@ -374,11 +372,11 @@ await insertSearch({
   summaryStatus: "pending",
 });
 const runningSources: Array<["answered" | "searching" | "queued" | "unavailable", string, string, number, number | null, string]> = [
-  ["answered", "threads", "scrapecreators", 1, 3200, "ok"],
-  ["answered", "tiktok", "scrapecreators", 1, 4800, "ok"],
+  ["answered", "threads", "scrapeatlas", 1, 3200, "ok"],
+  ["answered", "tiktok", "scrapeatlas", 1, 4800, "ok"],
   ["answered", "youtube", "scrapeatlas", 1, 2600, "ok"],
   ["answered", "facebook", "scrapeatlas", 0, 5100, "ok"],
-  ["searching", "instagram", "scrapecreators", 0, null, "searching"],
+  ["searching", "instagram", "scrapeatlas", 0, null, "searching"],
   ["unavailable", "reddit", "scrapeatlas", 0, null, "not_found"],
 ];
 for (const [state, platform, provider, count, latency, detail] of runningSources) {
@@ -436,9 +434,9 @@ await insertSearch({
   summaryStatus: "skipped",
 });
 for (const [platform, provider, count] of [
-  ["threads", "scrapecreators", 1],
-  ["tiktok", "scrapecreators", 1],
-  ["instagram", "scrapecreators", 0],
+  ["threads", "scrapeatlas", 1],
+  ["tiktok", "scrapeatlas", 1],
+  ["instagram", "scrapeatlas", 0],
   ["youtube", "scrapeatlas", 0],
   ["facebook", "scrapeatlas", 0],
   ["linkedin", "scrapeatlas", 0],
@@ -484,8 +482,8 @@ await insertSearch({
   summaryStatus: "skipped",
 });
 for (const [platform, provider, state] of [
-  ["threads", "scrapecreators", "unavailable"],
-  ["tiktok", "scrapecreators", "unavailable"],
+  ["threads", "scrapeatlas", "unavailable"],
+  ["tiktok", "scrapeatlas", "unavailable"],
   ["linkedin", "scrapeatlas", "unavailable"],
 ] as const) {
   await insertSource(footballId, platform, provider, state, 0, null, state === "failed" ? "timeout" : "http_5xx");

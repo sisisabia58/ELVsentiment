@@ -524,7 +524,7 @@ def test_oversized_credit_headers_are_unknown_and_do_not_leave_the_search_runnin
     assert [row["credits_charged"] for row in ledger] == [None, None], ledger
 
 
-def _seven_platform_fetch(*, poison_date: str | None = None, delay: float = 0.0):
+def _eight_platform_fetch(*, poison_date: str | None = None, delay: float = 0.0):
     from dataclasses import replace
     import time
 
@@ -552,12 +552,12 @@ def _seven_platform_fetch(*, poison_date: str | None = None, delay: float = 0.0)
 
 def _assert_isolated_search(prod_db, search_id: str, calls: list[str], *, youtube_state: str):
     view = prod_db.view(search_id)
-    assert view["ledger"] == 7, view
-    assert calls == ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"] or (
-        sorted(calls) == sorted(["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"])
+    assert view["ledger"] == 8, view
+    assert calls == ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x"] or (
+        sorted(calls) == sorted(["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x"])
     ), calls
     states = {row["platform"]: row for row in view["sources"]}
-    assert len(states) == 7, view
+    assert len(states) == 8, view
     assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
     for platform in ("threads", "tiktok", "instagram", "reddit", "facebook", "linkedin"):
         assert states[platform]["state"] == "answered", view
@@ -584,7 +584,7 @@ def _assert_isolated_search(prod_db, search_id: str, calls: list[str], *, youtub
 def test_far_offset_date_on_one_platform_does_not_abort_the_search(prod_db):
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
-    fetcher, calls = _seven_platform_fetch(poison_date="9999-12-31T23:59:59-14:00")
+    fetcher, calls = _eight_platform_fetch(poison_date="9999-12-31T23:59:59-14:00")
 
     processed = instant_search.run_instant_search_cycle(
         prod_db.connect,
@@ -595,7 +595,7 @@ def test_far_offset_date_on_one_platform_does_not_abort_the_search(prod_db):
     )
     assert processed == 1
     _assert_isolated_search(prod_db, search_id, calls, youtube_state="answered")
-    assert len(calls) == 7
+    assert len(calls) == 8
 
     again = instant_search.run_instant_search_cycle(
         prod_db.connect,
@@ -605,13 +605,13 @@ def test_far_offset_date_on_one_platform_does_not_abort_the_search(prod_db):
         fetcher=fetcher,
     )
     assert again == 0
-    assert len(calls) == 7
+    assert len(calls) == 8
 
 
 def test_normalisation_exception_on_one_post_keeps_its_siblings(prod_db, monkeypatch):
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
-    fetcher, calls = _seven_platform_fetch()
+    fetcher, calls = _eight_platform_fetch()
 
     original = instant_search._normalize
 
@@ -630,9 +630,9 @@ def test_normalisation_exception_on_one_post_keeps_its_siblings(prod_db, monkeyp
     )
     assert processed == 1
     view = prod_db.view(search_id)
-    assert view["ledger"] == 7, view
+    assert view["ledger"] == 8, view
     states = {row["platform"]: row for row in view["sources"]}
-    assert len(states) == 7, view
+    assert len(states) == 8, view
     assert not [row for row in view["sources"] if row["state"] in ("queued", "searching")], view
     for platform in ("threads", "tiktok", "instagram", "reddit", "facebook", "linkedin"):
         assert states[platform]["state"] == "answered", view
@@ -641,8 +641,8 @@ def test_normalisation_exception_on_one_post_keeps_its_siblings(prod_db, monkeyp
     assert states["youtube"]["state"] == "answered", view
     assert states["youtube"]["result_count"] == 2, view
     assert view["counts"].get("youtube") == 2, view
-    assert calls == ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"] or (
-        sorted(calls) == sorted(["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"])
+    assert calls == ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x"] or (
+        sorted(calls) == sorted(["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x"])
     ), calls
     assert view["search"]["status"] in ("succeeded", "partial"), view
 
@@ -745,23 +745,23 @@ def _poll_once(prod_db, fetcher, *, deadline_seconds=instant_search.SEARCH_DEADL
     executor.shutdown(wait=False, cancel_futures=True)
 
 
-def test_seven_platform_routes_run_in_one_wave(prod_db):
+def test_eight_platform_routes_run_in_one_wave(prod_db):
     import time
 
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
-    fetcher, calls = _seven_platform_fetch(delay=0.4)
+    fetcher, calls = _eight_platform_fetch(delay=0.4)
 
     started = time.monotonic()
     _poll_once(prod_db, fetcher)
     elapsed = time.monotonic() - started
     assert elapsed < 0.7, elapsed
     assert sorted(calls) == sorted(
-        ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin"]
+        ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x"]
     )
     view = prod_db.view(search_id)
     assert view["search"]["status"] == "succeeded", view
-    assert view["ledger"] == 7, view
+    assert view["ledger"] == 8, view
     assert view["counts"] == {
         "threads": 3,
         "tiktok": 3,
@@ -770,6 +770,7 @@ def test_seven_platform_routes_run_in_one_wave(prod_db):
         "reddit": 3,
         "facebook": 3,
         "linkedin": 3,
+        "x": 3,
     }, view
 
 
@@ -792,7 +793,7 @@ def test_search_finishes_by_its_own_deadline_not_claim_plus_budget(prod_db, monk
     started = time.monotonic()
     _poll_once(prod_db, slow, deadline_seconds=40)
     elapsed = time.monotonic() - started
-    assert len(calls) == 7
+    assert len(calls) == 8
     assert elapsed < 2.5, elapsed
     view = prod_db.view(search_id)
     assert view["search"]["status"] in ("partial", "failed"), view
@@ -839,6 +840,7 @@ _N1B_PLATFORMS = ("threads", "tiktok", "instagram", "youtube", "reddit", "facebo
 _N1B_SA_PLATFORMS = ("threads", "tiktok", "youtube", "reddit", "facebook", "linkedin")
 _N1B_LIST_KEY = {
     "threads": "posts",
+    "instagram": "posts",
     "tiktok": "item_list",
     "youtube": "videos",
     "reddit": "posts",
@@ -889,16 +891,7 @@ def _n1b_settings(mode: str) -> dict[str, ProviderSetting]:
         for name in DEFAULT_SETTINGS
     }
     for platform in _N1B_PLATFORMS:
-        if platform == "instagram" or (
-            mode == "SC" and platform in ("tiktok", "threads")
-        ):
-            settings[platform] = ProviderSetting(
-                platform=platform, provider="scrapecreators"
-            )
-        else:
-            settings[platform] = ProviderSetting(
-                platform=platform, provider="scrapeatlas"
-            )
+        settings[platform] = ProviderSetting(platform=platform, provider="scrapeatlas")
     return settings
 
 
@@ -912,6 +905,7 @@ def _n1b_recent(platform: str, now_ts: int) -> Any:
     iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
     return {
         "threads": now_ts,
+        "instagram": now_ts,
         "tiktok": now_ts,
         "facebook": now_ts,
         "youtube": iso,
@@ -923,6 +917,8 @@ def _n1b_recent(platform: str, now_ts: int) -> Any:
 def _n1b_item(platform: str, index: int, date: Any) -> dict[str, Any]:
     ident = f"id{index}"
     text = f"barayam enak {index}"
+    if platform == "instagram":
+        return {"id": ident, "taken_at_timestamp": date, "edge_media_to_caption": {"edges": [{"node": {"text": text}}]}}
     if platform == "threads":
         return {"pk": ident, "code": f"C{index}", "caption": {"text": text}, "user": {"username": "u"}, "taken_at": date, "like_count": 2}
     if platform == "tiktok":
@@ -936,40 +932,12 @@ def _n1b_item(platform: str, index: int, date: Any) -> dict[str, Any]:
     return {"id": ident, "description": text, "url": f"https://example.invalid/linkedin/{ident}", "datePublished": date, "likeCount": 2}
 
 
-def _n1b_sc_item(index: int, date: Any) -> dict[str, Any]:
-    ident = f"sc{index}"
-    text = f"barayam enak sc {index}"
-    return {
-        "aweme_id": ident,
-        "id": ident,
-        "pk": ident,
-        "code": f"C{ident}",
-        "desc": text,
-        "caption": {"text": text},
-        "text": text,
-        "create_time": date,
-        "taken_at": date,
-        "user": {"username": "u"},
-        "author": {"unique_id": "u", "uniqueId": "u"},
-        "statistics": {"play_count": 5, "digg_count": 2},
-        "like_count": 2,
-    }
 
 
 def _n1b_payload(platform: str, items: list[dict[str, Any]]) -> dict[str, Any]:
     return {"success": True, "status": "success", _N1B_LIST_KEY[platform]: items}
 
 
-def _n1b_sc_payload(items: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "success": True,
-        "search_item_list": items,
-        "aweme_list": items,
-        "posts": items,
-        "items": items,
-        "reels": items,
-        "data": items,
-    }
 
 
 @contextmanager
@@ -1009,24 +977,16 @@ def _n1b_run(
         platform = next(item for item in _N1B_PLATFORMS if item in url)
         calls[platform] = calls.get(platform, 0) + 1
         date = poisoned.get(platform)
-        if settings[platform].provider == "scrapeatlas":
-            items = [
-                _n1b_item(platform, 1, _n1b_recent(platform, now_ts)),
-                _n1b_item(platform, 2, _n1b_recent(platform, now_ts)),
-                _n1b_item(
-                    platform,
-                    3,
-                    date if platform in poisoned else _n1b_recent(platform, now_ts),
-                ),
-            ]
-            body = _n1b_payload(platform, items)
-        else:
-            items = [
-                _n1b_sc_item(1, now_ts),
-                _n1b_sc_item(2, now_ts),
-                _n1b_sc_item(3, date if platform in poisoned else now_ts),
-            ]
-            body = _n1b_sc_payload(items)
+        items = [
+            _n1b_item(platform, 1, _n1b_recent(platform, now_ts)),
+            _n1b_item(platform, 2, _n1b_recent(platform, now_ts)),
+            _n1b_item(
+                platform,
+                3,
+                date if platform in poisoned else _n1b_recent(platform, now_ts),
+            ),
+        ]
+        body = _n1b_payload(platform, items)
         return _N1BResponse(json.dumps(body).encode())
 
     env = {
@@ -1058,7 +1018,7 @@ def _n1b_run(
         insert into instant_searches
           (id, customer_id, query_text, keyword_intent, date_window, sort_mode,
            language_filter, status, created_at, deadline_at, retention_expires_at)
-        values (%s, %s, 'barayam', 'phrase', %s, 'relevance', 'all', 'queued',
+        values (%s, %s, 'barayam', 'hashtag', %s, 'relevance', 'all', 'queued',
                 now(), now() + interval '40 seconds', now() + interval '30 days')
         """,
         (search_id, prod_db.customer, window),
@@ -1154,18 +1114,6 @@ def test_far_dates_never_drop_a_platform_or_its_paid_ledger_row(
             baseline={**baseline_sa, "counts": {platform: 3 for platform in _N1B_PLATFORMS}},
             label=f"baseline SA {window} {tz}",
         )
-        baseline_sc, sc_before, sc_after, sc_reclaimed = _n1b_run(
-            prod_db, mode="SC", window=window, poisoned={}
-        )
-        _n1b_assert_isolated(
-            baseline_sc,
-            calls_before=sc_before,
-            calls_after=sc_after,
-            reclaimed=sc_reclaimed,
-            poisoned=set(),
-            baseline={**baseline_sc, "counts": {platform: 3 for platform in _N1B_PLATFORMS}},
-            label=f"baseline SC {window} {tz}",
-        )
         for date in _N1B_DATES:
             label = f"SA {window} {tz} {date!r}"
             sa_poison = {platform: date for platform in _N1B_PLATFORMS}
@@ -1182,20 +1130,6 @@ def test_far_dates_never_drop_a_platform_or_its_paid_ledger_row(
                 label=label,
             )
 
-            label = f"SC {window} {tz} {date!r}"
-            sc_poison = {"tiktok": date, "threads": date, "instagram": date}
-            view, calls_before, calls_after, reclaimed = _n1b_run(
-                prod_db, mode="SC", window=window, poisoned=sc_poison
-            )
-            _n1b_assert_isolated(
-                view,
-                calls_before=calls_before,
-                calls_after=calls_after,
-                reclaimed=reclaimed,
-                poisoned=set(sc_poison),
-                baseline=baseline_sc,
-                label=label,
-            )
 
 
 def test_no_fetch_is_launched_with_less_than_the_minimum_budget(prod_db):
@@ -1252,7 +1186,7 @@ def test_straggler_paid_call_reaches_the_ledger_after_the_deadline(prod_db, monk
     sources = {row["platform"]: row for row in view["sources"]}
     assert sources["youtube"]["state"] == "unavailable", view
     assert sources["youtube"]["safe_detail"] == "deadline", view
-    assert len(calls) == 7, calls
+    assert len(calls) == 8, calls
     assert view["ledger"] == len(calls), view
     ledger_platforms = prod_db.admin.execute(
         "select platform, count(*) as n from search_credit_ledger where search_id = %s group by platform",
@@ -1275,7 +1209,7 @@ def test_straggler_paid_call_reaches_the_ledger_after_the_deadline(prod_db, monk
         settings=dict(DEFAULT_SETTINGS),
     )
     assert again == 0
-    assert len(calls) == 7
+    assert len(calls) == 8
 
 
 def test_queued_search_past_its_deadline_is_ended_without_a_fetch(prod_db):

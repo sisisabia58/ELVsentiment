@@ -1,7 +1,6 @@
 """Provider capability matrix and default routing settings.
 
-The matrix is the code-level guard: a provider that is not listed for a
-platform/mode can never be selected and never enters a fallback chain.
+Only the documented provider for each platform and mode can be selected.
 """
 
 from __future__ import annotations

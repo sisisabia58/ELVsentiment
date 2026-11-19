@@ -78,29 +78,3 @@ def fetch_x_page(query: str, bearer_token: str, *, cursor: str | None, since: da
         query, bearer_token, cursor=cursor, since=since, limit=limit
     )
     return candidates
-
-
-from sentiment_monitor.sources.threads import ThreadsSource
-
-
-def fetch_threads_page(
-    query: str,
-    access_token: str,
-    *,
-    since: datetime | None,
-    limit: int,
-) -> tuple[list[Candidate], bool]:
-    page = ThreadsSource(access_token=access_token).fetch_page(query, limit=limit, since=since)
-    candidates = [
-        Candidate(
-            source="threads",
-            external_id=mention.id,
-            variant=query,
-            text=mention.text,
-            url=mention.url,
-            author=mention.author,
-            created_at=mention.created_at.isoformat(),
-        )
-        for mention in page.mentions
-    ]
-    return candidates, len(page.mentions) == max(1, min(limit, 100))

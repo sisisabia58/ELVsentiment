@@ -53,7 +53,8 @@ function ProviderRow(props: {
     );
   }
   const supported = validateProviderChoice(row.target, provider, null, false);
-  const warning = error || !supported ? ERROR_COPY.unsupported_provider : null;
+  const warning = error ? (ERROR_COPY[error] ?? ERROR_COPY.unsupported_provider)
+    : supported ? null : ERROR_COPY.unsupported_provider;
 
   function chooseProvider(value: ProviderId) {
     setProvider(value);

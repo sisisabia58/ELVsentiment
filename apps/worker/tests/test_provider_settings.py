@@ -74,3 +74,10 @@ def test_fallback_enabled_without_provider_is_ignored():
     settings = load_provider_settings(FakeConn(rows))
     assert settings["threads"].fallback_on_failure is False
     assert settings["threads"].provider == "scrapeatlas"
+
+
+def test_off_with_stale_fallback_stays_off_during_migration():
+    settings = load_provider_settings(FakeConn([{
+        "platform": "threads", "provider": "off", "fallback_provider": "scrapecreators", "fallback_on_failure": True
+    }]))
+    assert settings["threads"].provider == "off" and settings["threads"].fallback_provider is None

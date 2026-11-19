@@ -438,7 +438,7 @@ def test_runner_keeps_answered_sources_when_another_fails(db):
     )[0]["n"] == 1
     assert db.execute(
         "select count(*) as n from instant_search_sources where search_id=%s and state='failed'", (job.id,)
-    )[0]["n"] == 6
+    )[0]["n"] == 7
 
 
 def test_runner_all_failed_is_failed_and_inserts_no_results(db):
@@ -463,14 +463,16 @@ def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monke
         db, job, env={}, now=datetime.now(timezone.utc), settings=all_platform_settings(),
     )
     search = db.execute("select status, credits_used from instant_searches where id=%s", (job.id,))[0]
-    assert search["status"] == "succeeded"
+    assert search["status"] == "partial"
     assert search["credits_used"] == 0
     sources = db.execute(
         "select state, result_count, credits_charged, safe_detail from instant_search_sources where search_id=%s",
         (job.id,),
     )
+    assert len(sources) == 8
+    assert [row["safe_detail"] for row in sources if row["state"] == "unavailable"] == ["hashtag_only"]
+    sources = [row for row in sources if row["state"] == "answered"]
     assert len(sources) == 7
-    assert all(row["state"] == "answered" for row in sources)
     assert all(row["result_count"] == 3 for row in sources)
     assert all(row["credits_charged"] == 0 for row in sources)
     ranks = db.execute(
@@ -479,12 +481,12 @@ def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monke
     assert [row["rank"] for row in ranks] == list(range(1, len(ranks) + 1))
     ledger = db.execute("select count(*) as n from search_credit_ledger where search_id=%s", (job.id,))[0]["n"]
     # Seven search routes, plus one comment page for each of the top three posts
-    # on the six comment-capable platforms. Fixture calls charge nothing, and
+    # on the five responding comment-capable platforms. Fixture calls charge nothing, and
     # comment rows are not part of result_count.
-    assert ledger == 25
+    assert ledger == 22
     assert db.execute(
         "select count(*) as n from instant_search_comments where search_id=%s", (job.id,)
-    )[0]["n"] == 36
+    )[0]["n"] == 30
 
 
 def test_runner_applies_date_window_and_keeps_undated_last(db):
@@ -576,7 +578,7 @@ def test_runner_fetches_comments_for_at_most_three_posts_per_platform(db):
     posts = db.execute(
         "select count(*) as n from instant_search_results where search_id=%s", (job.id,)
     )[0]["n"]
-    assert posts == 21
+    assert posts == 24
     ledger = db.execute(
         "select count(*) as n from search_credit_ledger where search_id=%s and route='comments'",
         (job.id,),
