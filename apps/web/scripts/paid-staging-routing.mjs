@@ -16,6 +16,9 @@ const db = new pg.Client({connectionString: migrationUrl.href});
 try {
   await db.connect();
   await db.query("begin");
+  if (mode === "restore") {
+    await db.query("select pg_advisory_xact_lock(814158, 1)");
+  }
   if (mode === "audit" || mode === "restore") {
     const searchIds = process.argv.slice(3);
     if (searchIds.some((id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))) {
@@ -68,6 +71,7 @@ try {
         fallback_on_failure = excluded.fallback_on_failure,
         updated_by = excluded.updated_by,
         updated_at = excluded.updated_at;
+      delete from public.schema_migrations where filename = '015_scrapeatlas_routes.sql';
     `);
   }
   if (mode !== "audit") await db.query("alter table provider_settings force row level security");
