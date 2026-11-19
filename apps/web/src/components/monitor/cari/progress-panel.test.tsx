@@ -75,6 +75,18 @@ describe("ProgressPanel", () => {
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
   });
 
+  it("shows insufficient evidence as a settled AI step", () => {
+    render(
+      <ProgressPanel
+        snapshot={snapshot({ search: { ...snapshot().search, status: "succeeded", summaryStatus: "insufficient" } })}
+        aiEnabled
+        now={new Date("2026-11-16T09:00:05Z")}
+      />,
+    );
+    expect(screen.getByText("Dilewati · bukti belum cukup")).toBeTruthy();
+    expect(screen.queryByText("Menunggu · setelah komentar")).toBeNull();
+  });
+
   it("drives the AI step from the summary status", () => {
     const { rerender } = render(
       <ProgressPanel

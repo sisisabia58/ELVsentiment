@@ -166,9 +166,11 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
         ? "Menulis ringkasan"
         : summaryStatus === "failed"
           ? "Gagal · hasil tetap tampil"
-          : summaryStatus === "skipped"
-            ? "Dilewati"
-            : "Menunggu · setelah komentar";
+          : summaryStatus === "insufficient"
+            ? "Dilewati · bukti belum cukup"
+            : summaryStatus === "skipped"
+              ? "Dilewati"
+              : "Menunggu · setelah komentar";
   const summaryDone = summaryStatus === "done";
   const summaryRunning = summaryStatus === "running";
 

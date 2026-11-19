@@ -1351,3 +1351,39 @@ def test_one_retained_post_skips_the_model_and_marks_summary_insufficient(db):
     assert db.execute("select summary_status from instant_searches where id = %s", (job.id,))[0] == {
         "summary_status": "insufficient",
     }
+
+
+@pytest.mark.parametrize(("captions", "first_summary_status"), [
+    (["Barayam banyak antrean."], "insufficient"),
+    (["Barayam banyak antrean.", "Barayam ramai saat makan siang."], "running"),
+])
+def test_runner_publishes_a_terminal_search_with_summary_state(db, monkeypatch, captions, first_summary_status):
+    job = claim_instant_search(db, "worker-1")
+    seen = []
+    run = instant_search._Transactions.run
+
+    def observe(tx, operation):
+        value = run(tx, operation)
+        state = db.execute(
+            "select status, summary_status from instant_searches where id = %s", (job.id,),
+        )[0]
+        if state["status"] == "succeeded":
+            seen.append(state["summary_status"])
+        return value
+
+    monkeypatch.setattr(instant_search._Transactions, "run", observe)
+
+    def fetcher(platform, *args, **kwargs):
+        posts = [
+            replace(post(platform, f"fixture-{index}"), text=text, replies=0)
+            for index, text in enumerate(captions)
+        ]
+        return PlatformFetch(platform, posts=posts, state="answered")
+
+    run_instant_search(
+        db, job, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime(2026, 11, 16, tzinfo=timezone.utc),
+        settings={"youtube": DEFAULT_SETTINGS["youtube"]}, fetcher=fetcher, llm=FailingGemini(),
+    )
+
+    assert seen and seen[0] == first_summary_status
+    assert "pending" not in seen

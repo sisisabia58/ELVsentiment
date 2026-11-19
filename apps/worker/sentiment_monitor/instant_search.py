@@ -1218,8 +1218,7 @@ def run_instant_search(
             comment_status=comment_status,
             comment_detail=comment_detail,
         )
-        tx.run(lambda conn: finish_search(conn, job, "failed"))
-        _summarize_collected(tx, job, env=env, now=now, llm=llm)
+        _summarize_collected(tx, job, env=env, now=now, llm=llm, finish_collection=True)
     finally:
         # cancel() cannot stop a task that already started. Wait only for the
         # per-route bound, then stop waiting entirely: late results are
@@ -1480,6 +1479,23 @@ def summarize_search(
         _set_summary_status(conn, job, "failed")
 
 
+def _finish_and_prepare_summary(
+    conn: Any, job: InstantSearchJob, env: Mapping[str, Any],
+) -> tuple[EvidenceSample, dict[str, Any]] | None:
+    # A poll must never see a newly finished search with a still-pending summary.
+    finish_search(conn, job, "failed")
+    conn.execute("savepoint summary_preparation")
+    try:
+        prepared = _prepare_summary(conn, job, env)
+    except Exception:
+        conn.execute("rollback to savepoint summary_preparation")
+        _set_summary_status(conn, job, "failed")
+        _info(job.id, summary_detail="error")
+        prepared = None
+    conn.execute("release savepoint summary_preparation")
+    return prepared
+
+
 def _summarize_collected(
     tx: _Transactions,
     job: InstantSearchJob,
@@ -1487,14 +1503,18 @@ def _summarize_collected(
     env: Mapping[str, Any],
     now: datetime,
     llm: Any,
+    finish_collection: bool = False,
 ) -> None:
-    """Commit 'running' before the model call. Never raise into the search runner."""
+    """Commit the summary state before calling the model."""
     del now
+    prepare = _finish_and_prepare_summary if finish_collection else _prepare_summary
     try:
-        prepared = tx.run(lambda conn: _prepare_summary(conn, job, env))
+        prepared = tx.run(lambda conn: prepare(conn, job, env))
     except Exception:
         if tx.shared is not None:
             _rollback_quiet(tx.shared)
+        if finish_collection:
+            raise
         try:
             tx.run(lambda conn: _set_summary_status(conn, job, "failed"))
         except Exception:
