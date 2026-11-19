@@ -43,7 +43,7 @@ def _post() -> CanonicalPost:
     return CanonicalPost(
         platform="threads",
         external_id="th-1",
-        text="antrean panjang",
+        text="Barayam antrean panjang",
         title=None,
         author_name="Rina",
         author_handle="rina",

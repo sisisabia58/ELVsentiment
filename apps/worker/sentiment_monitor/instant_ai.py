@@ -6,9 +6,10 @@ from collections import deque
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Any
+from typing import Any, Iterator
 
-from sentiment_monitor.relevance import literal_match_status, normalize_match_text
+from sentiment_monitor.providers.canonical import MAX_TEXT_LENGTH, MAX_TITLE_LENGTH, text_relevance
+from sentiment_monitor.relevance import normalize_match_text
 
 SUMMARY_MAX_INPUT_CHARS = 60_000
 # Use a shared data budget with room for either task and the delimited query.
@@ -151,34 +152,81 @@ def _quote_text(value: Any) -> str:
 _CONTEXT_STOP_WORDS = set(
     "ada aja atau akan antara banget baru beli bisa buat dari dengan dalam dan di dong enak ini itu juga "
     "jadi kalau kami karena ke kok lagi lain lebih masih mau nih pada paling pernah pesan sekarang sama "
-    "saya sudah tapi tempat terus tidak untuk yang yg the and are can for from have how is it that "
+    "saya sudah tapi tempat terus tidak untuk yang yg jual jualan menjual dijual jalan alamat "
+    "membeli berjualan toko bisnis usaha the and are can for from have how is it that "
     "this was were what when where with you your".split()
 )
-# Colloquial replies can refer to a rail service by mode instead of the line name.
-_CONTEXT_ALIASES = dict.fromkeys(("mrt", "lrt", "krl", "kereta"), "kereta")
+_EXTERNAL_BUSINESS_TERMS = {"kafe", "cafe", "café", "kedai", "warung", "donasi", "endorse"}
+_RAIL_TERMS = {"mrt", "lrt", "krl", "kereta"}
+_TRAVEL_CONTEXT = {"komuter", "mengejar", "naik", "penumpang", "stasiun", "transit", "turun"}
+_URL_OR_MENTION = re.compile(r"https?://\S+|@\w+", re.IGNORECASE)
 
 
 def _context_words(text: str) -> set[str]:
-    cleaned = re.sub(r"https?://\S+|@\w+", " ", normalize_match_text(text))
-    return set(re.findall(r"[^\W\d_]+", cleaned))
+    return set(re.findall(r"[^\W\d_]+", normalize_match_text(text)))
 
 
 def _reply_relevance(reply: str, parent: str, query: str, intent: str) -> int:
+    reply = _URL_OR_MENTION.sub(" ", reply)
     words = _context_words(reply)
     query_words = _context_words(query)
-    if len(words) < 2 or not words.difference(query_words, _CONTEXT_STOP_WORDS):
-        return 0
-    if literal_match_status(reply, query, intent) == "literal_match":
-        return 3
-    # One generic query word (for example, "kopi") provides no reply context.
     terms = words.difference(query_words, _CONTEXT_STOP_WORDS)
-    parent_terms = _context_words(parent).difference(query_words, _CONTEXT_STOP_WORDS)
+    if len(words) < 2 or not terms:
+        return 0
+    if text_relevance(reply, None, query, intent) != "no_match":
+        return 3
+    parent_words = _context_words(_URL_OR_MENTION.sub(" ", parent))
+    if _EXTERNAL_BUSINESS_TERMS.intersection(words - parent_words):
+        return 0
+    parent_terms = parent_words.difference(query_words, _CONTEXT_STOP_WORDS)
     overlap = terms.intersection(parent_terms)
     if any(len(word) >= 4 for word in overlap) or len(overlap) >= 2:
         return 2
-    # Keep contextual paraphrases when the reply adds another concrete word.
-    aliases = {_CONTEXT_ALIASES[word] for word in terms if word in _CONTEXT_ALIASES}
-    return int(len(terms) >= 2 and any(_CONTEXT_ALIASES.get(word) in aliases for word in parent_terms))
+    # A commuter can refer to a rail service by mode instead of the line name.
+    return int(bool(terms & _RAIL_TERMS and parent_terms & _RAIL_TERMS and words & _TRAVEL_CONTEXT))
+
+
+def _word_char(value: str) -> bool:
+    return value.isalnum() or value == "_"
+
+
+def _excerpt_windows(value: str, limit: int) -> Iterator[str]:
+    """Keep contiguous text, with overlapping windows to avoid splitting a match."""
+    if len(value) <= limit:
+        yield value
+        return
+    for offset in range(0, len(value), limit // 2):
+        start = offset
+        end = min(start + limit, len(value))
+        while start < end and start > 0 and _word_char(value[start - 1]) and _word_char(value[start]):
+            start += 1
+        while end > start and end < len(value) and _word_char(value[end - 1]) and _word_char(value[end]):
+            end -= 1
+        if offset == 0 or end > start:
+            yield value[start:end].strip()
+        if end == len(value):
+            break
+
+
+def _post_excerpts(row: dict[str, Any], query: str, intent: str) -> tuple[str, str] | None:
+    text = _text(row.get("text"), MAX_TEXT_LENGTH)
+    title = _text(row.get("title"), MAX_TITLE_LENGTH)
+    if text_relevance(text, title, query, intent) == "no_match":
+        return None
+
+    texts = _excerpt_windows(text, 1_200)
+    titles = _excerpt_windows(title, 360)
+    first_text = next(texts)
+    first_title = next(titles)
+    if text_relevance(first_text, first_title, query, intent) != "no_match":
+        return first_text, first_title
+    for excerpt in texts:
+        if text_relevance(excerpt, first_title, query, intent) != "no_match":
+            return excerpt, first_title
+    for excerpt in titles:
+        if text_relevance(first_text, excerpt, query, intent) != "no_match":
+            return first_text, excerpt
+    return None
 
 
 def _json(value: Any) -> str:
@@ -189,13 +237,17 @@ def sample_evidence(data: SummaryInput) -> EvidenceSample:
     """Keep a balanced set of posts, then add their best relevant replies."""
     by_platform: dict[str, deque[dict[str, Any]]] = {}
     for row in data.results:
+        excerpts = _post_excerpts(row, data.query, data.intent)
+        if excerpts is None:
+            continue
+        text, title = excerpts
         post = {
             "id": _text(row.get("id"), 100),
             "platform": _text(row.get("platform"), 40),
             "author": _text(row.get("author"), 200),
             "published_at": _text(row.get("published_at"), 40) or None,
-            "text": _text(row.get("text"), 1_200),
-            "title": _text(row.get("title"), 360) or None,
+            "text": text,
+            "title": title or None,
             "comments": [],
         }
         if post["id"] and post["platform"] and (post["text"] or post["title"]):

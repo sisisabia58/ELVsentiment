@@ -1188,7 +1188,7 @@ def test_questions_need_completed_current_search_evidence(db, status, version, f
 
 def test_question_stores_known_citations_and_drops_the_rest(db):
     job = claim_instant_search(db, "worker-1")
-    insert_posts(db, job, [replace(post("threads", "th-1"), text="antrean panjang")])
+    insert_posts(db, job, [replace(post("threads", "th-1"), text="Barayam antrean panjang")])
     finish_search(db, job, "succeeded")
     result_id = db.execute(
         "select id from instant_search_results where search_id=%s", (job.id,)

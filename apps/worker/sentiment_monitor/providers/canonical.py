@@ -164,20 +164,25 @@ def _has_entity_anchor(
     return False
 
 
-def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase") -> Relevance:
-    for candidate in (post.text or "", post.title or ""):
-        if literal_match_status(
-            candidate, keyword, intent, hashtags=post.hashtags
-        ) == "literal_match":
+def text_relevance(
+    text: str, title: str | None, keyword: str, intent: str = "phrase", *,
+    hashtags: tuple[str, ...] = (),
+) -> Relevance:
+    for candidate in (text, title or ""):
+        if literal_match_status(candidate, keyword, intent, hashtags=hashtags) == "literal_match":
             return "literal_match"
     tokens = normalize_match_text(keyword).split()
     if tokens:
-        haystack = normalize_match_text(f"{post.text or ''} {post.title or ''}")
+        haystack = normalize_match_text(f"{text} {title or ''}")
         if all(_word_pattern(token).search(haystack) for token in tokens) or _has_entity_anchor(
-            tokens, haystack, post.hashtags, intent
+            tokens, haystack, hashtags, intent
         ):
             return "all_words_match"
     return "no_match"
+
+
+def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase") -> Relevance:
+    return text_relevance(post.text or "", post.title, keyword, intent, hashtags=post.hashtags)
 
 
 MAX_DB_COUNT = 2**63 - 1

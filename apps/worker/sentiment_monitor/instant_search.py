@@ -1328,8 +1328,7 @@ def _load_summary_input(conn: Any, job: InstantSearchJob) -> EvidenceSample | No
         }
         for row in comments
     ]
-    sample = sample_evidence(SummaryInput(job.id, job.query, results, replies, job.intent))
-    return sample if sample.refs else None
+    return sample_evidence(SummaryInput(job.id, job.query, results, replies, job.intent))
 
 
 def _store_summary(
@@ -1697,7 +1696,7 @@ def _answer_question(
             _fail_question(conn, question_id, "not_found", now)
             return "failed"
         prepared = _load_summary_input(conn, job)
-        if prepared is None:
+        if prepared is None or not prepared.refs:
             _fail_question(conn, question_id, "no_evidence", now)
             return "failed"
         client = llm if llm is not None else _create_llm(
