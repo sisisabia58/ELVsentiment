@@ -146,6 +146,24 @@ function int(value: number | string | null | undefined): number {
   return Number(value ?? 0) || 0;
 }
 
+function engagementScore(result: SnapshotResult): bigint {
+  return BigInt(result.views ?? 0)
+    + BigInt(3) * BigInt(result.likes ?? 0)
+    + BigInt(2) * BigInt(result.replies ?? 0)
+    + BigInt(2) * BigInt(result.shares ?? 0);
+}
+
+function compareLegacyRelevance(a: SnapshotResult, b: SnapshotResult): number {
+  if (!a.publishedAt || !b.publishedAt) return Number(!a.publishedAt) - Number(!b.publishedAt);
+  const relevance = Number(a.relevance !== "literal_match") - Number(b.relevance !== "literal_match");
+  if (relevance !== 0) return relevance;
+  const left = engagementScore(a);
+  const right = engagementScore(b);
+  if (left !== right) return left > right ? -1 : 1;
+  if (a.externalId === b.externalId) return 0;
+  return a.externalId < b.externalId ? -1 : 1;
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function isUuid(value: unknown): value is string {
@@ -262,8 +280,7 @@ export async function loadSearchSnapshot(
       });
     }
     if (!currentRelevance && row.sort_mode === "relevance") {
-      results.sort((a, b) => Number(!a.publishedAt) - Number(!b.publishedAt)
-        || (a.publishedAt && b.publishedAt ? Number(a.relevance !== "literal_match") - Number(b.relevance !== "literal_match") : 0));
+      results.sort(compareLegacyRelevance);
     }
     const order = new Map(PLATFORM_ORDER.map((platform, index) => [platform, index]));
     const sources: SnapshotSource[] = sourceRows.rows

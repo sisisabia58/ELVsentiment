@@ -1652,7 +1652,8 @@ def _fail_question(conn: Any, question_id: str, detail: str, now: datetime) -> N
 def _load_question_job(conn: Any, search_id: str, customer_id: str) -> InstantSearchJob | None:
     rows = conn.execute(
         "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
-        "language_filter, deadline_at from instant_searches where id = %s and customer_id = %s",
+        "language_filter, deadline_at from instant_searches "
+        "where id = %s and customer_id = %s and status in ('succeeded', 'partial')",
         (search_id, customer_id),
     ) or []
     if not rows:

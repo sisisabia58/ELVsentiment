@@ -57,6 +57,7 @@ Names only; set real values in Railway. Do not commit values.
 - `CARI_DAILY_SEARCH_LIMIT` — optional per-customer daily instant-search cap (web and worker, default 20).
 
 The web service pre-deploy command is `node src/db/migrate-cli.mjs`.
+Wait for the web migration step to apply `017_instant_search_relevance.sql` before starting the revised Railway worker. When deploying the worker independently, run the web migration command first. The worker service starts the scheduler directly.
 
 ## Harken
 

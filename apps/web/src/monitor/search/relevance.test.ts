@@ -15,4 +15,8 @@ describe("saved search evidence relevance", () => {
   it("cannot infer a hashtag from unavailable provider metadata", () => {
     expect(savedEvidenceRelevance({ text: "Mesinnya kosong lagi.", title: null }, "tukuliling kopi", "phrase")).toBeNull();
   });
+
+  it("requires rerunning a legacy match that depends on Greek iota-subscript case folding", () => {
+    expect(savedEvidenceRelevance({ text: "ᾼρτος", title: null }, "αιρτος", "phrase")).toBeNull();
+  });
 });

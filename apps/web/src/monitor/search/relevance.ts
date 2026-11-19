@@ -11,13 +11,14 @@ const rules = JSON.parse(readFileSync(
     ? path.join(configDir, "cari-relevance.json")
     : path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../../../config/cari-relevance.json"),
   "utf8",
-)) as { descriptors: string[]; generic_terms: string[]; minimum_plain_anchor_length: number };
+)) as { entity_descriptors: Record<string, string[]> };
 
-const descriptors = new Set(rules.descriptors);
-const genericTerms = new Set(rules.generic_terms);
+const entityDescriptors = new Map(Object.entries(rules.entity_descriptors));
 const word = "[\\p{L}\\p{N}_]";
 
 function normalize(value: string): string {
+  // Legacy checks use ECMAScript lowercasing and handle sharp S and Greek sigma
+  // equivalence. Full Python case folding, including iota subscripts, needs a rerun.
   return value.normalize("NFKC").toLowerCase().replace(/ß/g, "ss").replace(/ς/g, "σ").trim().replace(/\s+/gu, " ");
 }
 
@@ -30,12 +31,12 @@ function compact(value: string, foldAccents = false): string {
   return (foldAccents ? value.normalize("NFKD").replace(/\p{M}/gu, "") : value).replace(/[^\p{L}\p{N}_]/gu, "");
 }
 
-function hasAnchor(words: string[], body: string, tags: string[]): boolean {
+function hasAnchor(words: string[], body: string): boolean {
   if (words.length !== 2) return false;
-  const [anchor, descriptor] = descriptors.has(words[0]) ? [words[1], words[0]] : words;
-  if (!descriptors.has(descriptor) || descriptors.has(anchor) || genericTerms.has(anchor)) return false;
-  if (!/^[\p{L}\p{N}]+$/u.test(anchor)) return false;
-  return ([...anchor].length >= rules.minimum_plain_anchor_length && whole(anchor).test(body)) || tags.includes(anchor);
+  const [left, right] = words;
+  return [[left, right], [right, left]].some(([anchor, descriptor]) => (
+    entityDescriptors.get(anchor)?.includes(descriptor) && whole(anchor).test(body)
+  ));
 }
 
 // Legacy rows retain captions/titles but not provider hashtag metadata. Recheck
@@ -57,6 +58,6 @@ export function savedEvidenceRelevance(
   const body = candidates.join(" ").trim();
   const words = keyword.split(" ");
   if (words.every((token) => whole(token.replace(/^#/, "")).test(body))
-      || (intent === "phrase" && hasAnchor(words, body, tags))) return "all_words_match";
+      || (intent === "phrase" && hasAnchor(words, body))) return "all_words_match";
   return null;
 }

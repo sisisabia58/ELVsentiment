@@ -12,7 +12,7 @@ from typing import Iterable, Literal
 import urllib.parse
 
 from sentiment_monitor.paths import repo_root
-from sentiment_monitor.relevance import hashtags_in_text, literal_match_status, normalize_match_text
+from sentiment_monitor.relevance import literal_match_status, normalize_match_text
 
 PlatformId = Literal[
     "threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x", "web"
@@ -145,31 +145,23 @@ def _word_pattern(token: str) -> re.Pattern[str]:
 
 
 _ANCHOR_RULES = json.loads((repo_root() / "config" / "cari-relevance.json").read_text(encoding="utf-8"))
-_ENTITY_DESCRIPTORS = frozenset(_ANCHOR_RULES["descriptors"])
-_GENERIC_TERMS = frozenset(_ANCHOR_RULES["generic_terms"])
-_MIN_PLAIN_ANCHOR_LENGTH = _ANCHOR_RULES["minimum_plain_anchor_length"]
+_ENTITY_DESCRIPTORS: dict[str, list[str]] = _ANCHOR_RULES["entity_descriptors"]
 
 
 def _has_entity_anchor(
     tokens: list[str], text: str, hashtags: tuple[str, ...], intent: str,
 ) -> bool:
-    # Relax only a single category descriptor alongside one distinct name.
-    # Short names need an explicit hashtag to avoid treating common words as brands.
+    # Only verified entity aliases can stand in for a full query phrase.
     if intent != "phrase" or len(tokens) != 2:
         return False
-    anchor, descriptor = tokens
-    if anchor in _ENTITY_DESCRIPTORS:
-        anchor, descriptor = descriptor, anchor
-    if descriptor not in _ENTITY_DESCRIPTORS or anchor in _ENTITY_DESCRIPTORS | _GENERIC_TERMS:
-        return False
-    if not anchor.isalnum():
-        return False
-    if len(anchor) >= _MIN_PLAIN_ANCHOR_LENGTH and _word_pattern(anchor).search(text):
-        return True
-    return any(
-        normalize_match_text(tag).removeprefix("#") == anchor
-        for tag in (*hashtags_in_text(text), *hashtags)
-    )
+    left, right = tokens
+    for anchor, descriptor in ((left, right), (right, left)):
+        if descriptor in _ENTITY_DESCRIPTORS.get(anchor, ()) and (
+            _word_pattern(anchor).search(text)
+            or any(normalize_match_text(tag).removeprefix("#") == anchor for tag in hashtags)
+        ):
+            return True
+    return False
 
 
 def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase") -> Relevance:

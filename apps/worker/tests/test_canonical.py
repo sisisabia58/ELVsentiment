@@ -54,6 +54,10 @@ def test_search_relevance_requires_the_entity_or_all_topic_words(example):
     assert keyword_relevance(item, example["query"], example["intent"]) == example["expected"]
 
 
+def test_collected_search_accepts_greek_iota_subscript_case_folding():
+    assert keyword_relevance(post(text="ᾼρτος"), "αιρτος") == "literal_match"
+
+
 def test_identity_falls_back_to_normalized_url_and_rejects_blanks():
     assert post_identity(post(external_id="  ", url="https://Example.com/p/1/?utm=x")) == (
         "threads", "url:https://example.com/p/1"

@@ -112,9 +112,10 @@ describe("loadSearchSnapshot", () => {
     const evidence = [
       { externalId: "weak", text: "Kopi keliling lewat tiap pagi", relevance: "no_match", rank: 1 },
       { externalId: "unverifiable", text: "", relevance: "literal_match", rank: 2 },
-      { externalId: "anchor", text: "Ada Tukuliling di MRT Blok M.", relevance: "no_match", rank: 3 },
-      { externalId: "exact", text: "Mari ke MRT. ＃ＴｕｋｕｌｉｌｉｎｇＫｏｐｉ", relevance: "literal_match", rank: 4 },
-      { externalId: "wrong", text: "Hanya Kopi Sekarputih", relevance: "all_words_match", rank: 5, platform: "youtube" },
+      { externalId: "old-match", text: "Kopi di mesin Tukuliling.", relevance: "all_words_match", rank: 3, likes: 1 },
+      { externalId: "anchor", text: "Ada Tukuliling di MRT Blok M.", relevance: "no_match", rank: 4, likes: 100 },
+      { externalId: "exact", text: "Mari ke MRT. ＃ＴｕｋｕｌｉｌｉｎｇＫｏｐｉ", relevance: "literal_match", rank: 5 },
+      { externalId: "wrong", text: "Hanya Kopi Sekarputih", relevance: "all_words_match", rank: 6, platform: "youtube" },
     ];
     for (const [index, item] of evidence.entries()) {
       const id = "77777777-7777-4777-8777-77777777777" + index;
@@ -126,7 +127,7 @@ describe("loadSearchSnapshot", () => {
         ["88888888-8888-4888-8888-88888888888" + index, SEARCH, CUSTOMER, id, "reply-" + item.externalId],
       );
     }
-    await insertSource(db, SEARCH, CUSTOMER, "threads", "answered", 4);
+    await insertSource(db, SEARCH, CUSTOMER, "threads", "answered", 5);
     await insertSource(db, SEARCH, CUSTOMER, "youtube", "answered", 1);
     await db.query("update instant_searches set summary_status = 'done' where id = $1", [SEARCH]);
     await db.query(
@@ -147,19 +148,19 @@ describe("loadSearchSnapshot", () => {
     const old = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
     expect(old?.search).toMatchObject({ legacyEvidence: true, summaryStatus: "skipped", overallStance: null });
     expect(old?.results.map((item) => [item.externalId, item.relevance])).toEqual([
-      ["exact", "literal_match"], ["anchor", "all_words_match"],
+      ["exact", "literal_match"], ["anchor", "all_words_match"], ["old-match", "all_words_match"],
     ]);
-    expect(old?.comments.map((item) => item.externalId)).toEqual(["reply-anchor", "reply-exact"]);
-    expect(old?.totals).toEqual({ sources: 2, done: 2, results: 2 });
-    expect(old?.sources.map((source) => [source.platform, source.resultCount])).toEqual([["threads", 2], ["youtube", 0]]);
+    expect(old?.comments.map((item) => item.externalId)).toEqual(["reply-old-match", "reply-anchor", "reply-exact"]);
+    expect(old?.totals).toEqual({ sources: 2, done: 2, results: 3 });
+    expect(old?.sources.map((source) => [source.platform, source.resultCount])).toEqual([["threads", 3], ["youtube", 0]]);
     expect(old?.ai).toBeNull();
     expect(old?.questions).toEqual([]);
-    expect((await loadHistory(db, CUSTOMER))[0]).toMatchObject({ resultCount: 2, sourceCount: 2, stance: null });
+    expect((await loadHistory(db, CUSTOMER))[0]).toMatchObject({ resultCount: 3, sourceCount: 2, stance: null });
     expect(await loadSearchSnapshot(db, OTHER_CUSTOMER, SEARCH)).toBeNull();
 
     expect((await db.query("select raw_ref, relevance from instant_search_results where search_id = $1 order by rank", [SEARCH])).rows)
       .toEqual(evidence.map((item) => ({ raw_ref: "fixture:" + item.externalId, relevance: item.relevance })));
-    expect((await db.query("select count(*)::int as n from instant_search_comments")).rows).toEqual([{ n: 5 }]);
+    expect((await db.query("select count(*)::int as n from instant_search_comments")).rows).toEqual([{ n: 6 }]);
     expect((await db.query("select summary_status from instant_searches")).rows).toEqual([{ summary_status: "done" }]);
     expect((await db.query("select overall_summary from instant_search_ai")).rows).toEqual([{ overall_summary: "Ringkasan lama" }]);
     expect((await db.query("select answer from instant_search_questions")).rows).toEqual([{ answer: "Jawaban lama" }]);

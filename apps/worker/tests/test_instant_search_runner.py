@@ -1143,11 +1143,14 @@ def test_question_failure_does_not_change_the_search(db):
     assert row["safe_detail"] == "http_500"
 
 
-def test_legacy_questions_cannot_send_old_search_evidence_to_the_model(db):
+@pytest.mark.parametrize(
+    ("status", "version", "failure"),
+    [("succeeded", 0, "no_evidence"), ("running", 1, "not_found")],
+)
+def test_questions_need_completed_current_search_evidence(db, status, version, failure):
     job = claim_instant_search(db, "worker-1")
     insert_posts(db, job, [post()])
-    finish_search(db, job, "succeeded")
-    db.execute("update instant_searches set relevance_version = 0 where id = %s", (job.id,))
+    db.execute("update instant_searches set status = %s, relevance_version = %s where id = %s", (status, version, job.id))
     question_id = "33333333-3333-4333-8333-333333333333"
     _queue_question(db, "Apa keluhan utama?", question_id)
     called = []
@@ -1155,13 +1158,13 @@ def test_legacy_questions_cannot_send_old_search_evidence_to_the_model(db):
     class Model:
         def generate_json(self, **kwargs):
             called.append(kwargs)
-            raise AssertionError("legacy search should require a fresh run")
+            raise AssertionError("questions require completed current search evidence")
 
     run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Model())
     assert called == []
     assert db.execute(
         "select status, safe_detail from instant_search_questions where id = %s", (question_id,),
-    ) == [{"status": "failed", "safe_detail": "no_evidence"}]
+    ) == [{"status": "failed", "safe_detail": failure}]
 
 
 def test_question_stores_known_citations_and_drops_the_rest(db):
