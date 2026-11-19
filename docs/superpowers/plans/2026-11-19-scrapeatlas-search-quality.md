@@ -1,18 +1,23 @@
 # ScrapeAtlas Search Quality Implementation Plan
 
-> **For agentic workers**  
+> **For agentic workers**
+>
 > Use Superpowers' executing-plans skill for inline implementation or its subagent-driven-development skill for delegated implementation. Track progress using the checkboxes below.
 
-**Goal**  
+**Goal**
+
 Make ScrapeAtlas the sole external collection provider and keep weak matches out of Cari Sekarang results and AI evidence.
 
-**Architecture**  
+**Architecture**
+
 Choose documented ScrapeAtlas routes using paired query evaluations. Reuse the normalized post types across instant search and scheduled collection while preserving their separate deadlines, budgets, and persistence contracts. Apply one query relevance policy before display, comment enrichment, and AI evidence selection.
 
-**Tech stack**  
+**Tech stack**
+
 Python worker, Next.js web app, PostgreSQL, pytest, Vitest, and Chromium.
 
-**Product decisions**  
+**Product decisions**
+
 Hide weak matches completely. Retire ScrapeCreators and centralize collection on ScrapeAtlas. Keep the summary concise, in Indonesian, and grounded in evidence about the actual query. The previous local filter fix remains part of pre-deployment QA.
 
 ## What we verified
@@ -26,7 +31,8 @@ Hide weak matches completely. Retire ScrapeCreators and centralize collection on
 
 ## Task 1 — Benchmark retrieval before choosing routes
 
-**Inspect**  
+**Inspect**
+
 `config/cari-providers.json`, `apps/worker/sentiment_monitor/providers/scrapeatlas_sources.py`, `apps/worker/sentiment_monitor/providers/fetch.py`, and the read-only route ledger for the reported instant search if its ID is available.
 
 - [ ] Record the dashboard's visible post IDs or canonical URLs from the supplied examples and label them for `tukuliling kopi`. Add `kopi keliling` as a generic control and an uncommon synthetic query as a zero-match control.
@@ -36,7 +42,8 @@ Hide weak matches completely. Retire ScrapeCreators and centralize collection on
 
 ## Task 2 — Centralize collection and migrate routing
 
-**Modify**  
+**Modify**
+
 `config/cari-providers.json`, worker `providers/capabilities.py`, `providers/fetch.py`, `providers/scrapeatlas_sources.py`, `providers/comments.py` as needed, scheduled collection through `scheduler.py`, `collect_once.py` and `sources/`, web `monitor/search/platforms.ts`, `monitor/search/provider-settings.ts`, provider settings UI, deployment configuration, README, and environment examples. Add a provider-settings migration after the current migration head.
 
 - [ ] Add adapter contract tests backed by sanitized responses. Pin URLs, parameter names, cursor semantics, and canonical output including IDs, timestamps, engagement, media, and comments. Test failures, empty responses, and malformed records independently.
@@ -46,7 +53,8 @@ Hide weak matches completely. Retire ScrapeCreators and centralize collection on
 
 ## Task 3 — Reject weak matches before storage or enrichment
 
-**Modify**  
+**Modify**
+
 `apps/worker/sentiment_monitor/providers/canonical.py`, `apps/worker/sentiment_monitor/instant_search.py`, `apps/web/src/monitor/search/load.ts` if needed for saved searches, and the Cari results and progress components.
 
 - [ ] Add regression fixtures for direct brand mentions, `#tukuliling`, branded variants, generic coffee captions, unrelated cafés, and generic `kopi keliling` results. Include the sample where `Tukuliling` appears without `kopi`. Keep query interpretation general and test a second brand, a hashtag, and a generic multiword query.
@@ -56,7 +64,8 @@ Hide weak matches completely. Retire ScrapeCreators and centralize collection on
 
 ## Task 4 — Generate a concise, grounded Indonesian summary
 
-**Modify**  
+**Modify**
+
 `apps/worker/sentiment_monitor/instant_search.py` evidence loading and `instant_ai.py` prompts and validation. Update `ai-summary.tsx`, `conversation-breakdown.tsx`, `quote-source.ts`, and their tests under `apps/web/src/components/monitor/cari/` as needed.
 
 - [ ] Test mixed input with useful replies, off-topic replies under relevant posts, noisy platforms, and too little evidence. Reject references outside the retained evidence sample and retain exact quote validation.
