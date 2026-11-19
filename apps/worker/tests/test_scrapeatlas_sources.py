@@ -429,6 +429,13 @@ def test_linkedin_urn_and_permalink_share_a_canonical_identity():
     assert [post.external_id for post in result.posts] == ["1234567890"] * 3
 
 
+def test_linkedin_bad_optional_url_does_not_hide_valid_identity():
+    payload = {"success": True, "posts": [{"id": "opaque-id", "url": "https://[bad", "description": "Topic"}]}
+    result = fetch_scrapeatlas_linkedin("topic", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response(payload))
+    assert [post.external_id for post in result.posts] == ["opaque-id"]
+
+
 @pytest.mark.parametrize("fetch", [fetch_scrapeatlas_threads, fetch_scrapeatlas_tiktok,
                                   fetch_scrapeatlas_youtube, fetch_scrapeatlas_reddit, fetch_scrapeatlas_linkedin])
 def test_native_window_uses_documented_bounds_and_excludes_legacy_filters(fetch):

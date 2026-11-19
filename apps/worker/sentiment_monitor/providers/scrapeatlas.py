@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from http.client import IncompleteRead
 from typing import Any, Callable, Mapping
 import urllib.error
 import urllib.parse
@@ -260,7 +261,7 @@ def fetch_scrapeatlas_json(
             body_length=body_length,
             latency_ms=latency_ms,
         ) from None
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    except (urllib.error.URLError, TimeoutError, OSError, IncompleteRead) as error:
         code = "timeout" if isinstance(error, TimeoutError) else "transport_error"
         charged, remaining = credits_from_headers(headers)
         raise ScrapeAtlasError(
@@ -268,6 +269,7 @@ def fetch_scrapeatlas_json(
             http_status=http_status,
             credits_charged=charged,
             credits_remaining=remaining,
+            body_length=_body_length(error.partial) if isinstance(error, IncompleteRead) else None,
             latency_ms=int((time.monotonic() - started) * 1000),
         ) from None
 

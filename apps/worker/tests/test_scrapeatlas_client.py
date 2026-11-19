@@ -55,6 +55,21 @@ def test_body_read_timeout_retains_received_http_status_and_credit_headers():
     assert (error.code, error.http_status, error.credits_charged, error.credits_remaining) == ("timeout", 200, 2, 12)
 
 
+def test_incomplete_body_retains_received_http_status_and_credit_headers():
+    from http.client import IncompleteRead
+
+    class TruncatedResponse(Response):
+        def read(self, size=-1):
+            raise IncompleteRead(b'{"posts":', 12)
+
+    with pytest.raises(ScrapeAtlasError) as caught:
+        fetch_scrapeatlas_json("/v1/threads/search", {}, "test", opener=lambda *a, **k: TruncatedResponse(
+            {}, headers={"x-credits-charged": "2"},
+        ))
+    error = caught.value
+    assert (error.code, error.http_status, error.credits_charged, error.body_length) == ("transport_error", 200, 2, 9)
+
+
 def test_404_not_found_is_free_and_safe():
     def opener(request, timeout=0):
         raise urllib.error.HTTPError(

@@ -417,7 +417,10 @@ def _linkedin_activity_id(value: Any) -> str | None:
     urn = re.fullmatch(r"urn:li:activity:([0-9]+)", value)
     if urn:
         return urn.group(1)
-    url = urlsplit(value)
+    try:
+        url = urlsplit(value)
+    except ValueError:
+        return None
     if url.scheme != "https" or not (url.hostname == "linkedin.com" or (url.hostname or "").endswith(".linkedin.com")):
         return None
     match = re.search(r"(?:-activity-|/urn:li:activity:)([0-9]+)(?:[-/]|$)", url.path)
