@@ -1,7 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Queryable } from "@/db/migrate";
 
 const sessionCustomerId = vi.hoisted(() => vi.fn(async (): Promise<string | null> => "customer-a"));
 const sets = vi.hoisted(() => [] as { name: string; value: string; options?: Record<string, unknown> }[]);
+const providerRows = vi.hoisted(() => [] as {
+  platform: string;
+  provider: string;
+  fallback_provider: null;
+  fallback_on_failure: false;
+}[]);
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({
@@ -16,6 +23,18 @@ vi.mock("next/headers", () => ({
 
 vi.mock("@/auth/request-session", () => ({
   sessionCustomerId,
+}));
+
+vi.mock("@/db/pg", () => ({
+  withClient: <T,>(fn: (db: Queryable) => Promise<T>) => fn({
+    async query<Row>(sql: string) {
+      if (!sql.includes("from provider_settings")) throw new Error(`Unexpected query: ${sql}`);
+      return { rows: providerRows as unknown as Row[] };
+    },
+    async exec(sql: string) {
+      throw new Error(`Unexpected SQL: ${sql}`);
+    },
+  }),
 }));
 
 import { ONBOARDING_DRAFT_COOKIE } from "./onboarding-draft";
@@ -33,9 +52,13 @@ const fields = {
 describe("onboarding draft cookie", () => {
   beforeEach(() => {
     sets.length = 0;
+    providerRows.length = 0;
+    vi.stubEnv("SCRAPEATLAS_API_KEY", "synthetic");
     sessionCustomerId.mockReset();
     sessionCustomerId.mockResolvedValue("customer-a");
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("uses HttpOnly, SameSite=Lax, and Secure on HTTPS or in production", () => {
     expect(onboardingDraftCookieOptions({ nodeEnv: "production", forwardedProto: "http" })).toEqual({
@@ -77,6 +100,12 @@ describe("onboarding draft cookie", () => {
     expect(wrote).toBe(true);
     expect(JSON.parse(sets[0]?.value ?? "").step).toBe(2);
     expect(sets[0]?.options).toMatchObject({ httpOnly: true, maxAge: 604800 });
+  });
+
+  it("returns to source selection when the draft's selected route is disabled", async () => {
+    providerRows.push({ platform: "threads", provider: "off", fallback_provider: null, fallback_on_failure: false });
+    expect(await writeOnboardingDraftCookie({ ...fields, step: 5 })).toBe(true);
+    expect(JSON.parse(sets[0]?.value ?? "").step).toBe(3);
   });
 
   it("clears the cookie with the same flags", async () => {

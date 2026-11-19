@@ -475,7 +475,7 @@ def test_worker_claims_a_search_that_arrives_while_a_slow_batch_is_running(prod_
 
 def test_oversized_credit_headers_are_unknown_and_do_not_leave_the_search_running(prod_db):
     prod_db.admin.execute("delete from instant_searches")
-    search_id = _queue_search(prod_db, "barayam kredit", deadline_seconds=30)
+    search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
     oversized = 2**31 - 1
 
     def fetch(platform, keyword, settings, **kwargs):

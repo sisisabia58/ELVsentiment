@@ -284,21 +284,26 @@ def test_question_request_matches_the_summary_envelope():
         SummaryInput,
         build_question_prompt,
         build_summary_prompt,
+        sample_evidence,
     )
 
-    data = SummaryInput("search", "kopi", [{"id": "r1", "platform": "threads", "text": "enak"}], [])
-    assert build_question_prompt(data, "Apa yang dipuji?")[0] == build_summary_prompt(data)[0] == SUMMARY_SYSTEM
+    sample = sample_evidence(
+        SummaryInput("search", "kopi", [{"id": "r1", "platform": "threads", "text": "Kopi ini enak"}], [])
+    )
+    question_system, question_prompt = build_question_prompt(sample, "Apa yang dipuji?")
+    summary_system, summary_prompt = build_summary_prompt(sample)
+    assert question_system == summary_system == SUMMARY_SYSTEM
     question_request = build_generate_content_request(
         model="gemini-3.5-flash-lite",
-        system=SUMMARY_SYSTEM,
-        user="tanya",
+        system=question_system,
+        user=question_prompt,
         schema=QUESTION_SCHEMA,
         max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
     )
     summary_request = build_generate_content_request(
         model="gemini-3.5-flash-lite",
-        system=SUMMARY_SYSTEM,
-        user="ringkas",
+        system=summary_system,
+        user=summary_prompt,
         schema=SUMMARY_SCHEMA,
         max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
     )
@@ -308,6 +313,7 @@ def test_question_request_matches_the_summary_envelope():
     )
     for request in (question_request, summary_request):
         assert set(request["body"]) == {"systemInstruction", "contents", "generationConfig"}
+        assert '"id":"r1"' in request["body"]["contents"][0]["parts"][0]["text"]
         for banned in ("tools", "toolConfig", "cachedContent", "system_instruction"):
             assert banned not in request["body"]
         config = request["body"]["generationConfig"]
