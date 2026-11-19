@@ -13,6 +13,7 @@ from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
+    MAX_EXTERNAL_ID_BYTES,
     CanonicalPost,
     RouteCall,
     detect_language,
@@ -27,7 +28,6 @@ from sentiment_monitor.sources.tiktok import normalize_tiktok_item
 from sentiment_monitor.sources.threads import normalize_threads_item
 
 DEFAULT_TIMEOUT = 20
-MAX_EXTERNAL_ID_BYTES = 512  # Remain within Postgres composite-index entry sizes.
 
 
 def _optional_int(value: Any) -> int | None:

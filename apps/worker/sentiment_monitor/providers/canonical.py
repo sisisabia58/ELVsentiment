@@ -23,7 +23,7 @@ Relevance = Literal["literal_match", "all_words_match", "no_match"]
 # A btree index row is ~2.7 KiB, so a multi-kilobyte external id makes the
 # whole platform insert fail. Keep identities well under that and truncate the
 # free-text fields that are safe to shorten.
-MAX_EXTERNAL_ID_LENGTH = 512
+MAX_EXTERNAL_ID_BYTES = 512
 MAX_TEXT_LENGTH = 20_000
 MAX_TITLE_LENGTH = 1_000
 MAX_AUTHOR_LENGTH = 500

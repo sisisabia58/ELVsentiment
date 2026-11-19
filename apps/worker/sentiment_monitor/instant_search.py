@@ -32,7 +32,7 @@ from sentiment_monitor.instant_ai import (
 )
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import (
-    MAX_EXTERNAL_ID_LENGTH,
+    MAX_EXTERNAL_ID_BYTES,
     CanonicalComment,
     CanonicalPost,
     RouteCall,
@@ -369,7 +369,7 @@ def insert_posts(conn: Any, job: InstantSearchJob, posts: Iterable[CanonicalPost
             continue
         # An oversized identity is not truncated: truncating would silently
         # merge two different posts. Drop that record and keep its siblings.
-        if len(identity[1]) > MAX_EXTERNAL_ID_LENGTH:
+        if len(identity[1].encode("utf-8")) > MAX_EXTERNAL_ID_BYTES:
             continue
         try:
             conn.execute("savepoint result_row")
@@ -398,6 +398,8 @@ def insert_comments(
     inserted = 0
     for item in comments:
         item = sanitize_comment(item)
+        if len(item.external_id.encode("utf-8")) > MAX_EXTERNAL_ID_BYTES:
+            continue
         if not comment_has_visible_text(item.text):
             continue
         cursor = conn.execute(
@@ -793,6 +795,9 @@ def _record_late_calls(connect: Any, job: InstantSearchJob, future: Any) -> None
     except Exception:
         return
     calls = list(getattr(result, "calls", None) or [])
+    call = getattr(result, "call", None)
+    if not calls and call is not None:
+        calls = [call]
     if not calls:
         return
     try:
@@ -940,7 +945,7 @@ def fetch_top_comments(
         call = getattr(fetched, "call", None)
         if call is not None:
             try:
-                record_call(conn, job, call)
+                _Transactions(conn).run(lambda conn: record_call(conn, job, call))
             except Exception:
                 _rollback_quiet(conn)
                 return
@@ -1107,15 +1112,13 @@ def run_instant_search(
                         _info(job.id, platform=platform, comments="failed", reason="error")
                         continue
                     try:
-                        def _store(conn: Any, result_id: str = result_id, fetched: Any = fetched) -> int:
-                            call = getattr(fetched, "call", None)
-                            if call is not None:
-                                record_call(conn, job, call)
-                            return insert_comments(
-                                conn, job, result_id, getattr(fetched, "comments", None) or []
-                            )
-
-                        comment_rows += int(tx.run(_store) or 0)
+                        call = getattr(fetched, "call", None)
+                        if call is not None:
+                            # Commit the paid request before reply storage can fail.
+                            tx.run(lambda conn: record_call(conn, job, call))
+                        comments = getattr(fetched, "comments", None) or []
+                        if comments:
+                            comment_rows += tx.run(lambda conn: insert_comments(conn, job, result_id, comments))
                     except Exception:
                         if tx.shared is not None:
                             _rollback_quiet(tx.shared)

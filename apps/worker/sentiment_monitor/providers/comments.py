@@ -243,19 +243,6 @@ def fetch_comments(
             return CommentFetch(post_id, [], call, "answered", "not_found")
         return CommentFetch(post_id, [], call, "failed", error.code)
     latency_ms = int((time.monotonic() - started) * 1000)
-    raw_comments = payload.get("comments")
-    items = raw_comments if isinstance(raw_comments, list) else []
-    comments = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        comment = _comment(platform, item)
-        # A sticker or photo reply can arrive with no visible text. Skip it,
-        # or label the attachment, so the card does not render a blank row.
-        if comment_has_visible_text(comment.text):
-            comments.append(comment)
-        elif platform == "facebook" and _has_media(item):
-            comments.append(replace(comment, text="lampiran media"))
     call = RouteCall(
         provider="scrapeatlas",
         platform=platform,
@@ -267,8 +254,23 @@ def fetch_comments(
         latency_ms=latency_ms,
         safe_detail="ok",
     )
+    raw_comments = payload.get("comments")
     if not isinstance(raw_comments, list):
         return CommentFetch(post_id, [], replace(call, outcome="failed", safe_detail="malformed_envelope"),
                             "failed", "malformed_envelope")
+    comments = []
+    for item in raw_comments:
+        if not isinstance(item, dict):
+            continue
+        try:
+            comment = _comment(platform, item)
+        except (ValueError, OverflowError):
+            continue
+        # A sticker or photo reply can arrive with no visible text. Skip it,
+        # or label the attachment, so the card does not render a blank row.
+        if comment_has_visible_text(comment.text):
+            comments.append(comment)
+        elif platform == "facebook" and _has_media(item):
+            comments.append(replace(comment, text="lampiran media"))
     detail = "partial_coverage" if payload.partial else "ok"
     return CommentFetch(post_id, comments, call, "answered", detail)

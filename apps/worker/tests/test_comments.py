@@ -74,6 +74,24 @@ def test_threads_comments_map_text_author_and_likes():
     assert result.call.safe_detail == "ok"
 
 
+def test_malformed_threads_reply_keeps_valid_siblings_and_the_paid_call():
+    result = fetch_comments(
+        "threads", post(), settings=SETTINGS, env={"SCRAPEATLAS_API_KEY": "synthetic"},
+        opener=lambda *args, **kwargs: Response({
+            "success": True,
+            "comments": [
+                {"pk": "before", "text": "kriuk banget"},
+                {"pk": "bad", "text": "rusak", "taken_at": 10**500},
+                {"pk": "after", "text": "masih hangat", "taken_at": 1794754670},
+            ],
+        }, headers={"x-credits-charged": "2"}),
+    )
+    assert result.state == "answered"
+    assert [item.external_id for item in result.comments] == ["before", "after"]
+    assert result.call.credits_charged == 2
+    assert result.call.http_status == 200
+
+
 def test_missing_comments_key_is_unavailable_without_network():
     called = []
     result = fetch_comments(

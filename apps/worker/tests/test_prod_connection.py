@@ -19,6 +19,7 @@ from sentiment_monitor import scheduler
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS, ProviderSetting
+from sentiment_monitor.providers.comments import CommentFetch
 from sentiment_monitor.providers.fetch import fetch_platform
 from sentiment_monitor.providers.canonical import PlatformFetch
 
@@ -139,6 +140,66 @@ def test_production_wrapper_counts_inserted_comments(prod_db):
         return instant_search.insert_comments(conn, job, result_id, [comment, comment])
 
     assert scheduler._call(prod_db.connect, store) == 1
+
+
+@pytest.mark.parametrize("fail_storage", [False, True], ids=["oversized-id", "storage-error"])
+def test_paid_comment_charge_survives_bad_data_and_storage_failure(prod_db, monkeypatch, fail_storage):
+    def comments(platform, post, **kwargs):
+        return CommentFetch(post.external_id, [
+            CanonicalComment(external_id=external_id, text="Barayam enak", author_name=None,
+                             author_handle=None, published_at=None, likes=None, replies=None,
+                             source_provider="scrapeatlas", raw_ref="fixture")
+            for external_id in ("\U0001f600" * 129, "\U0001f600" * 128)
+        ], RouteCall("scrapeatlas", platform, "scrapeatlas.youtube.comments", "success", 200, 2),
+            "answered", "ok")
+
+    committed_credits = []
+    if fail_storage:
+        def fail_insert(conn, job, result_id, items):
+            committed_credits.extend(prod_db.admin.execute(
+                "select credits_charged from search_credit_ledger where search_id = %s and route = %s",
+                (job.id, "scrapeatlas.youtube.comments"),
+            ).fetchall())
+            conn.execute("select 1 / 0")
+
+        monkeypatch.setattr(instant_search, "insert_comments", fail_insert)
+
+    monkeypatch.setattr(instant_search, "_default_comment_fetcher", lambda env, opener: comments)
+    processed = instant_search.run_instant_search_cycle(
+        prod_db.connect, env={"CARI_AI_PROVIDER": "off"}, now=datetime.now(timezone.utc), limits=None,
+        fetcher=_fast_fetch,
+        settings={"youtube": DEFAULT_SETTINGS["youtube"], "comments": DEFAULT_SETTINGS["comments"]},
+    )
+    assert processed == 1
+    view = prod_db.view(prod_db.search)
+    assert view["search"]["status"] == "succeeded"
+    assert view["search"]["credits_used"] == 3
+    assert view["ledger"] == 2
+    rows = prod_db.admin.execute(
+        "select external_id from instant_search_comments where search_id = %s", (prod_db.search,)
+    ).fetchall()
+    if fail_storage:
+        assert committed_credits == [{"credits_charged": 2}]
+        assert rows == []
+    else:
+        assert rows == [{"external_id": "\U0001f600" * 128}]
+
+
+def test_late_comment_still_records_its_known_charge(prod_db):
+    from concurrent.futures import Future
+
+    future = Future()
+    future.set_result(CommentFetch(
+        "post", [], RouteCall("scrapeatlas", "youtube", "scrapeatlas.youtube.comments", "success", 200, 2),
+        "answered", "ok",
+    ))
+    job = instant_search.InstantSearchJob(prod_db.search, prod_db.customer, "barayam")
+
+    instant_search._record_late_calls(prod_db.connect, job, future)
+
+    assert prod_db.admin.execute(
+        "select route, credits_charged from search_credit_ledger where search_id = %s", (prod_db.search,)
+    ).fetchall() == [{"route": "scrapeatlas.youtube.comments", "credits_charged": 2}]
 
 
 def test_production_wrapper_counts_expired_searches(prod_db):
