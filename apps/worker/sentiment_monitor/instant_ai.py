@@ -159,6 +159,7 @@ _CONTEXT_STOP_WORDS = set(
 _EXTERNAL_BUSINESS_TERMS = {"kafe", "cafe", "café", "kedai", "warung", "donasi", "endorse"}
 _RAIL_TERMS = {"mrt", "lrt", "krl", "kereta"}
 _TRAVEL_CONTEXT = {"komuter", "mengejar", "naik", "penumpang", "stasiun", "transit", "turun"}
+_MACHINE_STATES = {"gagal", "kosong", "macet", "mati", "rusak"}
 _URL_OR_MENTION = re.compile(r"https?://\S+|@\w+", re.IGNORECASE)
 
 
@@ -180,7 +181,7 @@ def _reply_relevance(reply: str, parent: str, query: str, intent: str) -> int:
         return 0
     parent_terms = parent_words.difference(query_words, _CONTEXT_STOP_WORDS)
     overlap = terms.intersection(parent_terms)
-    if any(len(word) >= 4 for word in overlap) or len(overlap) >= 2:
+    if len(overlap) >= 2 or ("mesin" in overlap and terms & _MACHINE_STATES):
         return 2
     # A commuter can refer to a rail service by mode instead of the line name.
     return int(bool(terms & _RAIL_TERMS and parent_terms & _RAIL_TERMS and words & _TRAVEL_CONTEXT))

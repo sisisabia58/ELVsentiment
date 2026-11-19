@@ -99,7 +99,7 @@ def test_summary_and_question_have_the_same_balanced_sample_after_truncation():
         for index in range(100)
     ] + [{"id": "result:other", "platform": "tiktok", "text": "Barayam kehabisan stok."}]
     comments = [
-        {"id": f"comment:{index}", "result_id": f"result:{index}", "text": f"antrean {index} " + "c" * 1000}
+        {"id": f"comment:{index}", "result_id": f"result:{index}", "text": f"Barayam antrean {index} " + "c" * 1000}
         for index in range(100)
     ]
     sample = sample_evidence(SummaryInput("s1", "barayam", results, comments))
@@ -115,7 +115,9 @@ def test_summary_and_question_have_the_same_balanced_sample_after_truncation():
     assert set(sample.refs) == {
         entry["id"] for item in items for entry in [item, *item["comments"]]
     }
-    assert all(len(ref.texts[0]) <= 560 for ref in sample.refs.values() if ref.parent_id)
+    retained_replies = [ref for ref in sample.refs.values() if ref.parent_id]
+    assert retained_replies and len(retained_replies) < len(comments)
+    assert all(len(ref.texts[0]) <= 560 for ref in retained_replies)
     assert not validate_answer({"answer": "Tidak didukung.", "citations": ["result:99"]}, sample.refs).answer
 
 
@@ -155,3 +157,17 @@ def test_sample_retains_contiguous_query_context_near_end_of_long_post():
     assert [item["id"] for item in items] == ["result:long-caption", "result:long-title"]
     assert items[0]["text"] in caption and "Tukuliling kopi memudahkan penumpang MRT ASEAN." in items[0]["text"]
     assert items[1]["title"] in title and "Tukuliling kopi kehabisan stok." in items[1]["title"]
+
+
+def test_generic_availability_cannot_ground_a_promotion_reply():
+    post = {
+        "id": "result:p1", "platform": "threads",
+        "text": "Tukuliling kopi tersedia di stasiun MRT Jakarta.",
+    }
+    sample = sample_evidence(SummaryInput("s1", "tukuliling kopi", [post], [
+        {"id": "comment:promotion", "result_id": post["id"],
+         "text": "Promo kopi Arabika tersedia di Bandung, pesan lewat WhatsApp."},
+        {"id": "comment:alias", "result_id": post["id"], "text": "Tukuliling kehabisan stok lagi."},
+        {"id": "comment:transit", "result_id": post["id"], "text": "Praktis buat mengejar kereta."},
+    ]))
+    assert list(sample.refs) == ["result:p1", "comment:alias", "comment:transit"]
