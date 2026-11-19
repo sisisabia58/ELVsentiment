@@ -71,6 +71,7 @@ MAX_INFLIGHT = 8
 MAX_QUESTIONS_PER_CYCLE = 2
 RUNNING_DEADLINE_GRACE_SECONDS = 60
 MAX_PLATFORM_RESULTS = 100
+RELEVANCE_VERSION = 1
 
 _log = logging.getLogger("sentiment_monitor.instant_search")
 _LOG_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -252,9 +253,10 @@ def claim_instant_search(conn: Any, worker_id: str) -> InstantSearchJob | None:
         return None
     _set_customer(conn, job.customer_id)
     conn.execute(
-        "update instant_searches set status = 'running', started_at = coalesce(started_at, now()) "
+        "update instant_searches set status = 'running', started_at = coalesce(started_at, now()), "
+        "relevance_version = %s "
         "where id = %s and status = 'queued'",
-        (job.id,),
+        (RELEVANCE_VERSION, job.id),
     )
     return job
 
@@ -262,9 +264,10 @@ def claim_instant_search(conn: Any, worker_id: str) -> InstantSearchJob | None:
 def start_search(conn: Any, job: InstantSearchJob) -> None:
     _set_customer(conn, job.customer_id)
     conn.execute(
-        "update instant_searches set status = 'running', started_at = coalesce(started_at, now()) "
+        "update instant_searches set status = 'running', started_at = coalesce(started_at, now()), "
+        "relevance_version = case when status = 'queued' then %s else relevance_version end "
         "where id = %s and status in ('queued', 'running')",
-        (job.id,),
+        (RELEVANCE_VERSION, job.id),
     )
 
 
@@ -598,21 +601,25 @@ def _store_answered(
     calls: list[RouteCall],
     detail: str,
     attempted: tuple[str, ...],
-) -> int:
-    inserted = insert_posts(conn, job, kept)
+) -> list[CanonicalPost]:
+    insert_posts(conn, job, kept)
+    stored = _comment_result_ids(conn, job, platform)
     set_source_state(
         conn,
         job,
         platform,
         "answered",
         provider=chain[0],
-        result_count=inserted,
+        result_count=len(stored),
         latency_ms=getattr(result, "latency_ms", None),
         credits_charged=_known_credit_sum(calls),
         attempted_providers=attempted,
         safe_detail=detail,
     )
-    return inserted
+    return [
+        item for item in kept
+        if (identity := post_identity(item)) is not None and identity[1] in stored
+    ]
 
 
 def _mark_source_failed(
@@ -652,7 +659,7 @@ def _handle_result(
     result: Any,
     cutoff_iso: str | None,
     all_posts: list[CanonicalPost],
-) -> None:
+) -> list[CanonicalPost]:
     calls = list(getattr(result, "calls", None) or [])
     # Paid calls are durable before any post is stored, so a later normalisation
     # or storage error can never lose the ledger or cause a paid re-run.
@@ -677,14 +684,15 @@ def _handle_result(
                 except Exception:
                     continue
             kept = filter_since(kept, cutoff_iso)
+            kept = [item for item in kept if item.relevance != "no_match"]
             kept = sort_posts(dedupe_posts(kept), job.sort_mode)[:MAX_PLATFORM_RESULTS]
-            tx.run(
+            stored = tx.run(
                 lambda conn: _store_answered(
                     conn, job, platform, chain, kept, result, calls, detail, attempted
                 )
             )
-            all_posts.extend(kept)
-            return kept
+            all_posts.extend(stored)
+            return stored
         if state == "unavailable":
             tx.run(
                 lambda conn: set_source_state(
@@ -741,6 +749,7 @@ def _comment_result_ids(conn: Any, job: InstantSearchJob, platform: str) -> dict
         """
         select id, external_id from instant_search_results
         where search_id = %s and customer_id = %s and platform = %s
+          and relevance in ('literal_match', 'all_words_match')
         """,
         (job.id, job.customer_id, platform),
     ) or []
@@ -880,15 +889,20 @@ def fetch_top_comments(
         select id, platform, external_id, author_name, author_handle, url, text, title,
                published_at, thumbnail_url, views, likes, replies, shares,
                source_provider, raw_ref, rank, collected_at
-        from instant_search_results
+        from instant_search_results r
         where search_id = %s and customer_id = %s
+          and relevance in ('literal_match', 'all_words_match')
+          and exists (
+              select 1 from instant_searches s
+              where s.id = r.search_id and s.customer_id = r.customer_id and s.relevance_version >= %s
+          )
         order by platform,
                  rank asc nulls last,
                  (coalesce(views, 0) + 3 * coalesce(likes, 0)
                   + 2 * coalesce(replies, 0) + 2 * coalesce(shares, 0)) desc,
                  collected_at desc
         """,
-        (job.id, job.customer_id),
+        (job.id, job.customer_id, RELEVANCE_VERSION),
     ) or []
     chosen: list[Any] = []
     per_platform: dict[str, int] = {}
@@ -1054,7 +1068,8 @@ def run_instant_search(
                     if comment_calls >= MAX_COMMENT_CALLS:
                         skip_reasons.append("call_cap")
                         break
-                    result_id = ids.get(post.external_id)
+                    identity = post_identity(post)
+                    result_id = ids.get(identity[1]) if identity is not None else None
                     if not result_id:
                         continue
                     left = comment_deadline - clock()
@@ -1265,12 +1280,17 @@ def _load_summary_input(conn: Any, job: InstantSearchJob) -> tuple[SummaryInput,
     rows = conn.execute(
         """
         select id, platform, author_name, author_handle, text, title, published_at
-        from instant_search_results
+        from instant_search_results r
         where search_id = %s and customer_id = %s
+          and relevance in ('literal_match', 'all_words_match')
+          and exists (
+              select 1 from instant_searches s
+              where s.id = r.search_id and s.customer_id = r.customer_id and s.relevance_version >= %s
+          )
         order by rank asc nulls last, collected_at desc
         limit 50
         """,
-        (job.id, job.customer_id),
+        (job.id, job.customer_id, RELEVANCE_VERSION),
     ) or []
     if not rows:
         return None
@@ -1538,8 +1558,8 @@ def retry_named_summary(connect: Any, search_id: str, env: Mapping[str, Any]) ->
     def reopen(conn: Any) -> InstantSearchJob | None:
         rows = conn.execute(
             "select id, customer_id, query_text, keyword_intent, date_window, sort_mode, "
-            "language_filter, deadline_at from instant_searches where id = %s",
-            (search_id,),
+            "language_filter, deadline_at from instant_searches where id = %s and relevance_version >= %s",
+            (search_id, RELEVANCE_VERSION),
         ) or []
         if not rows:
             return None
@@ -1611,7 +1631,7 @@ def _run_job_safely(connect: Any, job: InstantSearchJob, kwargs: Mapping[str, An
 
 
 _QUESTION_DETAILS = SAFE_DETAILS | frozenset(
-    {"empty_answer", "off", "error", "http_4xx", "paused", "cycle_cap"}
+    {"empty_answer", "no_evidence", "off", "error", "http_4xx", "paused", "cycle_cap"}
 )
 
 
@@ -1664,9 +1684,9 @@ def _answer_question(
             return "failed"
         prepared = _load_summary_input(conn, job)
         if prepared is None:
-            data, refs = SummaryInput(job.id, job.query, [], []), {}
-        else:
-            data, refs, _platforms = prepared
+            _fail_question(conn, question_id, "no_evidence", now)
+            return "failed"
+        data, refs, _platforms = prepared
         client = llm if llm is not None else _create_llm(
             _client_env(env, provider), connect if connect is not None else conn
         )

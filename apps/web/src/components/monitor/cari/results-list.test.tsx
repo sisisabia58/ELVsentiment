@@ -63,6 +63,26 @@ const comments = {
 };
 
 describe("ResultsList", () => {
+  it("keeps relevance rank across platforms in the all-results tab", () => {
+    render(
+      <ResultsList
+        results={[
+          result({ id: "best", platform: "youtube", text: "Tukuliling kopi dekat MRT", rank: 1 }),
+          result({ id: "anchor", platform: "threads", text: "Ada Tukuliling di MRT", rank: 2 }),
+        ]}
+        commentsByResult={{}}
+        sortMode="relevance"
+      />,
+    );
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "Tukuliling kopi dekat MRT", "Ada Tukuliling di MRT",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /Threads 1/ }));
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "Ada Tukuliling di MRT",
+    ]);
+  });
+
   it("shows at most three top replies and the remaining count", () => {
     const fourComments = [0, 1, 2, 3].map((index) => ({
       id: `c${index}`,
@@ -345,7 +365,7 @@ describe("ResultsList", () => {
     expect(screen.getByTestId("thumb-placeholder")).toBeTruthy();
   });
 
-  it("groups by platform and shows a chip for each non-empty group", () => {
+  it("labels each platform and shows a chip for each non-empty group", () => {
     const threadsPost = result({ id: "t1", platform: "threads", externalId: "th-1" });
     const youtubePost = result({
       id: "y1",

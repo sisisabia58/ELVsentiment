@@ -65,6 +65,7 @@ function ResultCard(props: {
   result: SnapshotResult;
   comments: SnapshotComment[];
   now: Date;
+  showPlatform: boolean;
 }) {
   const result = props.result;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
@@ -88,6 +89,7 @@ function ResultCard(props: {
             </p>
           ) : null}
           <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
+            {props.showPlatform ? <span>{platformName(result.platform)}</span> : null}
             {handle ? (
               <span className="min-w-0 max-w-full break-all font-mono text-foreground">
                 {handle.startsWith("@") ? handle : `@${handle}`}
@@ -172,9 +174,8 @@ export function ResultsList(props: {
     key,
     rows: props.results.filter((result) => result.platform === key),
   })).filter((group) => group.rows.length > 0);
-  const visible = platform
-    ? groups.filter((group) => group.key === platform)
-    : groups;
+  const selected = groups.find((group) => group.key === platform);
+  const visible = selected?.rows ?? props.results;
 
   return (
     <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -208,31 +209,27 @@ export function ResultsList(props: {
           </button>
         ))}
       </div>
-      <div className="mt-3">
-        {visible.map((group) => {
-          const positive = group.rows.length;
-          return (
-            <div key={group.key} className="border-t border-border px-5 py-4 first:border-t-0">
-              <div className="flex items-center gap-2.5">
-                <PlatformTile platform={group.key} size={26} />
-                <div className="flex-1">
-                  <p className="text-[14px] font-semibold text-foreground">{platformName(group.key)}</p>
-                  <p className="text-[12px] text-muted-foreground">{positive} hasil</p>
-                </div>
-              </div>
-              <div className="mt-3 space-y-4">
-                {group.rows.map((result) => (
-                  <ResultCard
-                    key={result.id}
-                    result={result}
-                    comments={props.commentsByResult[result.id] ?? []}
-                    now={now}
-                  />
-                ))}
-              </div>
+      <div className="mt-3 px-5 py-4">
+        {selected ? (
+          <div className="mb-3 flex items-center gap-2.5">
+            <PlatformTile platform={selected.key} size={26} />
+            <div>
+              <p className="text-[14px] font-semibold text-foreground">{platformName(selected.key)}</p>
+              <p className="text-[12px] text-muted-foreground">{selected.rows.length} hasil</p>
             </div>
-          );
-        })}
+          </div>
+        ) : null}
+        <div className="space-y-4">
+          {visible.map((result) => (
+            <ResultCard
+              key={result.id}
+              result={result}
+              comments={props.commentsByResult[result.id] ?? []}
+              now={now}
+              showPlatform={!selected}
+            />
+          ))}
+        </div>
       </div>
     </section>
   );

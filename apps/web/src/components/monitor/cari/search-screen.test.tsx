@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
+import { startSearchAction } from "@/app/cari/start-action";
 import { SearchDetail, SearchScreen } from "./search-screen";
 
 vi.mock("next/navigation", () => ({
@@ -117,6 +118,35 @@ function failedSnapshot(errorCode: string): SearchSnapshot {
 }
 
 describe("SearchDetail", () => {
+  it("keeps the old receipt and reruns its query and filters with no verified evidence", async () => {
+    const done = finishedSnapshot();
+    done.search.query = "tukuliling kopi";
+    done.search.filters = { dateWindow: "7d", sort: "popular", language: "id" };
+    Object.assign(done.search, { legacyEvidence: true, summaryStatus: "skipped" });
+    done.results = [];
+    done.totals = { sources: 8, done: 7, results: 0 };
+    vi.mocked(startSearchAction).mockResolvedValue({ ok: true, searchId: "fresh" });
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getByText(/7 dari 8 sumber menjawab · 0 hasil/)).toBeTruthy();
+    expect(screen.getByText(/hasil tersimpan yang bisa diverifikasi/i)).toBeTruthy();
+    expect(screen.queryByText("Ringkasan AI")).toBeNull();
+    expect(screen.queryByText("Tanya hasil ini")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cari ulang" }));
+    await waitFor(() => expect(startSearchAction).toHaveBeenCalledWith({
+      query: "tukuliling kopi", filters: { dateWindow: "7d", sort: "popular", language: "id" },
+    }));
+  });
+
+  it("explains a new successful search with zero relevant results", () => {
+    const done = finishedSnapshot();
+    done.search.summaryStatus = "skipped";
+    done.results = [];
+    done.totals = { sources: 8, done: 7, results: 0 };
+    render(<SearchDetail initialSnapshot={done} aiEnabled />);
+    expect(screen.getByText("Tidak ada hasil yang cocok dengan kata kunci.")).toBeTruthy();
+    expect(screen.queryByText("Tanya hasil ini")).toBeNull();
+  });
+
   it("hides the summary until a non-demo provider is selected", () => {
     const done = finishedSnapshot();
     done.search.summaryStatus = "done";

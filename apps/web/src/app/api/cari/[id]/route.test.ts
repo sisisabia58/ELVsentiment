@@ -50,10 +50,25 @@ beforeAll(async () => {
       `insert into instant_search_sources
          (search_id, customer_id, platform, provider, state, result_count, safe_detail,
           credits_charged, attempted_providers)
-       values ($1, $2, 'youtube', 'scrapeatlas', 'answered', 1, 'ok', 2, array['scrapeatlas'])`,
+       values ($1, $2, 'youtube', 'scrapeatlas', 'answered', 2, 'ok', 2, array['scrapeatlas'])`,
       [SEARCH, owner.customerId],
     );
   });
+  // A saved search written by the old worker leaves relevance_version at its default.
+  await db.query(
+    `insert into instant_search_results
+       (id, search_id, customer_id, platform, external_id, text, relevance, source_provider, raw_ref)
+     values ('55555555-5555-4555-8555-555555555555', $1, $2, 'youtube', 'eligible', 'Barayam enak',
+             'literal_match', 'scrapeatlas', 'fixture:eligible'),
+            ('66666666-6666-4666-8666-666666666666', $1, $2, 'youtube', 'weak', 'Kopi keliling',
+             'no_match', 'scrapeatlas', 'fixture:weak')`,
+    [SEARCH, owner.customerId],
+  );
+  await db.query(
+    `insert into instant_search_ai (search_id, customer_id, overall_summary, overall_stance, model)
+     values ($1, $2, 'Ringkasan lama', 'netral', 'demo')`,
+    [SEARCH, owner.customerId],
+  );
 });
 
 beforeEach(() => {
@@ -99,6 +114,18 @@ describe("GET /api/cari/[id]", () => {
     expect(body.sources[0]).not.toHaveProperty("provider");
     expect(body.sources[0]).not.toHaveProperty("attemptedProviders");
     expect(body.sources[0]).not.toHaveProperty("creditsCharged");
+  });
+
+  it("opens an old URL with only results still supported by saved evidence", async () => {
+    hoisted.token = ownerToken;
+    const response = await call(SEARCH);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.search.legacyEvidence).toBe(true);
+    expect(body.results.map((result: { externalId: string }) => result.externalId)).toEqual(["eligible"]);
+    expect(body.sources[0].resultCount).toBe(1);
+    expect(body.totals.results).toBe(1);
+    expect(body.ai).toBeNull();
   });
 
   it("returns 404 for a foreign search id without leaking its data", async () => {

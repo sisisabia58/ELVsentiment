@@ -9,6 +9,7 @@ const ERROR_COPY: Record<string, string> = {
   invalid_question: "Pertanyaan 3–300 karakter.",
   disabled: "Pertanyaan belum tersedia.",
   not_found: "Pencarian tidak ditemukan.",
+  no_evidence: "Pertanyaan memerlukan hasil yang cocok. Coba cari ulang.",
   unauthenticated: "Masuk dulu untuk bertanya.",
 };
 
@@ -22,6 +23,7 @@ const FAILURE_COPY: Record<string, string> = {
   http_504: "AI sedang sibuk. Coba lagi sebentar lagi.",
   timeout: "Jawaban terlalu lama. Coba lagi.",
   empty_answer: "Jawaban kosong. Coba lagi.",
+  no_evidence: "Pertanyaan memerlukan hasil yang cocok. Coba cari ulang.",
   missing_key: "Kunci AI belum diatur.",
   config_error: "Konfigurasi AI ditolak. Periksa kunci API.",
   malformed_json: "Jawaban AI tidak bisa dibaca.",

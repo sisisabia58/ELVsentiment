@@ -1,0 +1,11 @@
+{
+  "descriptors": ["coffee", "kopi"],
+  "generic_terms": [
+    "arabica", "arabika", "artisan", "botolan", "bubuk", "cappuccino", "celup", "dingin",
+    "espresso", "filter", "giling", "gilingan", "ground", "hangat", "hitam", "instan",
+    "jualan", "keliling", "kemasan", "krimer", "latte", "literan", "manis", "mesin",
+    "mobile", "murah", "original", "pahit", "panas", "pandan", "premium", "robusta",
+    "sachet", "seduh", "seller", "specialty", "susu", "tubruk", "vanila", "vanilla"
+  ],
+  "minimum_plain_anchor_length": 6
+}

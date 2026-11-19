@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from sentiment_monitor.providers.canonical import (
@@ -38,6 +41,17 @@ def test_relevance_prefers_literal_then_all_words_then_none():
         "barayam goreng",
         "phrase",
     ) == "all_words_match"
+
+
+RELEVANCE_FIXTURES = json.loads(
+    (Path(__file__).parent / "fixtures" / "scrapeatlas" / "relevance.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("example", RELEVANCE_FIXTURES)
+def test_search_relevance_requires_the_entity_or_all_topic_words(example):
+    item = post(text=example["text"], title=example["title"], hashtags=tuple(example["hashtags"]))
+    assert keyword_relevance(item, example["query"], example["intent"]) == example["expected"]
 
 
 def test_identity_falls_back_to_normalized_url_and_rejects_blanks():

@@ -23,7 +23,9 @@ async function insertSearch(
   db: Queryable,
   id: string,
   customerId: string,
-  overrides: { query?: string; status?: string; credits?: number; stance?: string | null; createdAt?: string } = {},
+  overrides: {
+    query?: string; status?: string; credits?: number; stance?: string | null; createdAt?: string; legacy?: boolean;
+  } = {},
 ) {
   await withCustomer(db, customerId, async () => {
     await db.query(
@@ -42,6 +44,9 @@ async function insertSearch(
       ],
     );
   });
+  if (!overrides.legacy) {
+    await db.query("update instant_searches set relevance_version = 1 where id = $1", [id]);
+  }
 }
 
 async function insertResult(
@@ -55,23 +60,28 @@ async function insertResult(
     publishedAt: string | null;
     rank?: number | null;
     likes?: number;
+    text?: string;
+    title?: string;
+    relevance?: string;
   },
 ) {
   await db.query(
     `insert into instant_search_results
-       (id, search_id, customer_id, platform, external_id, text, published_at, rank, likes,
+       (id, search_id, customer_id, platform, external_id, text, published_at, rank, likes, title,
         relevance, source_provider, raw_ref)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'literal_match', 'scrapeatlas', $10)`,
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'scrapeatlas', $12)`,
     [
       result.id,
       searchId,
       customerId,
       result.platform ?? "threads",
       result.externalId,
-      `isi ${result.externalId}`,
+      result.text ?? `isi ${result.externalId}`,
       result.publishedAt,
       result.rank ?? null,
       result.likes ?? 0,
+      result.title ?? null,
+      result.relevance ?? "literal_match",
       `fixture:${result.externalId}`,
     ],
   );
@@ -96,6 +106,83 @@ async function insertSource(
 }
 
 describe("loadSearchSnapshot", () => {
+  it("rechecks a legacy search's saved evidence and preserves the original records", async () => {
+    const db = await migrated();
+    await insertSearch(db, SEARCH, CUSTOMER, { query: "tukuliling kopi", legacy: true });
+    const evidence = [
+      { externalId: "weak", text: "Kopi keliling lewat tiap pagi", relevance: "no_match", rank: 1 },
+      { externalId: "unverifiable", text: "", relevance: "literal_match", rank: 2 },
+      { externalId: "anchor", text: "Ada Tukuliling di MRT Blok M.", relevance: "no_match", rank: 3 },
+      { externalId: "exact", text: "Mari ke MRT. ＃ＴｕｋｕｌｉｌｉｎｇＫｏｐｉ", relevance: "literal_match", rank: 4 },
+      { externalId: "wrong", text: "Hanya Kopi Sekarputih", relevance: "all_words_match", rank: 5, platform: "youtube" },
+    ];
+    for (const [index, item] of evidence.entries()) {
+      const id = "77777777-7777-4777-8777-77777777777" + index;
+      await insertResult(db, SEARCH, CUSTOMER, { id, publishedAt: "2026-11-15T09:00:00Z", ...item });
+      await db.query(
+        `insert into instant_search_comments
+           (id, search_id, customer_id, result_id, platform, external_id, text, source_provider, raw_ref)
+         values ($1, $2, $3, $4, 'threads', $5, $5, 'scrapeatlas', $5)`,
+        ["88888888-8888-4888-8888-88888888888" + index, SEARCH, CUSTOMER, id, "reply-" + item.externalId],
+      );
+    }
+    await insertSource(db, SEARCH, CUSTOMER, "threads", "answered", 4);
+    await insertSource(db, SEARCH, CUSTOMER, "youtube", "answered", 1);
+    await db.query("update instant_searches set summary_status = 'done' where id = $1", [SEARCH]);
+    await db.query(
+      `insert into instant_search_ai (search_id, customer_id, overall_summary, overall_stance, model)
+       values ($1, $2, 'Ringkasan lama', 'campuran', 'demo')`, [SEARCH, CUSTOMER],
+    );
+    await db.query(
+      `insert into instant_search_questions (id, search_id, customer_id, question, status, answer)
+       values ('99999999-9999-4999-8999-999999999999', $1, $2, 'Apa keluhannya?', 'done', 'Jawaban lama')`,
+      [SEARCH, CUSTOMER],
+    );
+    await db.query(
+      `insert into search_credit_ledger (id, search_id, customer_id, provider, platform, route, credits_charged, latency_ms)
+       values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', $1, $2, 'scrapeatlas', 'threads', 'search', 12, 10)`,
+      [SEARCH, CUSTOMER],
+    );
+
+    const old = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
+    expect(old?.search).toMatchObject({ legacyEvidence: true, summaryStatus: "skipped", overallStance: null });
+    expect(old?.results.map((item) => [item.externalId, item.relevance])).toEqual([
+      ["exact", "literal_match"], ["anchor", "all_words_match"],
+    ]);
+    expect(old?.comments.map((item) => item.externalId)).toEqual(["reply-anchor", "reply-exact"]);
+    expect(old?.totals).toEqual({ sources: 2, done: 2, results: 2 });
+    expect(old?.sources.map((source) => [source.platform, source.resultCount])).toEqual([["threads", 2], ["youtube", 0]]);
+    expect(old?.ai).toBeNull();
+    expect(old?.questions).toEqual([]);
+    expect((await loadHistory(db, CUSTOMER))[0]).toMatchObject({ resultCount: 2, sourceCount: 2, stance: null });
+    expect(await loadSearchSnapshot(db, OTHER_CUSTOMER, SEARCH)).toBeNull();
+
+    expect((await db.query("select raw_ref, relevance from instant_search_results where search_id = $1 order by rank", [SEARCH])).rows)
+      .toEqual(evidence.map((item) => ({ raw_ref: "fixture:" + item.externalId, relevance: item.relevance })));
+    expect((await db.query("select count(*)::int as n from instant_search_comments")).rows).toEqual([{ n: 5 }]);
+    expect((await db.query("select summary_status from instant_searches")).rows).toEqual([{ summary_status: "done" }]);
+    expect((await db.query("select overall_summary from instant_search_ai")).rows).toEqual([{ overall_summary: "Ringkasan lama" }]);
+    expect((await db.query("select answer from instant_search_questions")).rows).toEqual([{ answer: "Jawaban lama" }]);
+    expect((await db.query("select credits_charged::int from search_credit_ledger")).rows).toEqual([{ credits_charged: 12 }]);
+  });
+
+  it("keeps the receipt when a legacy search has no verifiable results", async () => {
+    const db = await migrated();
+    await insertSearch(db, SEARCH, CUSTOMER, { query: "kopi keliling", legacy: true });
+    await insertSource(db, SEARCH, CUSTOMER, "threads", "answered", 1);
+    await insertResult(db, SEARCH, CUSTOMER, {
+      id: "77777777-7777-4777-8777-777777777777",
+      externalId: "missing-evidence",
+      publishedAt: null,
+      text: "Keliling setiap pagi.",
+    });
+    const old = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
+    expect(old?.search).toMatchObject({ query: "kopi keliling", status: "succeeded", legacyEvidence: true });
+    expect(old?.totals).toEqual({ sources: 1, done: 1, results: 0 });
+    expect(old?.results).toEqual([]);
+    expect((await loadHistory(db, CUSTOMER))[0]).toMatchObject({ resultCount: 0 });
+  });
+
   it("returns only the customer's search and sorts undated results last", async () => {
     const db = await migrated();
     await insertSearch(db, SEARCH, CUSTOMER);

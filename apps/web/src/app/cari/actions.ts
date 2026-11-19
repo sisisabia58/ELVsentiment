@@ -7,6 +7,7 @@ import type { SearchLimits } from "@/monitor/search/limits";
 import { createInstantSearch } from "@/monitor/search/mutations";
 import { cariSekarangEnabled, type Env } from "@/monitor/search/feature";
 import { isUuid } from "@/monitor/search/load";
+import { SEARCH_RELEVANCE_VERSION } from "@/monitor/search/relevance";
 import { buildOnboardingFields } from "@/monitor/search/present";
 import { ALL_SOURCES, type OnboardingDraftFields } from "@/monitor/onboarding-draft";
 
@@ -50,6 +51,20 @@ export type AskQuestionResult =
   | { ok: true; questionId: string }
   | { ok: false; error: string };
 
+async function questionEvidenceError(db: Queryable, customerId: string, searchId: string) {
+  const owned = await db.query<{ eligible: boolean }>(
+    `select s.relevance_version >= $3 and s.status in ('succeeded', 'partial') and exists (
+       select 1 from instant_search_results r
+       where r.search_id = s.id and r.customer_id = s.customer_id
+         and r.relevance in ('literal_match', 'all_words_match')
+     ) as eligible
+     from instant_searches s where s.id = $1 and s.customer_id = $2`,
+    [searchId, customerId, SEARCH_RELEVANCE_VERSION],
+  );
+  if (!owned.rows[0]) return "not_found";
+  return owned.rows[0].eligible ? null : "no_evidence";
+}
+
 export async function askQuestionForCustomer(input: {
   db: Queryable;
   customerId: string;
@@ -65,11 +80,8 @@ export async function askQuestionForCustomer(input: {
   const question = input.question.trim();
   if (question.length < 3 || question.length > 300) return { ok: false, error: "invalid_question" };
   return withCustomer(input.db, input.customerId, async () => {
-    const owned = await input.db.query<{ id: string }>(
-      "select id from instant_searches where id = $1 and customer_id = $2",
-      [input.searchId, input.customerId],
-    );
-    if (!owned.rows[0]) return { ok: false, error: "not_found" };
+    const error = await questionEvidenceError(input.db, input.customerId, input.searchId);
+    if (error) return { ok: false, error };
     const questionId = randomUUID();
     await input.db.query(
       `insert into instant_search_questions
@@ -95,6 +107,8 @@ export async function retryQuestionForCustomer(input: {
     return { ok: false, error: "not_found" };
   }
   return withCustomer(input.db, input.customerId, async () => {
+    const error = await questionEvidenceError(input.db, input.customerId, input.searchId);
+    if (error) return { ok: false, error };
     const updated = await input.db.query<{ id: string }>(
       `update instant_search_questions
           set status = 'queued',

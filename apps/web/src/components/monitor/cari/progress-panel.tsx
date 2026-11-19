@@ -59,7 +59,7 @@ function DotMap(props: { total: number; done: number }) {
 function SourceRow(props: { source: SnapshotSource; max: number }) {
   const source = props.source;
   const label = STATE_LABEL[source.state] ?? source.state;
-  const width = props.max > 0 ? Math.max(4, Math.round((source.resultCount / props.max) * 100)) : 0;
+  const width = source.resultCount > 0 ? Math.max(4, Math.round((source.resultCount / props.max) * 100)) : 0;
   const latency =
     source.latencyMs != null
       ? `${(source.latencyMs / 1000).toFixed(1).replace(".", ",")} dtk`
@@ -144,7 +144,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
         : commentStatus === "skipped" && commentDetail === "comment_budget"
           ? "Dilewati · waktu habis"
           : commentStatus === "skipped" && commentDetail === "no_posts"
-            ? "Dilewati · tidak ada postingan"
+            ? "Dilewati · tidak ada postingan yang cocok"
             : commentStatus === "skipped" && commentDetail === "no_provider"
               ? "Dilewati · sumber tidak mendukung"
               : commentStatus === "skipped" && commentDetail === "calls_failed"
@@ -188,7 +188,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
               <p className="text-[20px] font-semibold tabular-nums text-foreground">
                 {snapshot.totals.results} hasil
               </p>
-              <p className="text-[11px] text-muted-foreground">terkumpul</p>
+              <p className="text-[11px] text-muted-foreground">cocok</p>
             </div>
             <div>
               <p className="text-[20px] font-semibold tabular-nums text-foreground">

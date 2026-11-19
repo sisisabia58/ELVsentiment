@@ -23,6 +23,17 @@ async function seededDb(): Promise<Queryable> {
 
 const limits = { cariDailySearchLimit: 20 };
 
+async function completeWithEvidence(db: Queryable, searchId: string) {
+  await db.query("update instant_searches set relevance_version = 1, status = 'succeeded' where id = $1", [searchId]);
+  await db.query(
+    `insert into instant_search_results
+       (id, search_id, customer_id, platform, external_id, text, relevance, source_provider, raw_ref)
+     values ('33333333-3333-4333-8333-333333333333', $1, $2, 'threads', 'match',
+             'Barayam enak', 'literal_match', 'scrapeatlas', 'fixture:match')`,
+    [searchId, CUSTOMER],
+  );
+}
+
 describe("startSearchForCustomer", () => {
   it("creates a search for the signed-in customer and returns its id", async () => {
     const db = await seededDb();
@@ -183,6 +194,26 @@ describe("startSearchForCustomer", () => {
 });
 
 describe("askQuestionForCustomer", () => {
+  it("does not queue or charge a question for legacy or empty evidence", async () => {
+    const db = await seededDb();
+    const started = await startSearchForCustomer({
+      db, customerId: CUSTOMER, query: "barayam", filters: DEFAULT_FILTERS,
+      env: { CARI_SEKARANG_ENABLED: "1" }, limits, now: NOW,
+    });
+    if (!started.ok) throw new Error("search");
+    const input = {
+      db, customerId: CUSTOMER, searchId: started.searchId, question: "Apa keluhan utama?",
+      env: { CARI_SEKARANG_ENABLED: "1" },
+    };
+    await completeWithEvidence(db, started.searchId);
+    await db.query("update instant_searches set relevance_version = 0 where id = $1", [started.searchId]);
+    expect(await askQuestionForCustomer(input)).toEqual({ ok: false, error: "no_evidence" });
+    await db.query("delete from instant_search_results where search_id = $1", [started.searchId]);
+    await db.query("update instant_searches set relevance_version = 1 where id = $1", [started.searchId]);
+    expect(await askQuestionForCustomer(input)).toEqual({ ok: false, error: "no_evidence" });
+    expect((await db.query("select user_credits from instant_search_questions")).rows).toEqual([]);
+  });
+
   it("queues one question for the owner and spends one user credit", async () => {
     const db = await seededDb();
     const started = await startSearchForCustomer({
@@ -195,6 +226,7 @@ describe("askQuestionForCustomer", () => {
       now: NOW,
     });
     if (!started.ok) throw new Error("search");
+    await completeWithEvidence(db, started.searchId);
     const asked = await askQuestionForCustomer({
       db,
       customerId: CUSTOMER,
@@ -269,6 +301,7 @@ describe("askQuestionForCustomer", () => {
       now: NOW,
     });
     if (!started.ok) throw new Error("search");
+    await completeWithEvidence(db, started.searchId);
     const asked = await askQuestionForCustomer({
       db,
       customerId: CUSTOMER,

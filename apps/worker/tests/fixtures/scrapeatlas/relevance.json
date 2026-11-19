@@ -1,0 +1,23 @@
+[
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Tukuliling kopi dekat MRT.", "title": null, "hashtags": [], "expected": "literal_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Ada Tukuliling di MRT Blok M.", "title": null, "hashtags": [], "expected": "all_words_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Ketemu dekat MRT. #tukuliling", "title": null, "hashtags": [], "expected": "all_words_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Mesinnya kosong lagi.", "title": null, "hashtags": ["tukuliling"], "expected": "all_words_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Lihat #TukulilingKopi di stasiun.", "title": null, "hashtags": [], "expected": "literal_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Ada apa di MRT?", "title": "Tukuliling-Kopi", "hashtags": [], "expected": "all_words_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "TUKULILING di Blok M.", "title": null, "hashtags": [], "expected": "all_words_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Kopi keliling lewat tiap pagi.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Cari tempat ngopi di Kopi Sekarputih.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Coba tuku kopi keliling.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "tukuliling kopi", "intent": "phrase", "text": "Kopinya enak di supertukuliling.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "kopikalyan kopi", "intent": "phrase", "text": "Kopikalyan pindah tempat.", "title": null, "hashtags": [], "expected": "all_words_match"},
+  {"query": "fore coffee", "intent": "phrase", "text": "Cobain #fore dekat sini.", "title": null, "hashtags": [], "expected": "all_words_match"},
+  {"query": "#tukuliling", "intent": "hashtag", "text": "Aku lihat ＃Ｔｕｋｕｌｉｌｉｎｇ tadi.", "title": null, "hashtags": [], "expected": "literal_match"},
+  {"query": "#tukuliling", "intent": "hashtag", "text": "Lihat #tukulilingkopi di stasiun.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "kopi keliling", "intent": "phrase", "text": "Kopi keliling lewat tiap pagi.", "title": null, "hashtags": [], "expected": "literal_match"},
+  {"query": "kopi keliling", "intent": "phrase", "text": "Keliling kota sambil jual kopi.", "title": null, "hashtags": [], "expected": "all_words_match"},
+  {"query": "kopi keliling", "intent": "phrase", "text": "Keliling kota tiap pagi.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "kopi keliling", "intent": "phrase", "text": "Beli kopi setiap pagi.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "kopi arabika", "intent": "phrase", "text": "Tanaman arabika ini baru tumbuh.", "title": null, "hashtags": [], "expected": "no_match"},
+  {"query": "kamera digital", "intent": "phrase", "text": "Pameran digital di Jakarta.", "title": null, "hashtags": [], "expected": "no_match"}
+]

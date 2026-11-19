@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timezone
+import json
 import math
 import re
 import unicodedata
 from typing import Iterable, Literal
 import urllib.parse
 
-from sentiment_monitor.relevance import literal_match_status, normalize_match_text
+from sentiment_monitor.paths import repo_root
+from sentiment_monitor.relevance import hashtags_in_text, literal_match_status, normalize_match_text
 
 PlatformId = Literal[
     "threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x", "web"
@@ -142,6 +144,34 @@ def _word_pattern(token: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){re.escape(token)}(?!\w)", re.UNICODE)
 
 
+_ANCHOR_RULES = json.loads((repo_root() / "config" / "cari-relevance.json").read_text(encoding="utf-8"))
+_ENTITY_DESCRIPTORS = frozenset(_ANCHOR_RULES["descriptors"])
+_GENERIC_TERMS = frozenset(_ANCHOR_RULES["generic_terms"])
+_MIN_PLAIN_ANCHOR_LENGTH = _ANCHOR_RULES["minimum_plain_anchor_length"]
+
+
+def _has_entity_anchor(
+    tokens: list[str], text: str, hashtags: tuple[str, ...], intent: str,
+) -> bool:
+    # Relax only a single category descriptor alongside one distinct name.
+    # Short names need an explicit hashtag to avoid treating common words as brands.
+    if intent != "phrase" or len(tokens) != 2:
+        return False
+    anchor, descriptor = tokens
+    if anchor in _ENTITY_DESCRIPTORS:
+        anchor, descriptor = descriptor, anchor
+    if descriptor not in _ENTITY_DESCRIPTORS or anchor in _ENTITY_DESCRIPTORS | _GENERIC_TERMS:
+        return False
+    if not anchor.isalnum():
+        return False
+    if len(anchor) >= _MIN_PLAIN_ANCHOR_LENGTH and _word_pattern(anchor).search(text):
+        return True
+    return any(
+        normalize_match_text(tag).removeprefix("#") == anchor
+        for tag in (*hashtags_in_text(text), *hashtags)
+    )
+
+
 def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase") -> Relevance:
     for candidate in (post.text or "", post.title or ""):
         if literal_match_status(
@@ -151,7 +181,9 @@ def keyword_relevance(post: CanonicalPost, keyword: str, intent: str = "phrase")
     tokens = normalize_match_text(keyword).split()
     if tokens:
         haystack = normalize_match_text(f"{post.text or ''} {post.title or ''}")
-        if all(_word_pattern(token).search(haystack) for token in tokens):
+        if all(_word_pattern(token).search(haystack) for token in tokens) or _has_entity_anchor(
+            tokens, haystack, post.hashtags, intent
+        ):
             return "all_words_match"
     return "no_match"
 

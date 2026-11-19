@@ -1,5 +1,7 @@
 import type { Queryable } from "../../db/migrate";
 import { withCustomer } from "../../db/migrate";
+import { savedEvidenceRelevance, SEARCH_RELEVANCE_VERSION } from "./relevance";
+
 const PLATFORM_ORDER = [
   "threads",
   "tiktok",
@@ -24,6 +26,7 @@ export type SnapshotSearch = {
   intent: string;
   filters: SearchFiltersRow;
   status: string;
+  legacyEvidence?: boolean;
   summaryStatus: string;
   overallStance: string | null;
   errorCode: string | null;
@@ -165,6 +168,7 @@ export async function loadSearchSnapshot(
       sort_mode: SearchFiltersRow["sort"];
       language_filter: SearchFiltersRow["language"];
       status: string;
+      relevance_version: number;
       summary_status: string;
       overall_stance: string | null;
       error_code: string | null;
@@ -175,7 +179,7 @@ export async function loadSearchSnapshot(
       finished_at: string | Date | null;
     }>(
       `select id, query_text, keyword_intent, date_window, sort_mode, language_filter,
-              status, summary_status, overall_stance, error_code,
+              status, relevance_version, summary_status, overall_stance, error_code,
               comment_status, comment_detail,
               created_at, started_at, finished_at
        from instant_searches
@@ -184,34 +188,21 @@ export async function loadSearchSnapshot(
     );
     const row = searchRows.rows[0];
     if (!row) return null;
+    const currentRelevance = row.relevance_version >= SEARCH_RELEVANCE_VERSION;
+    const legacyEvidence = !currentRelevance && row.status !== "queued" && row.status !== "running";
 
     const sourceRows = await db.query<{
       platform: string;
       state: string;
-      result_count: number | string;
       latency_ms: number | null;
       safe_detail: string;
       updated_at: string | Date;
     }>(
-      `select platform, state, result_count, latency_ms, safe_detail, updated_at
+      `select platform, state, latency_ms, safe_detail, updated_at
        from instant_search_sources
        where search_id = $1 and customer_id = $2`,
       [searchId, customerId],
     );
-    const order = new Map(PLATFORM_ORDER.map((platform, index) => [platform, index]));
-    const sources: SnapshotSource[] = sourceRows.rows
-      .map((source) => ({
-        platform: source.platform,
-        state: source.state,
-        resultCount: int(source.result_count),
-        latencyMs: source.latency_ms,
-        safeDetail: source.safe_detail,
-        updatedAt: iso(source.updated_at) ?? new Date(0).toISOString(),
-      }))
-      .sort((a, b) => (order.get(a.platform) ?? 99) - (order.get(b.platform) ?? 99));
-
-    // Every stored row is loaded. Header, history, and the result tabs all
-    // count this table, so a display LIMIT would make those numbers disagree.
     const resultRows = await db.query<{
       id: string;
       platform: string;
@@ -241,35 +232,54 @@ export async function loadSearchSnapshot(
                 published_at desc nulls last, collected_at desc`,
       [searchId, customerId],
     );
-    const results: SnapshotResult[] = resultRows.rows.map((result) => ({
-      id: result.id,
-      platform: result.platform,
-      externalId: result.external_id,
-      authorName: result.author_name,
-      authorHandle: result.author_handle,
-      url: result.url,
-      text: result.text,
-      title: result.title,
-      publishedAt: iso(result.published_at),
-      thumbnailUrl: result.thumbnail_url,
-      views: result.views,
-      likes: result.likes,
-      replies: result.replies,
-      shares: result.shares,
-      language: result.language,
-      relevance: result.relevance,
-      rank: result.rank,
-      collectedAt: iso(result.collected_at) ?? new Date(0).toISOString(),
-    }));
+    const counts = new Map<string, number>();
+    const results: SnapshotResult[] = [];
+    for (const result of resultRows.rows) {
+      const relevance = currentRelevance
+        ? result.relevance
+        : savedEvidenceRelevance(result, row.query_text, row.keyword_intent);
+      if (relevance !== "literal_match" && relevance !== "all_words_match") continue;
+      counts.set(result.platform, (counts.get(result.platform) ?? 0) + 1);
+      results.push({
+        id: result.id,
+        platform: result.platform,
+        externalId: result.external_id,
+        authorName: result.author_name,
+        authorHandle: result.author_handle,
+        url: result.url,
+        text: result.text,
+        title: result.title,
+        publishedAt: iso(result.published_at),
+        thumbnailUrl: result.thumbnail_url,
+        views: result.views,
+        likes: result.likes,
+        replies: result.replies,
+        shares: result.shares,
+        language: result.language,
+        relevance,
+        rank: result.rank,
+        collectedAt: iso(result.collected_at) ?? new Date(0).toISOString(),
+      });
+    }
+    if (!currentRelevance && row.sort_mode === "relevance") {
+      results.sort((a, b) => Number(!a.publishedAt) - Number(!b.publishedAt)
+        || (a.publishedAt && b.publishedAt ? Number(a.relevance !== "literal_match") - Number(b.relevance !== "literal_match") : 0));
+    }
+    const order = new Map(PLATFORM_ORDER.map((platform, index) => [platform, index]));
+    const sources: SnapshotSource[] = sourceRows.rows
+      .map((source) => ({
+        platform: source.platform,
+        state: source.state,
+        resultCount: counts.get(source.platform) ?? 0,
+        latencyMs: source.latency_ms,
+        safeDetail: source.safe_detail,
+        updatedAt: iso(source.updated_at) ?? new Date(0).toISOString(),
+      }))
+      .sort((a, b) => (order.get(a.platform) ?? 99) - (order.get(b.platform) ?? 99));
+    const resultIds = results.map((result) => result.id);
+    const generatedEvidenceEligible = currentRelevance && resultIds.length > 0;
 
-    const resultCountRows = await db.query<{ n: number | string }>(
-      `select count(*)::int as n from instant_search_results
-       where search_id = $1 and customer_id = $2`,
-      [searchId, customerId],
-    );
-    const storedResultCount = int(resultCountRows.rows[0]?.n);
-
-    const commentRows = await db.query<{
+    const commentRows = resultIds.length > 0 ? await db.query<{
       id: string;
       result_id: string;
       platform: string;
@@ -284,10 +294,10 @@ export async function loadSearchSnapshot(
       `select id, result_id, platform, external_id, author_name, author_handle, text,
               published_at, likes, replies
        from instant_search_comments
-       where search_id = $1 and customer_id = $2
+       where search_id = $1 and customer_id = $2 and result_id = any($3::uuid[])
        order by result_id, likes desc nulls last, published_at asc nulls last, collected_at`,
-      [searchId, customerId],
-    );
+      [searchId, customerId, resultIds],
+    ) : { rows: [] };
     const comments: SnapshotComment[] = commentRows.rows.map((comment) => ({
       id: comment.id,
       resultId: comment.result_id,
@@ -301,7 +311,7 @@ export async function loadSearchSnapshot(
       replies: comment.replies,
     }));
 
-    const aiRows = await db.query<{
+    const aiRows = generatedEvidenceEligible ? await db.query<{
       overall_summary: string;
       overall_stance: string;
       platform_summaries: unknown;
@@ -313,7 +323,7 @@ export async function loadSearchSnapshot(
        from instant_search_ai
        where search_id = $1 and customer_id = $2`,
       [searchId, customerId],
-    );
+    ) : { rows: [] };
     const aiRow = aiRows.rows[0];
     const ai: SnapshotAi | null = aiRow
       ? {
@@ -326,7 +336,7 @@ export async function loadSearchSnapshot(
         }
       : null;
 
-    const questionRows = await db.query<{
+    const questionRows = generatedEvidenceEligible ? await db.query<{
       id: string;
       question: string;
       status: string;
@@ -341,7 +351,7 @@ export async function loadSearchSnapshot(
        where search_id = $1 and customer_id = $2
        order by created_at, id`,
       [searchId, customerId],
-    );
+    ) : { rows: [] };
     const questions: SnapshotQuestion[] = questionRows.rows.map((question) => ({
       id: question.id,
       question: question.question,
@@ -364,11 +374,12 @@ export async function loadSearchSnapshot(
           language: row.language_filter,
         },
         status: row.status,
-        summaryStatus: row.summary_status,
-        overallStance: row.overall_stance,
+        legacyEvidence,
+        summaryStatus: legacyEvidence ? "skipped" : row.summary_status,
+        overallStance: generatedEvidenceEligible ? row.overall_stance : null,
         errorCode: row.error_code,
-        commentStatus: row.comment_status,
-        commentDetail: row.comment_detail,
+        commentStatus: legacyEvidence ? (comments.length > 0 ? "done" : "skipped") : row.comment_status,
+        commentDetail: legacyEvidence ? (results.length === 0 ? "no_posts" : null) : row.comment_detail,
         createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
         startedAt: iso(row.started_at),
         finishedAt: iso(row.finished_at),
@@ -377,7 +388,7 @@ export async function loadSearchSnapshot(
       totals: {
         sources: sources.length,
         done: sources.filter((source) => source.state === "answered").length,
-        results: storedResultCount,
+        results: results.length,
       },
       results,
       comments,
@@ -397,29 +408,48 @@ export async function loadHistory(
     const rows = await db.query<{
       id: string;
       query_text: string;
+      keyword_intent: string;
+      relevance_version: number;
       overall_stance: string | null;
       status: string;
       created_at: string | Date;
       result_count: number | string;
       source_count: number | string;
     }>(
-      `select s.id, s.query_text, s.overall_stance, s.status, s.created_at,
+      `select s.id, s.query_text, s.keyword_intent, s.relevance_version, s.overall_stance, s.status, s.created_at,
               (select count(*) from instant_search_results r
-                 where r.search_id = s.id and r.customer_id = s.customer_id)::int as result_count,
+                 where s.relevance_version >= $3 and r.search_id = s.id and r.customer_id = s.customer_id
+                   and r.relevance in ('literal_match', 'all_words_match'))::int as result_count,
               (select count(*) from instant_search_sources src
                  where src.search_id = s.id and src.customer_id = s.customer_id)::int as source_count
        from instant_searches s
        where s.customer_id = $1
        order by s.created_at desc, s.id desc
        limit $2`,
-      [customerId, bounded],
+      [customerId, bounded, SEARCH_RELEVANCE_VERSION],
     );
+    const legacy = new Map(rows.rows.filter((row) => row.relevance_version < SEARCH_RELEVANCE_VERSION)
+      .map((row) => [row.id, row]));
+    const eligibleCounts = new Map<string, number>();
+    if (legacy.size > 0) {
+      const evidence = await db.query<{ search_id: string; text: string; title: string | null }>(
+        `select search_id, text, title from instant_search_results
+         where customer_id = $1 and search_id = any($2::uuid[])`,
+        [customerId, [...legacy.keys()]],
+      );
+      for (const post of evidence.rows) {
+        const saved = legacy.get(post.search_id);
+        if (saved && savedEvidenceRelevance(post, saved.query_text, saved.keyword_intent)) {
+          eligibleCounts.set(saved.id, (eligibleCounts.get(saved.id) ?? 0) + 1);
+        }
+      }
+    }
     return rows.rows.map((row) => ({
       id: row.id,
       query: row.query_text,
-      resultCount: int(row.result_count),
+      resultCount: legacy.has(row.id) ? (eligibleCounts.get(row.id) ?? 0) : int(row.result_count),
       sourceCount: int(row.source_count),
-      stance: row.overall_stance,
+      stance: !legacy.has(row.id) && int(row.result_count) > 0 ? row.overall_stance : null,
       status: row.status,
       createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     }));

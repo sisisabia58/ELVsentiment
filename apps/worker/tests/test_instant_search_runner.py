@@ -27,7 +27,7 @@ from sentiment_monitor.instant_search import (
     run_question_cycle,
     summarize_search,
 )
-from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, RouteCall
+from sentiment_monitor.providers.canonical import CanonicalComment, CanonicalPost, PlatformFetch, RouteCall
 from sentiment_monitor.providers.comments import CommentFetch
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
 from sentiment_monitor.providers.fetch import fetch_platform
@@ -456,6 +456,81 @@ def test_runner_all_failed_is_failed_and_inserts_no_results(db):
     assert db.execute("select count(*) as n from instant_search_results where search_id=%s", (job.id,))[0]["n"] == 0
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("relevance", ["exact", "anchor"]), ("newest", ["anchor", "exact"]), ("popular", ["anchor", "exact"])],
+)
+def test_runner_rejects_weak_posts_before_the_cap_rank_and_comment_budget(db, monkeypatch, mode, expected):
+    monkeypatch.setattr(instant_search, "MAX_PLATFORM_RESULTS", 2)
+    job = replace(claim_instant_search(db, "worker-1"), query="tukuliling kopi", sort_mode=mode)
+    db.execute("update instant_searches set query_text = %s, sort_mode = %s where id = %s", (job.query, mode, job.id))
+    posts = [
+        replace(post("threads", "exact"), text="Tukuliling kopi di MRT."),
+        replace(post("threads", "anchor"), text="Mesin Tukuliling mati.", views=100, published_at="2026-11-15T00:00:00Z"),
+        replace(post("threads", "weak"), text="Kopi keliling.", views=10_000, published_at="2026-11-16T00:00:00Z"),
+        replace(post("threads", "old"), text="Tukuliling kopi dulu.", views=9000, published_at="2026-10-01T00:00:00Z"),
+    ]
+    seen = []
+
+    def comment_fetch(platform, item, **kwargs):
+        seen.append(item.external_id)
+        return CommentFetch(item.external_id, [canonical_comment(item.external_id)], None, "answered", "ok")
+
+    run_instant_search(
+        db, job, env={"CARI_AI_PROVIDER": "off"}, now=datetime(2026, 11, 16, tzinfo=timezone.utc),
+        settings={"threads": DEFAULT_SETTINGS["threads"], "comments": DEFAULT_SETTINGS["comments"]},
+        fetcher=lambda *args, **kwargs: PlatformFetch("threads", posts=posts, state="answered"),
+        comment_fetcher=comment_fetch,
+    )
+
+    assert [row["external_id"] for row in db.execute(
+        "select external_id from instant_search_results where search_id = %s order by rank", (job.id,),
+    )] == expected
+    assert db.execute("select result_count from instant_search_sources where search_id = %s", (job.id,)) == [
+        {"result_count": 2},
+    ]
+    assert seen == expected
+
+
+def test_runner_finishes_zero_matches_without_comment_or_model_calls(db):
+    job = replace(claim_instant_search(db, "worker-1"), query="tukuliling kopi")
+    db.execute("update instant_searches set query_text = %s where id = %s", (job.query, job.id))
+    spent = []
+
+    def comment_fetch(*args, **kwargs):
+        spent.append("comment")
+        raise AssertionError("weak posts must not be sent to comment fetch")
+
+    class Model:
+        def generate_json(self, **kwargs):
+            spent.append("model")
+            raise AssertionError("no eligible evidence must skip AI")
+
+    run_instant_search(
+        db, job, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime(2026, 11, 16, tzinfo=timezone.utc),
+        settings={"threads": DEFAULT_SETTINGS["threads"], "comments": DEFAULT_SETTINGS["comments"]},
+        fetcher=lambda *args, **kwargs: PlatformFetch(
+            "threads", posts=[replace(post("threads"), text="Kopi keliling dekat kantor")],
+            calls=[RouteCall("scrapeatlas", "threads", "search", "success", credits_charged=1)], state="answered",
+        ),
+        comment_fetcher=comment_fetch, llm=Model(),
+    )
+
+    assert db.execute(
+        "select status, summary_status, comment_status, comment_detail, credits_used from instant_searches where id = %s",
+        (job.id,),
+    )[0] == {
+        "status": "succeeded", "summary_status": "skipped", "comment_status": "skipped",
+        "comment_detail": "no_posts", "credits_used": 1,
+    }
+    assert db.execute("select state, result_count from instant_search_sources where search_id = %s", (job.id,)) == [
+        {"state": "answered", "result_count": 0},
+    ]
+    assert db.execute("select route from search_credit_ledger where search_id = %s", (job.id,)) == [{"route": "search"}]
+    assert db.execute("select id from instant_search_results where search_id = %s", (job.id,)) == []
+    assert spent == []
+
+
 def test_runner_fixture_mode_end_to_end_ranks_and_records_zero_credits(db, monkeypatch):
     monkeypatch.setenv("CARI_PROVIDER_MODE", "fixture")
     job = claim_instant_search(db, "worker-1")
@@ -632,7 +707,7 @@ def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
         fetcher=fetcher,
         comment_fetcher=comment_fetch,
     )
-    assert calls == ["shown", "unknown", "viral"]
+    assert calls == ["shown", "unknown"]
     attached = db.execute(
         """
         select r.external_id
@@ -643,7 +718,7 @@ def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
         """,
         (job.id,),
     )
-    assert [row["external_id"] for row in attached] == ["shown", "unknown", "viral"]
+    assert [row["external_id"] for row in attached] == ["shown", "unknown"]
     ranks = db.execute(
         """
         select external_id, rank from instant_search_results
@@ -651,7 +726,7 @@ def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
         """,
         (job.id,),
     )
-    assert [row["external_id"] for row in ranks] == ["shown", "quiet", "unknown", "viral"]
+    assert [row["external_id"] for row in ranks] == ["shown", "quiet", "unknown"]
 
 
 def test_comment_failure_keeps_the_posts_and_the_search_status(db):
@@ -1066,6 +1141,27 @@ def test_question_failure_does_not_change_the_search(db):
     assert row["status"] == "failed"
     assert row["answer"] is None
     assert row["safe_detail"] == "http_500"
+
+
+def test_legacy_questions_cannot_send_old_search_evidence_to_the_model(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    db.execute("update instant_searches set relevance_version = 0 where id = %s", (job.id,))
+    question_id = "33333333-3333-4333-8333-333333333333"
+    _queue_question(db, "Apa keluhan utama?", question_id)
+    called = []
+
+    class Model:
+        def generate_json(self, **kwargs):
+            called.append(kwargs)
+            raise AssertionError("legacy search should require a fresh run")
+
+    run_question_cycle(db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=Model())
+    assert called == []
+    assert db.execute(
+        "select status, safe_detail from instant_search_questions where id = %s", (question_id,),
+    ) == [{"status": "failed", "safe_detail": "no_evidence"}]
 
 
 def test_question_stores_known_citations_and_drops_the_rest(db):

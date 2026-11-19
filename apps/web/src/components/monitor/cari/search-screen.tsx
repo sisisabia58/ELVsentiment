@@ -108,18 +108,16 @@ function useNow(initialIso: string | undefined): Date {
 
 function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boolean; running: boolean }) {
   const snapshot = props.snapshot;
-  if (snapshot.results.length === 0 && !props.aiEnabled) return null;
-  const results = snapshot.results.length > 0 ? (
+  if (snapshot.results.length === 0) return null;
+  const results = (
     <ResultsList
       results={snapshot.results}
       commentsByResult={commentsByResult(snapshot)}
       sortMode={snapshot.search.filters.sort}
       now={props.now}
     />
-  ) : null;
-  if (!props.aiEnabled || props.running) {
-    return results ? <div className="mt-5">{results}</div> : null;
-  }
+  );
+  if (!props.aiEnabled || props.running) return <div className="mt-5">{results}</div>;
   const counts: Record<string, number> = {};
   for (const result of snapshot.results) counts[result.platform] = (counts[result.platform] ?? 0) + 1;
   const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
@@ -172,7 +170,11 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   const now = useNow(props.now);
   const search = snapshot.search;
   const [monitorError, setMonitorError] = useState<string | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
+  const [rerunning, setRerunning] = useState(false);
   const running = search.status === "queued" || search.status === "running";
+  const legacy = search.legacyEvidence === true;
+  const aiEnabled = props.aiEnabled === true && !legacy;
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
   const elapsed = elapsedSeconds(snapshot, now);
@@ -188,6 +190,24 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
     !running && (search.errorCode !== null || search.status === "failed")
       ? (search.errorCode ? FAILED_SEARCH_COPY[search.errorCode] : null) ?? FAILED_SEARCH_FALLBACK
       : null;
+
+  async function rerun() {
+    setRerunning(true);
+    setRerunError(null);
+    try {
+      const result = await startSearchAction({ query: search.query, filters: search.filters });
+      if (result.ok) {
+        router.push(`/cari/${result.searchId}`);
+        return;
+      }
+      setRerunError(ERROR_COPY[result.error] ?? "Pencarian gagal dimulai. Coba lagi.");
+    } catch {
+      setRerunError("Pencarian gagal dimulai. Coba lagi.");
+    } finally {
+      setRerunning(false);
+    }
+  }
+
   return (
     <div className="mt-5">
       <section className="rounded-[14px] border border-border bg-surface shadow-card">
@@ -241,10 +261,35 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
           Koneksi terputus. Menampilkan hasil terakhir.
         </p>
       ) : null}
+      {legacy ? (
+        <div className="mt-5 rounded-[14px] border border-border bg-surface px-5 py-4 text-[13px]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-muted-foreground">
+              {snapshot.results.length > 0
+                ? "Hasil tersimpan yang bisa diverifikasi ditampilkan di bawah. Cari ulang untuk memperbarui hasil."
+                : "Tidak ada hasil tersimpan yang bisa diverifikasi. Cari ulang untuk mencari hasil terbaru."}
+            </p>
+            <button
+              type="button"
+              disabled={rerunning}
+              onClick={() => void rerun()}
+              className="inline-flex h-9 items-center rounded-lg border border-border px-3 font-medium text-foreground"
+            >
+              {rerunning ? "Memulai…" : "Cari ulang"}
+            </button>
+          </div>
+          {rerunError ? <p role="alert" className="mt-2 text-negatif">{rerunError}</p> : null}
+        </div>
+      ) : null}
       <div className="mt-5">
-        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={props.aiEnabled} />
+        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={aiEnabled} />
       </div>
-      <SearchBody snapshot={snapshot} now={now} aiEnabled={props.aiEnabled === true} running={running} />
+      {!legacy && !running && !failureCopy && snapshot.results.length === 0 ? (
+        <p className="mt-5 rounded-[14px] border border-border bg-surface px-5 py-4 text-[13px] text-muted-foreground">
+          Tidak ada hasil yang cocok dengan kata kunci.
+        </p>
+      ) : null}
+      <SearchBody snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} />
     </div>
   );
 }
