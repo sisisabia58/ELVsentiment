@@ -293,10 +293,12 @@ describe("loadSearchSnapshot", () => {
   it("loads comments, AI, and questions for the search only", async () => {
     const db = await migrated();
     await insertSearch(db, SEARCH, CUSTOMER);
+    await db.query("update instant_searches set summary_status = 'done' where id = $1", [SEARCH]);
     const resultId = "77777777-7777-4777-8777-777777777777";
     await insertResult(db, SEARCH, CUSTOMER, {
       id: resultId,
       externalId: "tiktok-1",
+      platform: "tiktok",
       publishedAt: "2026-11-15T09:00:00Z",
       rank: 1,
     });
@@ -310,15 +312,16 @@ describe("loadSearchSnapshot", () => {
     await db.query(
       `insert into instant_search_ai
          (search_id, customer_id, overall_summary, overall_stance, platform_summaries,
-          quotes, themes, model)
-       values ($1, $2, 'Ringkasan', 'campuran', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 'demo')`,
-      [SEARCH, CUSTOMER],
+          quotes, themes, model, evidence_ids, overall_supporting_ids)
+       values ($1, $2, 'Ringkasan', 'campuran', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 'demo', $3::jsonb, $4::jsonb)`,
+      [SEARCH, CUSTOMER, JSON.stringify([`result:${resultId}`, "comment:88888888-8888-4888-8888-888888888888"]),
+       JSON.stringify([`result:${resultId}`, "missing", `result:${resultId}`])],
     );
     await db.query(
       `insert into instant_search_questions
-         (id, search_id, customer_id, question, status, answer, citations, user_credits)
-       values ($1, $2, $3, 'Apa keluhannya?', 'done', 'Antrean.', '[]'::jsonb, 1)`,
-      ["99999999-9999-4999-8999-999999999999", SEARCH, CUSTOMER],
+         (id, search_id, customer_id, question, status, answer, citations, user_credits, evidence_ids)
+       values ($1, $2, $3, 'Apa keluhannya?', 'done', 'Antrean.', $4::jsonb, 1, $4::jsonb)`,
+      ["99999999-9999-4999-8999-999999999999", SEARCH, CUSTOMER, JSON.stringify([`result:${resultId}`])],
     );
     const snapshot = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
     expect(snapshot?.comments).toHaveLength(1);
@@ -328,9 +331,18 @@ describe("loadSearchSnapshot", () => {
       likes: 41,
     });
     expect(snapshot?.ai).toMatchObject({ overallSummary: "Ringkasan", overallStance: "campuran" });
+    expect(snapshot?.ai?.overallSupportingIds).toEqual([`result:${resultId}`]);
+    expect(snapshot?.ai?.evidenceIds).toHaveLength(2);
     expect(snapshot?.questions).toHaveLength(1);
     expect(snapshot?.questions[0]?.answer).toBe("Antrean.");
     expect(await loadSearchSnapshot(db, OTHER_CUSTOMER, SEARCH)).toBeNull();
+
+    await db.query("update instant_search_ai set evidence_ids = null where search_id = $1", [SEARCH]);
+    await db.query("update instant_search_questions set evidence_ids = null where search_id = $1", [SEARCH]);
+    const cached = await loadSearchSnapshot(db, CUSTOMER, SEARCH);
+    expect(cached?.search).toMatchObject({ legacyEvidence: false, summaryStatus: "done", overallStance: null });
+    expect(cached?.ai).toBeNull();
+    expect(cached?.questions[0]).toMatchObject({ answer: null, citations: [], evidenceIds: [] });
   });
 
   it("orders comments by likes then published time and keeps them out of the result count", async () => {
@@ -393,7 +405,7 @@ describe("loadHistory", () => {
       id: SEARCH,
       resultCount: 1,
       sourceCount: 2,
-      stance: "campuran",
+      stance: null,
     });
     expect(rows.some((row) => row.query === "rahasia")).toBe(false);
     expect(await loadHistory(db, CUSTOMER, 1)).toHaveLength(1);

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import io
 import json
@@ -328,7 +329,7 @@ def test_opencode_stops_at_the_cycle_cap(monkeypatch):
 
 def test_summary_and_question_use_opencode_without_showing_reasoning(db, monkeypatch):
     job = claim_instant_search(db, "worker-1")
-    insert_posts(db, job, [_post()])
+    insert_posts(db, job, [_post(), replace(_post(), external_id="th-2", text="Barayam ramai saat makan siang.")])
     finish_search(db, job, "succeeded")
     db.execute("delete from gemini_gate")
     seen = []
@@ -341,11 +342,14 @@ def test_summary_and_question_use_opencode_without_showing_reasoning(db, monkeyp
             "user": body["messages"][1]["content"],
             "timeout": timeout,
         })
+        evidence = json.loads(seen[-1]["user"].split("<<<DATA>>>\n")[1].split("\n<<<END DATA>>>")[0])
+        refs = [item["id"] for item in evidence]
         if body["max_tokens"] == 2048:
-            content = json.dumps({"answer": "Keluhan utamanya antrean.", "citations": []})
+            content = json.dumps({"answer": "Keluhan utamanya antrean.", "citations": refs[:1]})
         else:
             content = json.dumps({
-                "overall_summary": "Ringkasan antrean.",
+                "overall_summary": "Ada keluhan tentang antrean di Barayam. Lokasi ramai saat makan siang.",
+                "overall_supporting_ids": refs,
                 "overall_stance": "campuran",
                 "platforms": [],
                 "quotes": [],
@@ -365,7 +369,7 @@ def test_summary_and_question_use_opencode_without_showing_reasoning(db, monkeyp
         (job.id,),
     )[0]
     assert summary["summary_status"] == "done"
-    assert stored["overall_summary"] == "Ringkasan antrean."
+    assert stored["overall_summary"] == "Ada keluhan tentang antrean di Barayam. Lokasi ramai saat makan siang."
     assert stored["model"] == "deepseek-v4.1-flash"
     assert "hidden chain of thought" not in stored["overall_summary"]
 
@@ -390,5 +394,6 @@ def test_summary_and_question_use_opencode_without_showing_reasoning(db, monkeyp
     assert seen[0]["agent"] == OPENCODE_USER_AGENT
     assert seen[0]["timeout"] == OPENCODE_TIMEOUT_SECONDS
     assert "<<<DATA>>>" in seen[0]["user"]
-    assert seen[0]["user"].startswith("Tugas:")
-    assert seen[1]["user"].startswith("Pertanyaan: Apa keluhan utama?")
+    assert seen[0]["user"].startswith("Tulis overall_summary")
+    assert 'Pertanyaan: "Apa keluhan utama?"' in seen[1]["user"]
+    assert seen[0]["user"].split("<<<DATA>>>")[1] == seen[1]["user"].split("<<<DATA>>>")[1]

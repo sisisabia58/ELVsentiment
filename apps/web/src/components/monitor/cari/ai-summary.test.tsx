@@ -1,108 +1,61 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SnapshotAi } from "@/monitor/search/load";
+import type { SnapshotAi, SnapshotComment, SnapshotResult } from "@/monitor/search/load";
 import { AiSummary } from "./ai-summary";
 
-afterEach(() => {
-  cleanup();
-});
+afterEach(cleanup);
 
 const aiFixture: SnapshotAi = {
-  overallSummary: "Orang memuji kulitnya, tapi sebagian komplain antrean.",
+  overallSummary: "Tukuliling memudahkan penumpang membeli kopi. Ada laporan mesin kosong.",
   overallStance: "campuran",
+  overallSupportingIds: ["comment:c1", "result:r1", "comment:c1", "result:stale", "result:r2"],
+  evidenceIds: ["comment:c1", "result:r1", "result:stale"],
   platformSummaries: [
-    { platform: "threads", stance: "campuran", summary: "Campuran.", quote_id: "comment:c1" },
+    { platform: "threads", stance: "positif", summary: "Beli kopi tanpa antre.", supporting_ids: ["result:r1"] },
   ],
-  quotes: [
-    { type: "pujian", text: "kriuknya beda sih", ref_id: "comment:c1", platform: "threads", author: "rina" },
-  ],
-  themes: [{ title: "Rasa bawang putih & kulit kriuk", stance: "positif", description: "Rasa.", supporting_ids: [], platforms: ["threads"] }],
+  quotes: [],
+  themes: [],
   model: "demo",
 };
 
+const results = [
+  { id: "r1", platform: "threads", url: "https://example.invalid/post", text: "Tukuliling praktis.",
+    authorHandle: "@sari", authorName: null, title: null },
+  { id: "r2", platform: "youtube", url: "https://example.invalid/noise", text: "Kopi keliling.",
+    authorHandle: "@pedagang", authorName: null, title: null },
+] as SnapshotResult[];
+const comments = [
+  { id: "c1", resultId: "r1", platform: "threads", text: "Praktis sebelum naik kereta.",
+    authorHandle: "@rina", authorName: "Rina" },
+] as SnapshotComment[];
+
 describe("AiSummary", () => {
-  it("renders the overall summary, stance rows, quotes, themes, and disclaimer", () => {
-    render(<AiSummary ai={aiFixture} resultCount={12} commentCount={4} />);
-    expect(screen.getByText("Ringkasan AI")).toBeTruthy();
-    expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
-    expect(screen.getByText("Campuran")).toBeTruthy();
-    expect(screen.getByText("kriuknya beda sih")).toBeTruthy();
-    expect(screen.getByText("Rasa bawang putih & kulit kriuk")).toBeTruthy();
+  it("links only distinct retained sources, and counts the actual resolved sample", () => {
+    render(<AiSummary ai={aiFixture} results={results} comments={comments} />);
+    expect(screen.getByText(aiFixture.overallSummary)).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: /rina · Threads/ })).toHaveLength(1);
+    const reply = screen.getByRole("link", { name: /rina · Threads/ });
+    expect(reply.getAttribute("href")).toBe("https://example.invalid/post");
+    expect(reply.getAttribute("target")).toBe("_blank");
+    expect(screen.queryByRole("link", { name: /pedagang/ })).toBeNull();
+    expect(screen.getByText(/1 unggahan dan 1 balasan/)).toBeTruthy();
+    expect(screen.getByText(/^positif$/i)).toBeTruthy();
+    expect(screen.queryByText(/Positif \d+%/)).toBeNull();
   });
 
-  it("renders each summary paragraph on its own", () => {
-    render(
-      <AiSummary
-        ai={{
-          ...aiFixture,
-          overallSummary: "Gambaran umum percakapan.\n\nPujian yang menonjol.\nKeluhan yang menonjol.",
-        }}
-        resultCount={12}
-        commentCount={4}
-      />,
-    );
-    expect(screen.getByText("Gambaran umum percakapan.")).toBeTruthy();
-    expect(screen.getByText("Pujian yang menonjol.")).toBeTruthy();
-    expect(screen.getByText("Keluhan yang menonjol.")).toBeTruthy();
-    expect(screen.getAllByText(/menonjol|Gambaran/).length).toBe(3);
-  });
-
-  it("shows a skeleton while the summary is pending and a safe failure message", () => {
+  it("shows pending, failure, and insufficient-evidence states", () => {
     const { rerender } = render(<AiSummary ai={null} summaryStatus="running" />);
     expect(screen.getByText(/Ringkasan ditulis setelah komentar terkumpul/)).toBeTruthy();
     rerender(<AiSummary ai={null} summaryStatus="failed" />);
     expect(screen.getByText(/Ringkasan belum tersedia/)).toBeTruthy();
+    rerender(<AiSummary ai={null} summaryStatus="insufficient" />);
+    expect(screen.getByText(/Belum cukup bukti/)).toBeTruthy();
   });
 
-  it("follows the result distribution and links a quote to its source", () => {
-    const disagreed: SnapshotAi = {
-      ...aiFixture,
-      platformSummaries: [
-        { platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "comment:c1" },
-      ],
-    };
-    render(
-      <AiSummary
-        ai={disagreed}
-        resultCount={10}
-        commentCount={1}
-        platformCounts={{ threads: 10 }}
-        results={[{ id: "r1", url: "https://example.invalid/post" }]}
-        comments={[{ id: "c1", resultId: "r1" }]}
-      />,
-    );
-    expect(screen.getByText(/Positif 100%/)).toBeTruthy();
-    expect(screen.getByText(/Model menandai Campuran/)).toBeTruthy();
-    const link = screen.getByRole("link", { name: "kriuknya beda sih" });
-    expect(link.getAttribute("href")).toBe("https://example.invalid/post");
-    expect(link.getAttribute("target")).toBe("_blank");
-    expect(screen.getAllByRole("link", { name: "kriuknya beda sih" })).toHaveLength(1);
-  });
-
-  it("links a repeated quote once", () => {
-    const repeated: SnapshotAi = {
-      ...aiFixture,
-      platformSummaries: [
-        { platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "comment:c1" },
-        { platform: "tiktok", stance: "positif", summary: "Juga pujian.", quote_id: "comment:c1" },
-      ],
-      quotes: [
-        { type: "pujian", text: "kriuknya beda sih", ref_id: "comment:c1", platform: "threads", author: "rina" },
-        { type: "pujian", text: "Kriuknya beda sih", ref_id: "comment:c2", platform: "tiktok", author: "budi" },
-      ],
-    };
-    render(
-      <AiSummary
-        ai={repeated}
-        platformCounts={{ threads: 4, tiktok: 4 }}
-        results={[{ id: "r1", url: "https://example.invalid/post" }]}
-        comments={[
-          { id: "c1", resultId: "r1" },
-          { id: "c2", resultId: "r1" },
-        ]}
-      />,
-    );
-    expect(screen.getAllByRole("link", { name: /kriuknya beda sih/i })).toHaveLength(1);
+  it("does not show cached prose without verified citations", () => {
+    render(<AiSummary ai={{ ...aiFixture, evidenceIds: [] }} results={results} comments={comments} />);
+    expect(screen.getByText(/Ringkasan belum tersedia/)).toBeTruthy();
+    expect(screen.queryByText(aiFixture.overallSummary)).toBeNull();
   });
 });

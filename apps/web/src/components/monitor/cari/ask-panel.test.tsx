@@ -15,7 +15,8 @@ const answeredQuestion: SnapshotQuestion = {
   question: "Apa keluhan utama?",
   status: "done",
   answer: "Keluhan utama adalah antrean.",
-  citations: ["result:r1", "result:missing"],
+  citations: ["result:r1", "result:r1", "result:missing", "result:r2"],
+  evidenceIds: ["result:r1", "result:missing"],
   safeDetail: null,
   createdAt: "2026-11-16T10:00:00Z",
   answeredAt: "2026-11-16T10:00:05Z",
@@ -76,10 +77,18 @@ describe("AskPanel", () => {
         results={results}
       />,
     );
-    expect(screen.getByText(/rizkyhdyt · Threads/)).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: /rizkyhdyt · Threads/ })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: /rizkyhdyt · Threads/ }).getAttribute("href")).toBe("#hasil-r1");
+    expect(screen.queryByText(/jawaban hanya berdasarkan 1 hasil/i)).toBeNull();
     expect(screen.getByText(/Kuota AI sedang penuh/)).toBeTruthy();
     expect(screen.queryByText(/Jawaban belum tersedia/)).toBeNull();
     expect(screen.queryByText(/result:missing/)).toBeNull();
+  });
+
+  it("shows a fallback for legacy answers without a retained citation", () => {
+    render(<AskPanel searchId="s1" questions={[{ ...answeredQuestion, evidenceIds: [] }]} suggestions={[]} results={results} />);
+    expect(screen.getByText(/Jawaban belum tersedia/)).toBeTruthy();
+    expect(screen.queryByText(answeredQuestion.answer!)).toBeNull();
   });
 
   it("retries the same failed question without asking a new one", async () => {

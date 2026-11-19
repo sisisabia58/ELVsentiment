@@ -83,6 +83,8 @@ export type SnapshotComment = {
 export type SnapshotAi = {
   overallSummary: string;
   overallStance: string;
+  overallSupportingIds?: string[];
+  evidenceIds?: string[];
   platformSummaries: unknown;
   quotes: unknown;
   themes: unknown;
@@ -95,6 +97,7 @@ export type SnapshotQuestion = {
   status: string;
   answer: string | null;
   citations: string[];
+  evidenceIds?: string[];
   safeDetail: string | null;
   createdAt: string;
   answeredAt: string | null;
@@ -130,7 +133,7 @@ function iso(value: string | Date | null | undefined): string | null {
 function citationIds(value: unknown): string[] {
   const parsed = json(value);
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter((item): item is string => typeof item === "string");
+  return [...new Set(parsed.filter((item): item is string => typeof item === "string"))];
 }
 
 function json(value: unknown): unknown {
@@ -328,24 +331,47 @@ export async function loadSearchSnapshot(
       replies: comment.replies,
     }));
 
-    const aiRows = generatedEvidenceEligible ? await db.query<{
+    const resultPlatforms = new Map(results.map((result) => [result.id, result.platform]));
+    const availableEvidence = new Map<string, string | null>(results.map((result) => [`result:${result.id}`, null]));
+    for (const comment of comments) {
+      if (resultPlatforms.get(comment.resultId) === comment.platform) {
+        availableEvidence.set(`comment:${comment.id}`, `result:${comment.resultId}`);
+      }
+    }
+    function retainedIds(value: unknown): string[] {
+      const sample = new Set(citationIds(value));
+      return [...sample].filter((id) => {
+        const parent = availableEvidence.get(id);
+        return parent === null || (parent !== undefined && sample.has(parent));
+      });
+    }
+
+    const aiRows = generatedEvidenceEligible && row.summary_status === "done" ? await db.query<{
       overall_summary: string;
       overall_stance: string;
+      overall_supporting_ids: unknown;
+      evidence_ids: unknown;
       platform_summaries: unknown;
       quotes: unknown;
       themes: unknown;
       model: string;
     }>(
-      `select overall_summary, overall_stance, platform_summaries, quotes, themes, model
+      `select overall_summary, overall_stance, overall_supporting_ids, evidence_ids,
+              platform_summaries, quotes, themes, model
        from instant_search_ai
-       where search_id = $1 and customer_id = $2`,
+       where search_id = $1 and customer_id = $2 and evidence_ids is not null`,
       [searchId, customerId],
     ) : { rows: [] };
     const aiRow = aiRows.rows[0];
-    const ai: SnapshotAi | null = aiRow
+    const aiEvidenceIds = retainedIds(aiRow?.evidence_ids);
+    const sample = new Set(aiEvidenceIds);
+    const overallSupportingIds = citationIds(aiRow?.overall_supporting_ids).filter((id) => sample.has(id));
+    const ai: SnapshotAi | null = aiRow && overallSupportingIds.length
       ? {
           overallSummary: aiRow.overall_summary,
           overallStance: aiRow.overall_stance,
+          overallSupportingIds,
+          evidenceIds: aiEvidenceIds,
           platformSummaries: json(aiRow.platform_summaries),
           quotes: json(aiRow.quotes),
           themes: json(aiRow.themes),
@@ -359,26 +385,33 @@ export async function loadSearchSnapshot(
       status: string;
       answer: string | null;
       citations: unknown;
+      evidence_ids: unknown;
       safe_detail: string | null;
       created_at: string | Date;
       answered_at: string | Date | null;
     }>(
-      `select id, question, status, answer, citations, safe_detail, created_at, answered_at
+      `select id, question, status, answer, citations, evidence_ids, safe_detail, created_at, answered_at
        from instant_search_questions
        where search_id = $1 and customer_id = $2
        order by created_at, id`,
       [searchId, customerId],
     ) : { rows: [] };
-    const questions: SnapshotQuestion[] = questionRows.rows.map((question) => ({
-      id: question.id,
-      question: question.question,
-      status: question.status,
-      answer: question.answer,
-      citations: citationIds(question.citations),
-      safeDetail: question.safe_detail,
-      createdAt: iso(question.created_at) ?? new Date(0).toISOString(),
-      answeredAt: iso(question.answered_at),
-    }));
+    const questions: SnapshotQuestion[] = questionRows.rows.map((question) => {
+      const evidenceIds = retainedIds(question.evidence_ids);
+      const sample = new Set(evidenceIds);
+      const citations = citationIds(question.citations).filter((id) => sample.has(id));
+      return {
+        id: question.id,
+        question: question.question,
+        status: question.status,
+        answer: citations.length ? question.answer : null,
+        citations,
+        evidenceIds,
+        safeDetail: question.safe_detail,
+        createdAt: iso(question.created_at) ?? new Date(0).toISOString(),
+        answeredAt: iso(question.answered_at),
+      };
+    });
 
     return {
       search: {
@@ -393,7 +426,7 @@ export async function loadSearchSnapshot(
         status: row.status,
         legacyEvidence,
         summaryStatus: legacyEvidence ? "skipped" : row.summary_status,
-        overallStance: generatedEvidenceEligible ? row.overall_stance : null,
+        overallStance: ai?.overallStance ?? null,
         errorCode: row.error_code,
         commentStatus: legacyEvidence ? (comments.length > 0 ? "done" : "skipped") : row.comment_status,
         commentDetail: legacyEvidence ? (results.length === 0 ? "no_posts" : null) : row.comment_detail,
@@ -433,7 +466,10 @@ export async function loadHistory(
       result_count: number | string;
       source_count: number | string;
     }>(
-      `select s.id, s.query_text, s.keyword_intent, s.relevance_version, s.overall_stance, s.status, s.created_at,
+      `select s.id, s.query_text, s.keyword_intent, s.relevance_version, s.status, s.created_at,
+              (select ai.overall_stance from instant_search_ai ai
+                 where s.summary_status = 'done' and ai.search_id = s.id and ai.customer_id = s.customer_id
+                   and ai.evidence_ids is not null and ai.overall_supporting_ids is not null) as overall_stance,
               (select count(*) from instant_search_results r
                  where s.relevance_version >= $3 and r.search_id = s.id and r.customer_id = s.customer_id
                    and r.relevance in ('literal_match', 'all_words_match'))::int as result_count,

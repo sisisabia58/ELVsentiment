@@ -172,7 +172,9 @@ describe("SearchDetail", () => {
     done.ai = {
       overallSummary: "Ringkasan rahasia",
       overallStance: "campuran",
-      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian." }],
+      overallSupportingIds: ["result:r1"],
+      evidenceIds: ["result:r1"],
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian.", supporting_ids: ["result:r1"] }],
       quotes: [],
       themes: [],
       model: "gemini",
@@ -180,7 +182,8 @@ describe("SearchDetail", () => {
     render(<SearchDetail initialSnapshot={done} aiEnabled />);
     expect(screen.getAllByText("Ringkasan AI").length).toBeGreaterThan(0);
     expect(screen.getByText("Tanya hasil ini")).toBeTruthy();
-    expect(screen.getByText(/bisa keliru, cek kutipannya/)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Sumber ringkasan" })).toBeTruthy();
+    expect(screen.getByText(/Cuplikan AI · 1 unggahan dan 0 balasan/)).toBeTruthy();
     const body = document.body.textContent ?? "";
     expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
   });
@@ -191,16 +194,18 @@ describe("SearchDetail", () => {
     done.ai = {
       overallSummary: "Ringkasan rahasia",
       overallStance: "positif",
-      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian.", quote_id: "result:r1" }],
+      overallSupportingIds: ["result:r1"],
+      evidenceIds: ["result:r1"],
+      platformSummaries: [{ platform: "threads", stance: "positif", summary: "Pujian.", supporting_ids: ["result:r1"] }],
       quotes: [
-        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
-        { type: "pujian", text: "antrean unik", ref_id: "result:r1", platform: "threads", author: "rina" },
+        { type: "pujian", text: "antrean barayam", ref_id: "result:r1", platform: "threads", author: "rina" },
+        { type: "pujian", text: "antrean barayam", ref_id: "result:r1", platform: "threads", author: "rina" },
       ],
       themes: [],
       model: "gemini",
     };
     render(<SearchDetail initialSnapshot={done} aiEnabled />);
-    expect(screen.getAllByRole("link", { name: "antrean unik" })).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: "antrean barayam" })).toHaveLength(1);
   });
 
   it("shows the command receipt, progress before completion, and results after", () => {

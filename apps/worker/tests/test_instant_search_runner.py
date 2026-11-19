@@ -467,6 +467,8 @@ def test_runner_rejects_weak_posts_before_the_cap_rank_and_comment_budget(db, mo
     posts = [
         replace(post("threads", "exact"), text="Tukuliling kopi di MRT."),
         replace(post("threads", "anchor"), text="Mesin Tukuliling mati.", views=100, published_at="2026-11-15T00:00:00Z"),
+        replace(post("threads", "recent_anchor"), text="Tukuliling sudah pindah lokasi.",
+                views=20, published_at="2026-11-16T00:00:00Z"),
         replace(post("threads", "weak"), text="Kopi keliling.", views=10_000, published_at="2026-11-16T00:00:00Z"),
         replace(post("threads", "old"), text="Tukuliling kopi dulu.", views=9000, published_at="2026-10-01T00:00:00Z"),
     ]
@@ -489,7 +491,7 @@ def test_runner_rejects_weak_posts_before_the_cap_rank_and_comment_budget(db, mo
     assert db.execute("select result_count from instant_search_sources where search_id = %s", (job.id,)) == [
         {"result_count": 2},
     ]
-    assert seen == expected
+    assert seen == ["exact", "anchor"]
 
 
 def test_runner_finishes_zero_matches_without_comment_or_model_calls(db):
@@ -876,7 +878,7 @@ class FailingGemini:
 
 def test_summary_is_attempted_once_and_a_failed_one_is_not_retried(db):
     job = claim_instant_search(db, "worker-1")
-    insert_posts(db, job, [post()])
+    insert_posts(db, job, [post(), replace(post(external_id="vid-2"), text="barayam ramai")])
     finish_search(db, job, "succeeded")
     calls = []
 
@@ -926,7 +928,7 @@ def test_poll_does_not_backfill_an_old_pending_summary(db):
 def test_summary_failure_leaves_search_succeeded_but_marks_summary_failed(db):
     job = claim_instant_search(db, "worker-1")
     set_source_state(db, job, "youtube", "answered", result_count=1, credits_charged=1, latency_ms=10)
-    insert_posts(db, job, [post("youtube", "vid-1")])
+    insert_posts(db, job, [post(), replace(post(external_id="vid-2"), text="barayam ramai")])
     finish_search(db, job, "succeeded")
     summarize_search(db, job, llm=FailingGemini(), now=datetime.now(timezone.utc))
     search = db.execute("select status, summary_status, error_code from instant_searches where id=%s", (job.id,))[0]
@@ -968,29 +970,41 @@ def test_summary_is_skipped_when_the_provider_is_off(db):
     assert search["summary_status"] == "skipped"
 
 
-def test_summary_keeps_only_a_verbatim_quote(db):
+def test_summary_stores_exact_tukuliling_fixture_evidence(db):
+    db.execute("update instant_searches set query_text = 'tukuliling kopi' where id = %s", (SEARCH,))
     job = claim_instant_search(db, "worker-1")
-    insert_posts(db, job, [replace(post("threads", "th-1"), text="ayam ini enak banget")])
+    insert_posts(db, job, [
+        replace(post("threads", "convenience"), text="Tukuliling di MRT ASEAN memudahkan beli tanpa antre."),
+        replace(post("tiktok", "machine"), text="Kopi Tuku #tukuliling di MRT Lebak Bulus. Mesin sempat kosong."),
+        replace(post("youtube", "noise"), text="Kopi keliling independen.", relevance="no_match"),
+    ])
     finish_search(db, job, "succeeded")
-    result_id = db.execute(
-        "select id from instant_search_results where search_id=%s", (job.id,)
-    )[0]["id"]
+    refs = {
+        row["external_id"]: f"result:{row['id']}"
+        for row in db.execute("select id, external_id from instant_search_results where search_id=%s", (job.id,))
+    }
     client = ScriptedGemini([
         GeminiResult(
             data={
-                "overall_summary": "Ringkasan.",
+                "overall_summary": "Tukuliling memudahkan orang membeli kopi di MRT. Ada laporan mesin sempat kosong.",
                 "overall_stance": "campuran",
+                "overall_supporting_ids": [refs["convenience"], refs["machine"], refs["noise"]],
                 "platforms": [{
-                    "platform": "threads", "stance": "campuran",
-                    "summary": "Campuran.", "quote_id": f"result:{result_id}",
+                    "platform": "threads", "stance": "positif",
+                    "summary": "Beli tanpa antre.", "supporting_ids": [refs["convenience"]],
                 }],
                 "quotes": [
-                    {"type": "pujian", "text": "enak banget", "ref_id": f"result:{result_id}",
-                     "platform": "threads", "author": "rina"},
-                    {"type": "keluhan", "text": "bukan kutipan", "ref_id": f"result:{result_id}",
-                     "platform": "threads", "author": "rina"},
+                    {"type": "pujian", "text": "beli tanpa antre", "ref_id": refs["convenience"],
+                     "platform": "youtube", "author": "rina"},
+                    {"type": "keluhan", "text": "antrean panjang", "ref_id": refs["convenience"]},
+                    {"type": "pengamatan", "text": "Kopi keliling independen.", "ref_id": refs["noise"]},
                 ],
-                "themes": [],
+                "themes": [
+                    {"title": "Mesin kosong", "stance": "negatif", "description": "Mesin sempat kosong.",
+                     "supporting_ids": [refs["machine"]]},
+                    {"title": "Kopi keliling", "stance": "netral", "description": "Iklan yang tidak relevan.",
+                     "supporting_ids": [refs["noise"]]},
+                ],
             },
             model="scripted",
             input_tokens=3,
@@ -1000,16 +1014,21 @@ def test_summary_keeps_only_a_verbatim_quote(db):
     ])
     summarize_search(db, job, llm=client, now=datetime.now(timezone.utc))
     search = db.execute("select status, summary_status, overall_stance from instant_searches where id=%s", (job.id,))[0]
-    assert search["status"] == "succeeded"
-    assert search["summary_status"] == "done"
-    assert search["overall_stance"] == "campuran"
-    stored = db.execute("select quotes, cost_usd from instant_search_ai where search_id=%s", (job.id,))[0]
-    quotes = stored["quotes"]
-    if isinstance(quotes, str):
-        quotes = json.loads(quotes)
-    assert quotes == [{
-        "type": "pujian", "text": "enak banget", "ref_id": f"result:{result_id}",
-        "platform": "threads", "author": "rina",
+    assert search == {"status": "succeeded", "summary_status": "done", "overall_stance": "campuran"}
+    stored = db.execute(
+        "select overall_summary, quotes, themes, cost_usd, evidence_ids, overall_supporting_ids"
+        " from instant_search_ai where search_id=%s", (job.id,),
+    )[0]
+    assert stored["overall_summary"] == "Tukuliling memudahkan orang membeli kopi di MRT. Ada laporan mesin sempat kosong."
+    assert stored["quotes"] == [{
+        "type": "pujian", "text": "beli tanpa antre", "ref_id": refs["convenience"],
+        "platform": "threads", "author": "@ani",
+    }]
+    assert set(stored["evidence_ids"]) == {refs["convenience"], refs["machine"]}
+    assert stored["overall_supporting_ids"] == [refs["convenience"], refs["machine"]]
+    assert stored["themes"] == [{
+        "title": "Mesin kosong", "stance": "negatif", "description": "Mesin sempat kosong.",
+        "supporting_ids": [refs["machine"]], "platforms": ["tiktok"],
     }]
     assert stored["cost_usd"] == 0
 
@@ -1191,7 +1210,7 @@ def test_question_stores_known_citations_and_drops_the_rest(db):
         db, env={"CARI_AI_PROVIDER": "gemini"}, now=datetime.now(timezone.utc), llm=client,
     )
     row = db.execute(
-        "select status, answer, citations, model, cost_usd from instant_search_questions"
+        "select status, answer, citations, evidence_ids, model, cost_usd from instant_search_questions"
     )[0]
     citations = row["citations"]
     if isinstance(citations, str):
@@ -1199,6 +1218,7 @@ def test_question_stores_known_citations_and_drops_the_rest(db):
     assert row["status"] == "done"
     assert row["answer"] == "Keluhan utama adalah antrean."
     assert citations == [f"result:{result_id}"]
+    assert row["evidence_ids"] == citations
     assert row["model"] == "scripted"
     assert float(row["cost_usd"]) == 0.001
     search = db.execute("select status, error_code from instant_searches where id=%s", (job.id,))[0]
@@ -1279,3 +1299,55 @@ def test_runner_passes_the_route_timeout_to_each_fetch(db):
         settings=all_platform_settings(), fetcher=capture,
     )
     assert seen and all(value == ROUTE_TIMEOUT_SECONDS for value in seen)
+
+
+def test_grounded_sample_keeps_contextual_replies_and_balances_platforms(db):
+    db.execute("update instant_searches set query_text = 'tukuliling kopi' where id = %s", (SEARCH,))
+    job = claim_instant_search(db, "worker-1")
+    parent = "Tukuliling di MRT ASEAN memudahkan beli tanpa antre."
+    empty = "Kopi Tuku #tukuliling di MRT Lebak Bulus. Mesin sempat kosong."
+    unrelated = "Kopi keliling independen, pesan sekarang."
+    insert_posts(db, job, [
+        replace(post("threads", "th-1"), text=parent),
+        replace(post("threads", "th-2"), text=empty),
+        replace(post("tiktok", "tk-1"), text="Kopi Tukuliling ada di stasiun MRT."),
+        replace(post("youtube", "noisy"), text=unrelated, relevance="no_match"),
+    ])
+    result_rows = db.execute("select id, text from instant_search_results where search_id = %s", (job.id,))
+    by_text = {row["text"]: str(row["id"]) for row in result_rows}
+    for parent_text, replies in [
+        (parent, ["Praktis buat mengejar kereta.", "Jual akun game murah.", "Kafe kopi lain segera buka."]),
+        (empty, ["Mesin kosong tadi pagi.", "🔥🔥"]),
+    ]:
+        for index, reply in enumerate(replies):
+            db.execute(
+                """insert into instant_search_comments
+                   (id, search_id, result_id, customer_id, platform, external_id, author_name, text, source_provider, raw_ref)
+                   values (gen_random_uuid(), %s, %s, %s, 'threads', %s, 'rina', %s, 'fixture', 'fixture:reply')""",
+                (job.id, by_text[parent_text], job.customer_id, str(index), reply),
+            )
+
+    db.execute(
+        "update instant_search_results set rank = case external_id when 'th-1' then 99 when 'th-2' then 1 else 30 end"
+        " where search_id = %s", (job.id,),
+    )
+    sample = instant_search._load_summary_input(db, job)
+    _, user = instant_search.build_summary_prompt(sample)
+    items = json.loads(user.split("<<<DATA>>>\n")[1].split("\n<<<END DATA>>>")[0])
+    assert {item["text"] for item in items} == {parent, empty, "Kopi Tukuliling ada di stasiun MRT."}
+    assert len({item["platform"] for item in items[:2]}) == 2
+    assert {item["text"]: [reply["text"] for reply in item["comments"]] for item in items if item["comments"]} == {
+        parent: ["Praktis buat mengejar kereta."], empty: ["Mesin kosong tadi pagi."],
+    }
+    db.execute("update instant_search_results set rank = 100 - rank where search_id = %s", (job.id,))
+    assert instant_search._load_summary_input(db, replace(job, sort_mode="newest")) == sample
+
+
+def test_one_retained_post_skips_the_model_and_marks_summary_insufficient(db):
+    job = claim_instant_search(db, "worker-1")
+    insert_posts(db, job, [post()])
+    finish_search(db, job, "succeeded")
+    summarize_search(db, job, llm=FailingGemini(), now=datetime.now(timezone.utc))
+    assert db.execute("select summary_status from instant_searches where id = %s", (job.id,))[0] == {
+        "summary_status": "insufficient",
+    }

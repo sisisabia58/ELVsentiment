@@ -118,8 +118,6 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
     />
   );
   if (!props.aiEnabled || props.running) return <div className="mt-5">{results}</div>;
-  const counts: Record<string, number> = {};
-  for (const result of snapshot.results) counts[result.platform] = (counts[result.platform] ?? 0) + 1;
   const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
   const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
   return (
@@ -128,9 +126,6 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
         <AiSummary
           ai={snapshot.ai}
           summaryStatus={summaryStatus}
-          resultCount={snapshot.totals.results}
-          commentCount={snapshot.comments.length}
-          platformCounts={counts}
           results={snapshot.results}
           comments={snapshot.comments}
         />
@@ -142,10 +137,9 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
           <AskPanel
             searchId={snapshot.search.id}
             questions={snapshot.questions}
-            suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Platform mana yang paling ramai?"]}
+            suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Apa yang sering ditanyakan?"]}
             results={snapshot.results}
             comments={snapshot.comments}
-            resultCount={snapshot.totals.results}
           />
         </div>
       </div>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
+import type { SearchSnapshot, SnapshotComment, SnapshotResult } from "@/monitor/search/load";
 import { ConversationBreakdown } from "./conversation-breakdown";
 
 afterEach(() => {
@@ -55,46 +55,71 @@ const doneSnapshot: SearchSnapshot = {
   sources: [],
   totals: { sources: 4, done: 4, results: results.length },
   results,
-  comments: [],
+  comments: [
+    { id: "c1", resultId: "threads-0", platform: "threads", authorName: "Rina", authorHandle: "@rina",
+      text: "Praktis sebelum naik kereta." },
+    { id: "c2", resultId: "threads-0", platform: "threads", authorName: "Ayu", authorHandle: "@ayu",
+      text: "Praktis sebelum naik kereta." },
+  ] as SnapshotComment[],
   ai: {
     overallSummary: "Campuran.",
     overallStance: "campuran",
+    overallSupportingIds: ["result:threads-0"],
+    evidenceIds: ["result:threads-0", "result:tiktok-0", "comment:c1", "comment:c2", "comment:missing"],
     platformSummaries: [
-      { platform: "threads", stance: "positif", summary: "Pujian." },
-      { platform: "tiktok", stance: "campuran", summary: "Campuran." },
-      { platform: "youtube", stance: "negatif", summary: "Keluhan." },
-      { platform: "instagram", stance: "netral", summary: "Netral." },
+      { platform: "threads", stance: "positif", summary: "Pujian.", supporting_ids: ["comment:c1"] },
+      { platform: "tiktok", stance: "campuran", summary: "Campuran.", supporting_ids: ["result:threads-0"] },
     ],
-    quotes: [],
-    themes: [],
+    quotes: [
+      { type: "pujian", text: "Praktis sebelum naik kereta.", ref_id: "comment:c1", author: "Bukan Rina", platform: "youtube" },
+      { type: "keluhan", text: "Parafrasa", ref_id: "comment:c1" },
+      { type: "pengamatan", text: "Praktis sebelum naik kereta.", ref_id: "comment:c2" },
+      { type: "pertanyaan", text: "Kutipan hilang?", ref_id: "comment:missing" },
+      { type: "pertanyaan", text: "hasil", ref_id: "result:threads-2" },
+    ],
+    themes: [
+      { title: "Praktis di MRT", stance: "positif", description: "Beli sebelum naik kereta.",
+        supporting_ids: ["comment:c1", "comment:c1", "result:threads-0", "result:threads-2", "comment:missing"],
+        platforms: ["youtube"] },
+      { title: "Kafe lain", stance: "netral", description: "Tidak terkait.",
+        supporting_ids: ["result:threads-2"] },
+    ],
     model: "scripted",
   },
   questions: [],
 };
 
 describe("ConversationBreakdown", () => {
-  it("orders results before the breakdown and shows stance percentages", () => {
+  it("keeps the result counts separate from qualitative platform stance", () => {
     render(<ConversationBreakdown snapshot={doneSnapshot} />);
     expect(screen.getByText("Bagaimana percakapannya")).toBeTruthy();
-    expect(screen.getByText(/Positif 46%/)).toBeTruthy();
-    expect(screen.getByText(/Campuran 12%/)).toBeTruthy();
-    expect(screen.getByText(/Negatif 8%/)).toBeTruthy();
-    expect(screen.getByText(/Netral 34%/)).toBeTruthy();
-    expect(screen.getByText(/bukan survei/)).toBeTruthy();
+    expect(screen.getByText("23")).toBeTruthy();
+    expect(screen.getByText("Sikap per platform")).toBeTruthy();
+    expect(screen.getAllByText(/^positif$/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^campuran$/i)).toBeNull();
+    expect(screen.queryByText(/Positif \d+%/)).toBeNull();
   });
 
-  it("leaves quotes to the summary so the same line is not linked twice", () => {
-    const withQuote: SearchSnapshot = {
-      ...doneSnapshot,
-      ai: {
-        ...doneSnapshot.ai!,
-        quotes: [
-          { type: "pujian", text: "enak banget", ref_id: "result:r-quote", platform: "threads", author: "rina" },
-        ],
-      },
-    };
-    render(<ConversationBreakdown snapshot={withQuote} />);
-    expect(screen.queryByText("enak banget")).toBeNull();
-    expect(screen.queryByRole("link", { name: "enak banget" })).toBeNull();
+  it("shows distinct categorized word-for-word quotes linked to the actual parent", () => {
+    render(<ConversationBreakdown snapshot={doneSnapshot} />);
+    expect(screen.getByText("Kutipan")).toBeTruthy();
+    expect(screen.getByText("Pujian")).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "Praktis sebelum naik kereta." })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Praktis sebelum naik kereta." }).getAttribute("href")).toBe("#hasil-threads-0");
+    expect(screen.getAllByText(/rina · Threads/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Parafrasa")).toBeNull();
+    expect(screen.queryByText("Bukan Rina")).toBeNull();
+    expect(screen.queryByText("Pengamatan")).toBeNull();
+    expect(screen.queryByText("Keluhan")).toBeNull();
+    expect(screen.queryByText("Pertanyaan")).toBeNull();
+  });
+
+  it("counts distinct retained evidence and derives theme platforms from it", () => {
+    render(<ConversationBreakdown snapshot={doneSnapshot} />);
+    expect(screen.getByText("Topik utama")).toBeTruthy();
+    expect(screen.getByText("Praktis di MRT")).toBeTruthy();
+    expect(screen.getByText("Beli sebelum naik kereta.")).toBeTruthy();
+    expect(screen.getByText("2 unggahan dan balasan · Threads")).toBeTruthy();
+    expect(screen.queryByText("Kafe lain")).toBeNull();
   });
 });

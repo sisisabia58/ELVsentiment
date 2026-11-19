@@ -21,9 +21,12 @@ from sentiment_monitor.instant_ai import (
     QUESTION_SCHEMA,
     SUMMARY_MAX_OUTPUT_TOKENS,
     SUMMARY_SCHEMA,
+    EvidenceSample,
     SummaryInput,
+    SummaryOutput,
     build_question_prompt,
     build_summary_prompt,
+    sample_evidence,
     validate_answer,
     validate_summary,
 )
@@ -685,7 +688,7 @@ def _handle_result(
                     continue
             kept = filter_since(kept, cutoff_iso)
             kept = [item for item in kept if item.relevance != "no_match"]
-            kept = sort_posts(dedupe_posts(kept), job.sort_mode)[:MAX_PLATFORM_RESULTS]
+            kept = sort_posts(dedupe_posts(kept), "relevance")[:MAX_PLATFORM_RESULTS]
             stored = tx.run(
                 lambda conn: _store_answered(
                     conn, job, platform, chain, kept, result, calls, detail, attempted
@@ -896,11 +899,10 @@ def fetch_top_comments(
               select 1 from instant_searches s
               where s.id = r.search_id and s.customer_id = r.customer_id and s.relevance_version >= %s
           )
-        order by platform,
-                 rank asc nulls last,
-                 (coalesce(views, 0) + 3 * coalesce(likes, 0)
-                  + 2 * coalesce(replies, 0) + 2 * coalesce(shares, 0)) desc,
-                 collected_at desc
+        order by platform, (relevance = 'literal_match') desc,
+                 (coalesce(views, 0)::numeric + 3 * coalesce(likes, 0)::numeric
+                  + 2 * coalesce(replies, 0)::numeric + 2 * coalesce(shares, 0)::numeric) desc,
+                 external_id
         """,
         (job.id, job.customer_id, RELEVANCE_VERSION),
     ) or []
@@ -1055,10 +1057,9 @@ def run_instant_search(
                     skip_reasons.append("comment_budget")
                     _info(job.id, platform=platform, comments="skipped", reason="comment_budget")
                     return
-                # Match the order the results list shows for this sort. A post
-                # that already says it has zero replies is skipped so the next
-                # visible post can use the slot. An unknown count stays eligible.
-                visible = sort_posts(posts, job.sort_mode)
+                # Comment collection uses relevance regardless of the display sort.
+                # Keep unknown reply counts eligible for collection.
+                visible = sort_posts(posts, "relevance")
                 ranked_posts = [
                     item for item in visible if item.replies is None or item.replies > 0
                 ][:TOP_POSTS_FOR_COMMENTS]
@@ -1276,7 +1277,8 @@ def _set_summary_status(conn: Any, job: InstantSearchJob, status: str, stance: s
     )
 
 
-def _load_summary_input(conn: Any, job: InstantSearchJob) -> tuple[SummaryInput, dict[str, str], set[str]] | None:
+def _load_summary_input(conn: Any, job: InstantSearchJob) -> EvidenceSample | None:
+    _set_customer(conn, job.customer_id)
     rows = conn.execute(
         """
         select id, platform, author_name, author_handle, text, title, published_at
@@ -1287,80 +1289,63 @@ def _load_summary_input(conn: Any, job: InstantSearchJob) -> tuple[SummaryInput,
               select 1 from instant_searches s
               where s.id = r.search_id and s.customer_id = r.customer_id and s.relevance_version >= %s
           )
-        order by rank asc nulls last, collected_at desc
-        limit 50
+        order by platform, (relevance = 'literal_match') desc,
+                 (coalesce(views, 0)::numeric + 3 * coalesce(likes, 0)::numeric
+                  + 2 * coalesce(replies, 0)::numeric + 2 * coalesce(shares, 0)::numeric) desc,
+                 external_id
         """,
         (job.id, job.customer_id, RELEVANCE_VERSION),
     ) or []
     if not rows:
         return None
-    result_ids = {str(_row_value(row, "id", 0)) for row in rows}
-    comments = [
-        row
-        for row in (
-            conn.execute(
-                """
-                select id, result_id, author_name, author_handle, text
-                from instant_search_comments
-                where search_id = %s and customer_id = %s
-                """,
-                (job.id, job.customer_id),
-            )
-            or []
-        )
-        if str(_row_value(row, "result_id", 1)) in result_ids
+    result_ids = [str(_row_value(row, "id", 0)) for row in rows]
+    comments = conn.execute(
+        """
+        select id, result_id, author_name, author_handle, text, platform
+        from instant_search_comments
+        where search_id = %s and customer_id = %s and result_id = any(%s::uuid[])
+        order by result_id, published_at asc nulls last, external_id
+        """,
+        (job.id, job.customer_id, result_ids),
+    ) or []
+    results = [
+        {
+            "id": f"result:{_row_value(row, 'id', 0)}",
+            "platform": _row_value(row, "platform", 1),
+            "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2),
+            "published_at": _iso_db(_row_value(row, "published_at", 6)),
+            "text": _row_value(row, "text", 4),
+            "title": _row_value(row, "title", 5),
+        }
+        for row in rows
     ]
-    refs: dict[str, str] = {}
-    platforms: set[str] = set()
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        result_id = str(_row_value(row, "id", 0))
-        platform = str(_row_value(row, "platform", 1) or "")
-        text = str(_row_value(row, "text", 4) or "")
-        title = _row_value(row, "title", 5)
-        stored = text if not title else f"{title}\n{text}"
-        refs[f"result:{result_id}"] = stored
-        platforms.add(platform)
-        published = _row_value(row, "published_at", 6)
-        results.append(
-            {
-                "id": f"result:{result_id}",
-                "result_id": result_id,
-                "platform": platform,
-                "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2) or "",
-                "published_at": _iso_db(published),
-                "text": text,
-                "title": title,
-            }
-        )
-    comment_rows: list[dict[str, Any]] = []
-    for row in comments:
-        comment_id = str(_row_value(row, "id", 0))
-        text = str(_row_value(row, "text", 4) or "")
-        refs[f"comment:{comment_id}"] = text
-        comment_rows.append(
-            {
-                "id": f"comment:{comment_id}",
-                "result_id": f"result:{_row_value(row, 'result_id', 1)}",
-                "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2) or "",
-                "text": text,
-            }
-        )
-    return (
-        SummaryInput(job.id, job.query, results, comment_rows),
-        refs,
-        platforms,
-    )
+    replies = [
+        {
+            "id": f"comment:{_row_value(row, 'id', 0)}",
+            "result_id": f"result:{_row_value(row, 'result_id', 1)}",
+            "author": _row_value(row, "author_handle", 3) or _row_value(row, "author_name", 2),
+            "text": _row_value(row, "text", 4),
+            "platform": _row_value(row, "platform", 5),
+        }
+        for row in comments
+    ]
+    sample = sample_evidence(SummaryInput(job.id, job.query, results, replies, job.intent))
+    return sample if sample.refs else None
 
 
-def _store_summary(conn: Any, job: InstantSearchJob, output: Any, result: Any) -> None:
+def _store_summary(
+    conn: Any, job: InstantSearchJob, output: SummaryOutput | None, result: Any, data: EvidenceSample,
+) -> None:
+    if output is None:
+        _set_summary_status(conn, job, "insufficient")
+        return
     _set_customer(conn, job.customer_id)
     conn.execute(
         """
         insert into instant_search_ai
           (search_id, customer_id, overall_summary, overall_stance, platform_summaries,
-           quotes, themes, model, input_tokens, output_tokens, cost_usd)
-        values (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+           quotes, themes, model, input_tokens, output_tokens, cost_usd, evidence_ids, overall_supporting_ids)
+        values (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
         on conflict (search_id) do update
         set overall_summary = excluded.overall_summary,
             overall_stance = excluded.overall_stance,
@@ -1370,7 +1355,9 @@ def _store_summary(conn: Any, job: InstantSearchJob, output: Any, result: Any) -
             model = excluded.model,
             input_tokens = excluded.input_tokens,
             output_tokens = excluded.output_tokens,
-            cost_usd = excluded.cost_usd
+            cost_usd = excluded.cost_usd,
+            evidence_ids = excluded.evidence_ids,
+            overall_supporting_ids = excluded.overall_supporting_ids
         """,
         (
             job.id,
@@ -1384,6 +1371,8 @@ def _store_summary(conn: Any, job: InstantSearchJob, output: Any, result: Any) -
             int(getattr(result, "input_tokens", 0) or 0),
             int(getattr(result, "output_tokens", 0) or 0),
             float(getattr(result, "cost_usd", 0) or 0),
+            json.dumps(list(data.refs)),
+            json.dumps(output.overall_supporting_ids),
         ),
     )
     _set_summary_status(conn, job, "done", output.overall_stance)
@@ -1429,7 +1418,9 @@ def _summary_status(conn: Any, job: InstantSearchJob) -> str | None:
     return str(value)
 
 
-def _prepare_summary(conn: Any, job: InstantSearchJob, env: Mapping[str, Any]) -> tuple[Any, dict[str, str], set[str], dict[str, Any]] | None:
+def _prepare_summary(
+    conn: Any, job: InstantSearchJob, env: Mapping[str, Any],
+) -> tuple[EvidenceSample, dict[str, Any]] | None:
     # One automatic model call per search. The poll does not scan old rows.
     # This proceeds only while summary_status is still the initial pending
     # value; running, done, failed, and skipped are left alone.
@@ -1443,9 +1434,11 @@ def _prepare_summary(conn: Any, job: InstantSearchJob, env: Mapping[str, Any]) -
     if prepared is None:
         _set_summary_status(conn, job, "skipped")
         return None
-    data, refs, platforms = prepared
+    if not prepared.supports_summary:
+        _set_summary_status(conn, job, "insufficient")
+        return None
     _set_summary_status(conn, job, "running")
-    return data, refs, platforms, _client_env(env, provider)
+    return prepared, _client_env(env, provider)
 
 
 def summarize_search(
@@ -1466,7 +1459,7 @@ def summarize_search(
         return
     if prepared is None:
         return
-    data, refs, platforms, client_env = prepared
+    data, client_env = prepared
     try:
         if llm is None:
             llm = _create_llm(client_env)
@@ -1479,8 +1472,8 @@ def summarize_search(
             search_id=job.id,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
-        output = validate_summary(generated.data, refs, platforms)
-        _store_summary(conn, job, output, generated)
+        output = validate_summary(generated.data, data.refs)
+        _store_summary(conn, job, output, generated, data)
     except GeminiError:
         _set_summary_status(conn, job, "failed")
     except Exception:
@@ -1510,7 +1503,7 @@ def _summarize_collected(
         return
     if prepared is None:
         return
-    data, refs, platforms, client_env = prepared
+    data, client_env = prepared
     try:
         client = llm if llm is not None else _create_llm(client_env, tx.connect)
         system, user = build_summary_prompt(data)
@@ -1522,7 +1515,7 @@ def _summarize_collected(
             search_id=job.id,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
-        output = validate_summary(generated.data, refs, platforms)
+        output = validate_summary(generated.data, data.refs)
     except Exception as error:
         code = error.code if isinstance(error, GeminiError) else "error"
         _info(job.id, summary_detail=code)
@@ -1533,7 +1526,7 @@ def _summarize_collected(
                 _rollback_quiet(tx.shared)
         return
     try:
-        tx.run(lambda conn: _store_summary(conn, job, output, generated))
+        tx.run(lambda conn: _store_summary(conn, job, output, generated, data))
     except Exception:
         if tx.shared is not None:
             _rollback_quiet(tx.shared)
@@ -1644,7 +1637,7 @@ def _question_detail(value: str) -> str:
 def _fail_question(conn: Any, question_id: str, detail: str, now: datetime) -> None:
     conn.execute(
         "update instant_search_questions set status = 'failed', answer = null, "
-        "safe_detail = %s, answered_at = %s where id = %s",
+        "citations = '[]'::jsonb, evidence_ids = null, safe_detail = %s, answered_at = %s where id = %s",
         (_question_detail(detail), now, question_id),
     )
 
@@ -1687,11 +1680,10 @@ def _answer_question(
         if prepared is None:
             _fail_question(conn, question_id, "no_evidence", now)
             return "failed"
-        data, refs, _platforms = prepared
         client = llm if llm is not None else _create_llm(
             _client_env(env, provider), connect if connect is not None else conn
         )
-        system, user = build_question_prompt(data, str(question or ""))
+        system, user = build_question_prompt(prepared, str(question or ""))
         generated = client.generate_json(
             system=system,
             user=user,
@@ -1700,7 +1692,7 @@ def _answer_question(
             search_id=search_id,
             max_output_tokens=QUESTION_MAX_OUTPUT_TOKENS,
         )
-        answer = validate_answer(getattr(generated, "data", None), refs)
+        answer = validate_answer(getattr(generated, "data", None), prepared.refs)
         if not answer.answer:
             _fail_question(conn, question_id, "empty_answer", now)
             return "failed"
@@ -1710,6 +1702,7 @@ def _answer_question(
                set status = 'done',
                    answer = %s,
                    citations = %s::jsonb,
+                   evidence_ids = %s::jsonb,
                    model = %s,
                    cost_usd = %s,
                    safe_detail = null,
@@ -1719,6 +1712,7 @@ def _answer_question(
             (
                 answer.answer,
                 json.dumps(answer.citations),
+                json.dumps(list(prepared.refs)),
                 str(getattr(generated, "model", None) or "unknown"),
                 float(getattr(generated, "cost_usd", 0) or 0),
                 now,

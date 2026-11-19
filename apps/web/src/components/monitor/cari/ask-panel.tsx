@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { askQuestionAction, retryQuestionAction } from "@/app/cari/start-action";
 import type { SnapshotComment, SnapshotQuestion, SnapshotResult } from "@/monitor/search/load";
-import { platformName } from "./platform-tile";
+import { EvidenceLinks } from "./evidence-links";
+import { evidenceSources, resolveEvidence } from "./quote-source";
 
 const ERROR_COPY: Record<string, string> = {
   invalid_question: "Pertanyaan 3–300 karakter.",
@@ -22,7 +23,7 @@ const FAILURE_COPY: Record<string, string> = {
   http_503: "AI sedang sibuk. Coba lagi sebentar lagi.",
   http_504: "AI sedang sibuk. Coba lagi sebentar lagi.",
   timeout: "Jawaban terlalu lama. Coba lagi.",
-  empty_answer: "Jawaban kosong. Coba lagi.",
+  empty_answer: "Bukti yang tersedia belum cukup untuk menjawab.",
   no_evidence: "Pertanyaan memerlukan hasil yang cocok. Coba cari ulang.",
   missing_key: "Kunci AI belum diatur.",
   config_error: "Konfigurasi AI ditolak. Periksa kunci API.",
@@ -38,44 +39,12 @@ function failureCopy(detail: string | null | undefined): string {
   return "Jawaban gagal. Coba lagi.";
 }
 
-type Cited = { id: string; platform: string; authorHandle: string | null; authorName: string | null };
-
-function citationIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string");
-}
-
-function handleOf(item: Cited): string {
-  const handle = (item.authorHandle || item.authorName || "").replace(/^@/, "").trim();
-  return handle;
-}
-
-function chipsFor(
-  citations: unknown,
-  results: Cited[],
-  comments: Cited[],
-): { key: string; label: string }[] {
-  const byId = new Map<string, Cited>();
-  for (const result of results) byId.set(`result:${result.id}`, result);
-  for (const comment of comments) byId.set(`comment:${comment.id}`, comment);
-  const chips: { key: string; label: string }[] = [];
-  for (const id of citationIds(citations)) {
-    const source = byId.get(id);
-    if (!source) continue;
-    const handle = handleOf(source);
-    if (!handle) continue;
-    chips.push({ key: id, label: `${handle} · ${platformName(source.platform)}` });
-  }
-  return chips;
-}
-
 export function AskPanel(props: {
   searchId: string;
   questions: SnapshotQuestion[];
   suggestions: string[];
   results?: SnapshotResult[];
   comments?: SnapshotComment[];
-  resultCount?: number;
 }) {
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
@@ -164,14 +133,12 @@ export function AskPanel(props: {
     }
   }
 
-  const count = props.resultCount ?? props.results?.length ?? 0;
   return (
     <section className="rounded-[14px] border border-border bg-surface p-4 shadow-card">
       <h2 className="text-[15px] font-semibold text-foreground">Tanya hasil ini</h2>
       <p className="mt-1 text-[12.5px] text-muted-foreground">
-        Setiap pertanyaan memakai 1 kredit. Jawaban hanya berdasarkan {count} hasil di halaman ini.
+        1 kredit per pertanyaan. Jawaban merujuk pada cuplikan unggahan dan balasan yang relevan.
       </p>
-      <p className="mt-1 text-[12px] text-muted-foreground">1 kredit per pertanyaan</p>
       <form
         className="mt-3 flex flex-col gap-2"
         onSubmit={(event) => {
@@ -219,7 +186,8 @@ export function AskPanel(props: {
       ) : null}
       <ul className="mt-4 space-y-3">
         {items.map((item) => {
-          const chips = chipsFor(item.citations, props.results ?? [], props.comments ?? []);
+          const sample = evidenceSources(item.evidenceIds, props.results ?? [], props.comments ?? []);
+          const sources = resolveEvidence(item.citations, sample);
           const failed = item.status === "failed";
           const open = item.status === "queued" || item.status === "running";
           return (
@@ -238,21 +206,16 @@ export function AskPanel(props: {
                   </button>
                 </div>
               ) : null}
-              {item.status === "done" && item.answer ? (
+              {item.status === "done" ? (
                 <div className="mt-2">
-                  <p className="text-[13.5px] leading-6 text-foreground">{item.answer}</p>
-                  {chips.length > 0 ? (
-                    <ul className="mt-2 flex flex-wrap gap-2">
-                      {chips.map((chip) => (
-                        <li
-                          key={chip.key}
-                          className="rounded-full bg-surface-subtle px-2.5 py-1 text-[11.5px] text-muted-foreground"
-                        >
-                          {chip.label}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
+                  {item.answer && sources.length ? (
+                    <>
+                      <p className="text-[13.5px] leading-6 text-foreground">{item.answer}</p>
+                      <EvidenceLinks sources={sources} label="Sumber jawaban" />
+                    </>
+                  ) : (
+                    <p className="text-[13px] text-muted-foreground">Jawaban belum tersedia dengan sumber yang dapat diperiksa.</p>
+                  )}
                 </div>
               ) : null}
             </li>
