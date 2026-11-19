@@ -2,6 +2,12 @@ import { spawn } from "node:child_process";
 import pg from "pg";
 
 const stagingId = "21ed6a58-5ece-4499-a657-3e814ba65767";
+const paidSearches = [
+  "7e0fc2d4-0699-4b27-b00b-7a507dab970b",
+  "3f95700e-4a38-489d-97fb-f52002724040",
+  "57e5f6b8-552a-4ce4-9aa0-21559d94c510",
+  "8e0b5bb6-c534-467b-b1b5-f52e1cf5af8c",
+];
 const serve = process.argv[2] === "restore-and-serve";
 const mode = serve ? "restore" : process.argv[2];
 if (process.env.RAILWAY_ENVIRONMENT_ID !== stagingId || !["snapshot", "restore", "audit"].includes(mode)) {
@@ -20,7 +26,7 @@ try {
     await db.query("select pg_advisory_xact_lock(814158, 1)");
   }
   if (mode === "audit" || mode === "restore") {
-    const searchIds = process.argv.slice(3);
+    const searchIds = process.argv.length > 3 ? process.argv.slice(3) : paidSearches;
     if (searchIds.some((id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))) {
       throw new Error("Expected only staging search UUIDs.");
     }
