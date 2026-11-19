@@ -2,7 +2,10 @@ import type { Queryable } from "../db/migrate";
 import { ALL_SOURCES, SOURCE_NAME, type SourceId } from "../monitor/policy";
 
 export type LatestJobStatus = "queued" | "claimed" | "succeeded" | "deferred" | "failed";
-export type CollectionOutcome = "none" | "failed" | "succeeded" | "queued" | "claimed";
+export type CollectionOutcome = "none" | "failed" | "succeeded" | "queued" | "claimed" | "capped" | "capped_partial";
+
+export const SCHEDULED_CAP_COPY = "Batas permintaan pengumpulan dalam 24 jam tercapai.";
+export const SCHEDULED_CAP_PARTIAL_COPY = `Data yang terkumpul tersimpan. ${SCHEDULED_CAP_COPY}`;
 
 const MONTHS = [
   "Januari",
@@ -41,8 +44,12 @@ export function formatCollectedAt(iso: string): string {
 export function collectionOutcome(input: {
   hasProject: boolean;
   latestStatus: LatestJobStatus | null;
+  latestDetail?: string | null;
 }): CollectionOutcome {
   if (!input.hasProject || input.latestStatus == null) return "none";
+  if (input.latestDetail === "scheduled_request_cap") {
+    return input.latestStatus === "succeeded" ? "capped_partial" : "capped";
+  }
   if (input.latestStatus === "failed" || input.latestStatus === "deferred") return "failed";
   if (input.latestStatus === "succeeded") return "succeeded";
   if (input.latestStatus === "queued") return "queued";
@@ -50,6 +57,8 @@ export function collectionOutcome(input: {
 }
 
 export function collectionSentence(outcome: CollectionOutcome, lastSuccess: string): string {
+  if (outcome === "capped") return SCHEDULED_CAP_COPY;
+  if (outcome === "capped_partial") return SCHEDULED_CAP_PARTIAL_COPY;
   if (outcome === "failed") return "Pengumpulan gagal. Ini bukan nol sebutan.";
   if (outcome === "queued") return "Pekerjaan masuk antrean.";
   if (outcome === "claimed") return "Pengumpulan sedang berjalan.";
@@ -92,6 +101,7 @@ export async function readProjectCollection(
   projectId: string,
 ): Promise<{
   latestStatus: LatestJobStatus | null;
+  latestDetail: string | null;
   lastCollectedAt: string;
   pending: number;
   failed: number;
@@ -101,8 +111,8 @@ export async function readProjectCollection(
     "select last_collected_at from project_schedules where project_id = $1",
     [projectId],
   );
-  const latest = await db.query<{ status: LatestJobStatus }>(
-    `select status from jobs
+  const latest = await db.query<{ status: LatestJobStatus; status_detail: string | null }>(
+    `select status, status_detail from jobs
      where project_id = $1 and coalesce(status_detail, '') <> 'skipped_overlap'
      order by created_at desc, id desc
      limit 1`,
@@ -121,6 +131,7 @@ export async function readProjectCollection(
   );
   return {
     latestStatus: latest.rows[0]?.status ?? null,
+    latestDetail: latest.rows[0]?.status_detail ?? null,
     lastCollectedAt: asIso(schedule.rows[0]?.last_collected_at),
     pending: Number(scores.rows[0]?.pending ?? 0),
     failed: Number(scores.rows[0]?.failed ?? 0),

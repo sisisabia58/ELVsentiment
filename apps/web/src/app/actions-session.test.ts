@@ -19,14 +19,17 @@ describe("server actions take the customer from the session", () => {
       readSessionToken: async () => session.token,
       customerId: intruder.customerId,
     };
-    const previousToken = process.env.X_BEARER_TOKEN;
-    process.env.X_BEARER_TOKEN = "test-token";
+    const previousToken = process.env.SCRAPEATLAS_API_KEY;
+    process.env.SCRAPEATLAS_API_KEY = "test-token";
     let result: Awaited<ReturnType<typeof runNowAction>>;
     try {
+      await db.query("update provider_settings set provider = 'off' where platform in ('threads', 'instagram', 'tiktok')");
+      expect(await runNowAction(project.projectId, forged)).toEqual({ ok: false, reason: "sources_unavailable" });
+      await db.query("update provider_settings set provider = 'scrapeatlas' where platform = 'threads'");
       result = await runNowAction(project.projectId, forged);
     } finally {
-      if (previousToken === undefined) delete process.env.X_BEARER_TOKEN;
-      else process.env.X_BEARER_TOKEN = previousToken;
+      if (previousToken === undefined) delete process.env.SCRAPEATLAS_API_KEY;
+      else process.env.SCRAPEATLAS_API_KEY = previousToken;
     }
     expect(result.ok).toBe(true);
     const jobs = await withCustomer(db, owner.customerId, () =>

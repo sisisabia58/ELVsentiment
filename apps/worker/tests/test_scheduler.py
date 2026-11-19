@@ -1732,6 +1732,34 @@ def test_budget_and_no_sources_deferrals_emit_no_source_attempt(tmp_path):
     )
 
 
+def test_budget_after_a_saved_source_keeps_a_partial_completion(tmp_path):
+    world = LoopWorld(jobs=[_due_job()], variants=["example", "another"], cursor=None)
+    world.sources = ["threads"]
+    providers = []
+
+    class OneRequest(_LoopConn):
+        def execute(self, sql, params=None):
+            if "count(*) from scheduled_provider_calls" in sql.lower():
+                return 100000 if providers else 0
+            return super().execute(sql, params)
+
+    def fetch(variant):
+        providers.append(variant)
+        return [], None
+
+    def stop(_seconds):
+        raise SystemExit
+
+    with pytest.raises(SystemExit):
+        serve(lambda: OneRequest(world), stop, load_limits(Path("config/limits.json"), {}),
+              "worker-1", _policy_root(tmp_path, True), None, fetch, log=lambda _line: None)
+
+    assert providers == ["example"]
+    assert any("status = 'succeeded'" in sql and params == ("scheduled_request_cap", "job-1")
+               for sql, params in world.calls)
+    assert any("set last_collected_at = now()" in sql for sql, _params in world.calls)
+
+
 def test_consecutive_jobs_reset_attempt_context(tmp_path):
     job2 = {**_due_job(), "id": "job-2"}
     world = LoopWorld(jobs=[_due_job(), job2], variants=["geprek gembus"], cursor=None)

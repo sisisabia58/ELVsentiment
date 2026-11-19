@@ -7,13 +7,12 @@ import { OnboardingWizard } from "@/components/monitor/onboarding-wizard";
 import { runNowAction } from "@/app/dasbor/actions";
 import { SOURCES_UNAVAILABLE_COPY } from "@/monitor/load";
 import { ONBOARDING_DRAFT_COOKIE, onboardingLangkahRedirect, parseOnboardingDraft, resolveOnboardingState } from "@/monitor/onboarding-draft";
-import { sourceCredentials } from "@/monitor/policy";
 import { requireWorkspace } from "@/monitor/session-page";
 
 async function OnboardingGate({ fresh, langkah, draftRaw }: { fresh: boolean; langkah?: string; draftRaw?: string }) {
   const { customerId, workspace } = await requireWorkspace(undefined);
   const project = fresh ? null : workspace.project;
-  const credentials = sourceCredentials();
+  const credentials = workspace.credentials;
   const existing = project
     ? {
         projectId: project.id,

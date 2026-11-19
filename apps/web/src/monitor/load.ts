@@ -4,9 +4,10 @@ import type { OwnerCorrection } from "../domain/display";
 import type { KeywordIntent } from "../domain/keyword-intent";
 import { cariAiUiEnabled, cariSekarangEnabled } from "./search/feature";
 import type { ScheduleLimits } from "../projects/schedules";
+import { SCHEDULED_CAP_COPY, SCHEDULED_CAP_PARTIAL_COPY } from "../projects/dashboard-status";
 import { buildDashboard, type DashboardModel, type SourceKey } from "./dashboard";
 import { asSources, type SourceCredentials } from "./onboarding-draft";
-import { ALL_SOURCES, readMonitorPolicy, reviewTopicChoices, SOURCE_NAME, sourceCredentials, type SourceId } from "./policy";
+import { ALL_SOURCES, loadScheduledSourceAvailability, readMonitorPolicy, reviewTopicChoices, SOURCE_NAME, type SourceId } from "./policy";
 import { presentMention, type PresentedMention, type Sentiment, type StoredMention } from "./present";
 import { parseRangeKey, type RangeKey } from "./range";
 import { choiceFromRow, type ScheduleChoice } from "./schedule-choice";
@@ -142,6 +143,11 @@ export function jobPresentation(status: string, detail: string | null): { label:
       explanation: "Dilewati karena pengumpulan sebelumnya masih berjalan.",
     };
   }
+  if (detail === "scheduled_request_cap") {
+    return status === "succeeded"
+      ? { label: "Selesai sebagian", explanation: SCHEDULED_CAP_PARTIAL_COPY }
+      : { label: "Ditunda", explanation: SCHEDULED_CAP_COPY };
+  }
   if (status === "succeeded") {
     const partial = detail ? partialFailureExplanation(detail) : null;
     if (partial) return { label: "Selesai", explanation: partial };
@@ -257,8 +263,8 @@ export async function loadWorkspace(
   isAdmin = false,
 ): Promise<Workspace> {
   const policy = readMonitorPolicy();
-  const credentials = sourceCredentials();
   return withCustomer(db, customerId, async () => {
+    const credentials = await loadScheduledSourceAvailability(db);
     const user = await db.query<{ email: string; display_name: string | null }>(
       "select email, display_name from users where customer_id = $1 order by created_at limit 1",
       [customerId],

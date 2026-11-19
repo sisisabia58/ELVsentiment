@@ -150,8 +150,7 @@ export async function saveProjectConfiguration(
     now?: Date;
   },
   limits: ScheduleLimits = readLimits(),
-  // Fail closed. The settings action passes sourceCredentials(); a caller that
-  // omits them must not store X or Threads.
+  // Fail closed when a caller has not loaded scheduled source availability.
   credentials: SourceCredentials = { x: false, threads: false, instagram: false, tiktok: false },
 ): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   const sources = workingSources(input.sources, credentials);

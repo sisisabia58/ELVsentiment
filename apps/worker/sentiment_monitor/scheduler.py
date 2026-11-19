@@ -1037,6 +1037,7 @@ def scheduled_fetch(platform, variant, *, api_key=None, collected_at=None, opene
         "external_id": post.external_id, "excerpt": post.text, "url": post.url,
         "author": post.author_handle or post.author_name, "posted_at": post.published_at,
         "variant": variant, "route_ids": post.routes, "intent": getattr(variant, "intent", "phrase"),
+        "hashtags": post.hashtags,
     } for post in result.posts]
     # Poll a fresh relevance page. A page token is scoped to its search, not a high-water mark.
     return {"mentions": mentions, "next_cursor": None, "route_events": events,
@@ -1224,7 +1225,7 @@ def serve(
                     continue
                 if job["variants"]:
                     def finish_job(conn, job=job, blocked_detail=blocked_detail):
-                        if blocked_detail:
+                        if blocked_detail and committed_sources == 0:
                             _defer(conn, job["id"], blocked_detail)
                             return
                         if failures and committed_sources == 0:
@@ -1233,7 +1234,7 @@ def serve(
                                 ("all_sources_failed:" + "|".join(failures), job["id"]),
                             )
                             return
-                        detail = "partial_failures:" + "|".join(failures) if failures else None
+                        detail = blocked_detail or ("partial_failures:" + "|".join(failures) if failures else None)
                         conn.execute(
                             "update jobs set status = 'succeeded', status_detail = %s where id = %s",
                             (detail, job["id"]),

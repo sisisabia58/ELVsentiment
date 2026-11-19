@@ -1,7 +1,8 @@
 import { cookies, headers } from "next/headers";
 import { sessionCookieOptions, type SessionCookieContext } from "@/auth/accounts";
 import { sessionCustomerId } from "@/auth/request-session";
-import { sourceCredentials } from "@/monitor/policy";
+import { withClient } from "@/db/pg";
+import { loadScheduledSourceAvailability } from "@/monitor/policy";
 import {
   allowedOnboardingStep,
   bindOnboardingDraft,
@@ -26,7 +27,7 @@ async function cookieContext(): Promise<SessionCookieContext> {
 export async function writeOnboardingDraftCookie(fields: OnboardingDraftFields): Promise<boolean> {
   const customerId = await sessionCustomerId();
   if (!customerId) return false;
-  const credentials = sourceCredentials();
+  const credentials = await withClient(loadScheduledSourceAvailability);
   const allowed = allowedOnboardingStep({
     brand: fields.brand,
     keywords: fields.keywords,

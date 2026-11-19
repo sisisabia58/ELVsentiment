@@ -256,12 +256,11 @@ def fetch_comments(
             comments.append(comment)
         elif platform == "facebook" and _has_media(item):
             comments.append(replace(comment, text="lampiran media"))
-    status = payload.get("status")
     call = RouteCall(
         provider="scrapeatlas",
         platform=platform,
         route=route_id,
-        outcome="partial" if status == "partial" else "success",
+        outcome="partial" if payload.partial else "success",
         http_status=payload.http_status,
         credits_charged=payload.credits_charged,
         body_length=payload.body_length,
@@ -271,5 +270,5 @@ def fetch_comments(
     if not isinstance(raw_comments, list):
         return CommentFetch(post_id, [], replace(call, outcome="failed", safe_detail="malformed_envelope"),
                             "failed", "malformed_envelope")
-    detail = "partial_coverage" if status == "partial" else "ok"
+    detail = "partial_coverage" if payload.partial else "ok"
     return CommentFetch(post_id, comments, call, "answered", detail)

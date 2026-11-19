@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
 import type { SourceCredentials } from "../monitor/onboarding-draft";
-import { ALL_SOURCES, sourceCredentials, type SourceId } from "../monitor/policy";
+import { ALL_SOURCES, loadScheduledSourceAvailability, type SourceId } from "../monitor/policy";
 import { nextDailyInstant } from "../monitor/schedule-choice";
 
 export type ScheduleLimits = {
@@ -144,7 +144,7 @@ export async function requestManualRun(
   projectId: string,
   now: Date,
   limits: ScheduleLimits = readLimits(),
-  credentials: SourceCredentials = sourceCredentials(),
+  credentials?: SourceCredentials,
 ): Promise<
   | { ok: true; jobId: string }
   | { ok: false; reason: "manual_rate_limited"; retryAt: string }
@@ -158,7 +158,8 @@ export async function requestManualRun(
       [projectId],
     );
     const selected = enabledSources(settings.rows.length === 0 ? null : settings.rows[0]?.enabled_sources);
-    if (!selected.some((source) => Boolean(credentials[source]))) {
+    const available = credentials ?? await loadScheduledSourceAvailability(db);
+    if (!selected.some((source) => Boolean(available[source]))) {
       return { ok: false as const, reason: "sources_unavailable" as const };
     }
     const recent = await db.query<{ created_at: string }>(

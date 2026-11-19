@@ -42,6 +42,19 @@ def test_reads_header_credits_and_coverage_warnings():
     assert payload.http_status == 200
 
 
+def test_body_read_timeout_retains_received_http_status_and_credit_headers():
+    class ReadTimeout(Response):
+        def read(self, size=-1):
+            raise TimeoutError("body read timed out")
+
+    with pytest.raises(ScrapeAtlasError) as caught:
+        fetch_scrapeatlas_json("/v1/threads/search", {}, "test", opener=lambda *a, **k: ReadTimeout(
+            {}, headers={"x-credits-charged": "2", "x-credits-remaining": "12"},
+        ))
+    error = caught.value
+    assert (error.code, error.http_status, error.credits_charged, error.credits_remaining) == ("timeout", 200, 2, 12)
+
+
 def test_404_not_found_is_free_and_safe():
     def opener(request, timeout=0):
         raise urllib.error.HTTPError(

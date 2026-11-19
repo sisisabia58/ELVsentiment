@@ -72,7 +72,7 @@ def _threads_thumbnail(item: dict[str, Any]) -> str | None:
 
 
 def normalize_threads_item(item: dict[str, Any], collected_at: str) -> dict[str, Any]:
-    external_id = str(item.get("pk") or item.get("id") or item.get("code") or "")
+    external_id = item.get("pk") or item.get("id") or item.get("code")
     author = _extract_threads_author(item)
     user = item.get("user") if isinstance(item.get("user"), dict) else {}
     app_info = (

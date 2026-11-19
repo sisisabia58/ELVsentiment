@@ -36,7 +36,7 @@ describe("createInstantSearch", () => {
       "select platform, provider, state from instant_search_sources order by platform",
     );
     expect(sources.rows.map((row) => row.platform).sort()).toEqual(
-      ["facebook", "instagram", "linkedin", "reddit", "threads", "tiktok", "youtube"].sort(),
+      ["facebook", "instagram", "linkedin", "reddit", "threads", "tiktok", "x", "youtube"],
     );
     expect(sources.rows.every((row) => row.state === "queued")).toBe(true);
     const search = await db.query<{ deadline_at: Date; retention_expires_at: Date; created_at: Date }>(

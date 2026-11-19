@@ -46,7 +46,7 @@ def _optional_text(value: Any) -> str | None:
 
 def normalize_tiktok_item(item: dict[str, Any], collected_at: str) -> dict[str, Any]:
     aweme = item.get("aweme_info") if isinstance(item.get("aweme_info"), dict) else item
-    external_id = str(aweme.get("aweme_id") or aweme.get("id") or "")
+    external_id = aweme.get("aweme_id") or aweme.get("id")
     author = _extract_tiktok_author(aweme)
     author_info = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
     stats = aweme.get("stats") if isinstance(aweme.get("stats"), dict) else {}

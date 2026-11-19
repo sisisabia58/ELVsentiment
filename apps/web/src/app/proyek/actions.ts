@@ -5,7 +5,7 @@ import { withSessionDeps } from "@/auth/request-session";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { ownsProject, saveProjectConfiguration, type KeywordInput } from "@/projects/handlers";
 import { readLimits, saveSchedule } from "@/projects/schedules";
-import { sourceCredentials, type SourceId } from "@/monitor/policy";
+import { loadScheduledSourceAvailability, type SourceId } from "@/monitor/policy";
 import { toPersist, type ScheduleChoice } from "@/monitor/schedule-choice";
 
 export async function saveProjectSettingsAction(input: {
@@ -22,7 +22,7 @@ export async function saveProjectSettingsAction(input: {
       customerId,
       { ...input, now: new Date() },
       readLimits(),
-      sourceCredentials(),
+      await loadScheduledSourceAvailability(deps.db),
     );
   });
   if (result.ok) refresh();

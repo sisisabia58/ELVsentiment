@@ -116,15 +116,16 @@ def settings_only(platform):
 def run_case(prod_db, platform, body, headers=None):
     prod_db.admin.execute("delete from instant_searches")
     search_id = str(uuid.uuid4())
+    query, intent = ("#barayam", "hashtag") if platform == "facebook" else ("barayam", "phrase")
     prod_db.admin.execute(
         """
         insert into instant_searches
           (id, customer_id, query_text, keyword_intent, date_window, sort_mode,
            language_filter, status, deadline_at)
-        values (%s, %s, 'barayam', 'phrase', 'all', 'relevance', 'all', 'queued',
+        values (%s, %s, %s, %s, 'all', 'relevance', 'all', 'queued',
                 now() + interval '40 seconds')
         """,
-        (search_id, prod_db.customer),
+        (search_id, prod_db.customer, query, intent),
     )
     adapter = {}
 

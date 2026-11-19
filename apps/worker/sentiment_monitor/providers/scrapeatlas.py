@@ -89,6 +89,13 @@ class ScrapeAtlasJSON(dict):
         self.credits_remaining = credits_remaining
         self.coverage_warnings = coverage_warnings
 
+    @property
+    def partial(self) -> bool:
+        coverage = self.get("coverage")
+        return self.get("status") == "partial" or (
+            isinstance(coverage, dict) and coverage.get("complete") is False
+        )
+
 
 def _header(headers: Any, name: str) -> Any:
     getter = getattr(headers, "get", None)
@@ -200,6 +207,7 @@ def fetch_scrapeatlas_json(
     )
     started = time.monotonic()
     http_status: int | None = None
+    headers = None
     try:
         with opener(request, timeout=timeout) as response:
             http_status = _response_status(response)
@@ -254,9 +262,12 @@ def fetch_scrapeatlas_json(
         ) from None
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         code = "timeout" if isinstance(error, TimeoutError) else "transport_error"
+        charged, remaining = credits_from_headers(headers)
         raise ScrapeAtlasError(
             code,
             http_status=http_status,
+            credits_charged=charged,
+            credits_remaining=remaining,
             latency_ms=int((time.monotonic() - started) * 1000),
         ) from None
 
@@ -283,7 +294,9 @@ def fetch_scrapeatlas_json(
             body_length=body_length,
             latency_ms=latency_ms,
         ) from None
-    if not isinstance(data, dict):
+    if (not isinstance(data, dict)
+        or ("success" in data and not isinstance(data["success"], bool))
+        or ("status" in data and data["status"] not in ("success", "partial", "failed"))):
         raise ScrapeAtlasError(
             "malformed_envelope",
             http_status=http_status,

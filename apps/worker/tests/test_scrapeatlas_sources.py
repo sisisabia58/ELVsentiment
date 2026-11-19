@@ -386,6 +386,49 @@ def test_one_malformed_threads_caption_preserves_valid_sibling():
     assert [post.external_id for post in result.posts] == ["ok"]
 
 
+@pytest.mark.parametrize("flags", [{"success": "false"}, {"status": []}, {"status": "unexpected"}])
+def test_invalid_envelope_flags_fail_with_the_reported_charge(flags):
+    payload = {"success": True, "status": "success", "posts": [], **flags}
+    result = fetch_scrapeatlas_threads("example", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response(payload, headers={"x-credits-charged": "2"}))
+    assert (result.state, result.safe_detail, result.calls[0].credits_charged) == ("failed", "malformed_envelope", 2)
+
+
+def test_incomplete_coverage_is_partial_even_with_success_status():
+    payload = {"success": True, "status": "success", "posts": [], "coverage": {"complete": False}}
+    result = fetch_scrapeatlas_threads("example", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response(payload))
+    assert (result.state, result.safe_detail, result.calls[0].outcome) == ("answered", "partial_coverage", "partial")
+
+
+def test_threads_drops_mapping_identity_and_keeps_scheduled_hashtags():
+    from sentiment_monitor.intent import Keyword
+    from sentiment_monitor.scheduler import scheduled_fetch
+
+    payload = {"success": True, "posts": [
+        {"pk": {"bogus": "identity"}},
+        {"pk": "\u0000"},
+        {"pk": "🌶" * 800},
+        {"pk": "ok", "hashtags": [{"name": "example"}], "caption": "no literal tag in the excerpt"},
+    ]}
+    result = scheduled_fetch("threads", Keyword("#example", "hashtag"), api_key="fixture",
+        collected_at="2026-11-15T00:00:00Z", opener=lambda *a, **k: Response(payload))
+    mention, = result["mentions"]
+    assert mention["external_id"] == "ok"
+    assert mention["hashtags"] == ("example",)
+
+
+def test_linkedin_urn_and_permalink_share_a_canonical_identity():
+    payload = {"success": True, "posts": [
+        {"url": "https://www.linkedin.com/posts/member_topic-activity-1234567890-abc"},
+        {"urn": "urn:li:activity:1234567890"},
+        {"id": "urn:li:activity:1234567890"},
+    ]}
+    result = fetch_scrapeatlas_linkedin("topic", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *a, **k: Response(payload))
+    assert [post.external_id for post in result.posts] == ["1234567890"] * 3
+
+
 @pytest.mark.parametrize("fetch", [fetch_scrapeatlas_threads, fetch_scrapeatlas_tiktok,
                                   fetch_scrapeatlas_youtube, fetch_scrapeatlas_reddit, fetch_scrapeatlas_linkedin])
 def test_native_window_uses_documented_bounds_and_excludes_legacy_filters(fetch):

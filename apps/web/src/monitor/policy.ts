@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ScoringPolicy } from "../domain/routing";
+import type { Queryable } from "../db/migrate";
+import { loadProviderSettings } from "./search/provider-settings";
 import type { SourceId } from "./sources";
 
 export { ALL_SOURCES, SOURCE_NAME, type SourceId } from "./sources";
@@ -99,4 +101,20 @@ export function sourceCredentials(
 ): Record<SourceId, boolean> {
   const available = Boolean(env.SCRAPEATLAS_API_KEY?.trim());
   return { x: false, threads: available, instagram: available, tiktok: available };
+}
+
+export async function loadScheduledSourceAvailability(db: Queryable): Promise<Record<SourceId, boolean>> {
+  const credentials = sourceCredentials();
+  if (!credentials.threads) return credentials;
+  const policy = readJson<{ approved?: boolean; mode?: string }>("credential-policy.json");
+  if (policy.approved !== true || policy.mode !== "shared_operator") {
+    return { x: false, threads: false, instagram: false, tiktok: false };
+  }
+  const settings = await loadProviderSettings(db);
+  return {
+    x: false,
+    threads: settings.threads.provider === "scrapeatlas",
+    instagram: settings.instagram.provider === "scrapeatlas",
+    tiktok: settings.tiktok.provider === "scrapeatlas",
+  };
 }

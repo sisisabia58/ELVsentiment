@@ -7,7 +7,7 @@ import { withCustomer } from "@/db/migrate";
 import { withClient } from "@/db/pg";
 import { dashboardFor, loadWorkspace, selectedSourcesReady, SOURCES_UNAVAILABLE_COPY } from "@/monitor/load";
 import { sourceStatusLines } from "@/monitor/source-status";
-import { collectionOutcome, readProjectCollection } from "@/projects/dashboard-status";
+import { collectionOutcome, readProjectCollection, sourceStateSummary } from "@/projects/dashboard-status";
 import { readLimits } from "@/projects/schedules";
 import { redirect } from "next/navigation";
 import { runNowAction } from "./actions";
@@ -53,9 +53,9 @@ async function DashboardBody({
   const collection = await withClient((db) =>
     withCustomer(db, customerId, () => readProjectCollection(db, projectId)),
   );
-  const outcome = collectionOutcome({ hasProject: true, latestStatus: collection.latestStatus });
+  const outcome = collectionOutcome({ hasProject: true, ...collection });
   const model = dashboardFor(workspace, filters.rentang, source || undefined, now);
-  const sourceState = collection.sourceState;
+  const sourceState = sourceStateSummary(workspace.sources);
 
   async function runNow(): Promise<{ ok: boolean; error?: string }> {
     "use server";

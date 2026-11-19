@@ -27,6 +27,7 @@ from sentiment_monitor.sources.tiktok import normalize_tiktok_item
 from sentiment_monitor.sources.threads import normalize_threads_item
 
 DEFAULT_TIMEOUT = 20
+MAX_EXTERNAL_ID_BYTES = 512  # Remain within Postgres composite-index entry sizes.
 
 
 def _optional_int(value: Any) -> int | None:
@@ -67,7 +68,8 @@ def _canonical_from(
     web_index: bool = False,
 ) -> CanonicalPost:
     text = str(item.get("text") or "")
-    external_id = str(item.get("external_id") or "")
+    identity = item.get("external_id")
+    external_id = str(identity).strip() if type(identity) in (str, int) else ""
     draft = CanonicalPost(
         platform=platform,
         external_id=external_id,
@@ -170,8 +172,7 @@ def _fetch(
         web_index_from_warnings
         and "web_index_selection" in payload.coverage_warnings
     )
-    status = payload.get("status")
-    outcome = "partial" if status == "partial" else "success"
+    outcome = "partial" if payload.partial else "success"
     # The paid call is durable before any post is parsed: a poisoned record or
     # a filter error must still return the ledger row to the caller.
     call = RouteCall(
@@ -199,16 +200,16 @@ def _fetch(
         for key, raw in raw_items:
             try:
                 item, = extract({key: [raw]}, collected_at)
-                post = _canonical_from(
+                post = sanitize_post(_canonical_from(
                     platform,
                     item,
                     keyword,
                     collected_at,
                     route_id,
                     web_index=web_index,
-                )
-                if post.external_id:
-                    posts.append(sanitize_post(post))
+                ))
+                if post.external_id.strip() and len(post.external_id.encode("utf-8")) <= MAX_EXTERNAL_ID_BYTES:
+                    posts.append(post)
             except Exception:
                 # One malformed record is dropped; its siblings survive.
                 continue
@@ -413,6 +414,9 @@ def _facebook_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[
 def _linkedin_activity_id(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
+    urn = re.fullmatch(r"urn:li:activity:([0-9]+)", value)
+    if urn:
+        return urn.group(1)
     url = urlsplit(value)
     if url.scheme != "https" or not (url.hostname == "linkedin.com" or (url.hostname or "").endswith(".linkedin.com")):
         return None
@@ -426,7 +430,10 @@ def _linkedin_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[
         author = item.get("author") if isinstance(item.get("author"), dict) else {}
         items.append(
             {
-                "external_id": item.get("id") or item.get("urn") or _linkedin_activity_id(item.get("url")),
+                "external_id": (_linkedin_activity_id(item.get("id"))
+                                or _linkedin_activity_id(item.get("urn"))
+                                or _linkedin_activity_id(item.get("url"))
+                                or item.get("id") or item.get("urn")),
                 "text": _optional_text(item.get("description")) or "",
                 "title": None,
                 "author_name": author.get("name"),

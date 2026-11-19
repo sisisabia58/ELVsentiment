@@ -228,6 +228,14 @@ describe("workspace loader", () => {
     expect(partial.explanation).toContain("TikTok");
     expect(partial.explanation).toContain("sambal");
     expect(partial.explanation).not.toContain("partial_failures");
+    expect(jobPresentation("deferred", "scheduled_request_cap")).toEqual({
+      label: "Ditunda",
+      explanation: "Batas permintaan pengumpulan dalam 24 jam tercapai.",
+    });
+    expect(jobPresentation("succeeded", "scheduled_request_cap")).toEqual({
+      label: "Selesai sebagian",
+      explanation: "Data yang terkumpul tersimpan. Batas permintaan pengumpulan dalam 24 jam tercapai.",
+    });
   });
 
   it("does not invent an attention change or a post time", () => {
@@ -387,11 +395,15 @@ describe("truthful workspace source state", () => {
     process.env.SCRAPEATLAS_API_KEY = "test-sc";
     try {
       const workspace = await loadWorkspace(db, owner.customerId, project.projectId, new Date(), readLimits());
-      const x = workspace.sources.find((item) => item.source === "threads");
-      expect(x).toMatchObject({ configured: true, state: "untested", detail: "", lastSuccessAt: null });
+      const threads = workspace.sources.find((item) => item.source === "threads");
+      expect(threads).toMatchObject({ configured: true, state: "untested", detail: "", lastSuccessAt: null });
       expect(workspace.sources.filter((item) => item.source !== "x").every((item) => item.state === "untested")).toBe(true);
       expect(workspace.sources.find((item) => item.source === "x")).toMatchObject({ configured: false, state: "unavailable" });
       expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(true);
+      await db.query("update provider_settings set provider = 'off' where platform = 'threads'");
+      const disabled = await loadWorkspace(db, owner.customerId, project.projectId, new Date(), readLimits());
+      expect(disabled.sources.find((item) => item.source === "threads")).toMatchObject({ configured: false, state: "unavailable" });
+      expect(disabled.credentials.threads).toBe(false);
     } finally {
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name];
