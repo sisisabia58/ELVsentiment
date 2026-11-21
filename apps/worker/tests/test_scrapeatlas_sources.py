@@ -455,3 +455,35 @@ def test_not_found_preserves_explicit_charge():
         raise urllib.error.HTTPError(request.full_url, 404, "missing", {"x-credits-charged": "2"}, io.BytesIO(b"{}"))
     result = fetch_scrapeatlas_threads("fixture", api_key="fixture", collected_at="2026-11-15T00:00:00Z", opener=opener)
     assert result.calls[0].credits_charged == 2
+
+
+@pytest.mark.parametrize(("fetch_name", "sample", "expected_url"), [
+    ("fetch_scrapeatlas_instagram", "instagram_posts.json", "https://www.instagram.com/reel/ExAmPlE0002/"),
+    ("fetch_scrapeatlas_x", "x_posts.json", "https://x.com/i/web/status/1000000000000000001"),
+    ("fetch_scrapeatlas_youtube", "youtube.json", "https://www.youtube.com/watch?v=TC6pMy8VT0M"),
+    ("fetch_scrapeatlas_linkedin", "linkedin.json", "https://www.linkedin.com/feed/update/urn:li:activity:7511673984338436097/"),
+])
+def test_recovers_post_permalink_from_provider_identity(fetch_name, sample, expected_url):
+    from sentiment_monitor.providers import scrapeatlas_sources as sources
+
+    payload = fixture(sample)
+    for item in payload.get("posts", []) + payload.get("videos", []) + payload.get("shorts", []):
+        item.pop("url", None)
+    result = getattr(sources, fetch_name)(
+        "example", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *args, **kwargs: Response(payload),
+    )
+    assert expected_url in [post.url for post in result.posts]
+
+
+def test_reddit_prefers_native_permalink_to_submitted_link():
+    payload = fixture("reddit.json")
+    payload["posts"][0]["url"] = "https://example.invalid/a-story"
+    result = fetch_scrapeatlas_reddit(
+        "example", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *args, **kwargs: Response(payload),
+    )
+    assert result.posts[0].url == (
+        "https://www.reddit.com/r/SocialfFilmmakers/comments/1p3r0uy/"
+        "when_kabaddi_becomes_a_battlefield_bison_caste/"
+    )

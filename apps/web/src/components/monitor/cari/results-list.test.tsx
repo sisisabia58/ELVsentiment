@@ -63,6 +63,61 @@ const comments = {
 };
 
 describe("ResultsList", () => {
+  it("gives the TikTok heading and preview one keyboard-focusable original-post link", () => {
+    render(
+      <ResultsList
+        results={[result({
+          platform: "tiktok",
+          title: "Review parfum Mandalika",
+          url: "https://www.tiktok.com/@rawamangunfoodies/video/7702423576569253140",
+          thumbnailUrl: "https://example.invalid/thumb/1.jpg",
+        })]}
+        commentsByResult={comments}
+        sortMode="relevance"
+      />,
+    );
+    const link = screen.getByRole("link", { name: /Review parfum Mandalika/ });
+    expect(link.getAttribute("href")).toBe("https://www.tiktok.com/@rawamangunfoodies/video/7702423576569253140");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link.tagName).toBe("A");
+    expect(link.tabIndex).toBe(0);
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    expect(link.contains(screen.getByRole("heading", { name: "Review parfum Mandalika" }))).toBe(true);
+    expect(link.contains(screen.getByAltText("Pratinjau hasil"))).toBe(true);
+    expect(link.contains(screen.getByText("kriuknya beda sih"))).toBe(false);
+  });
+
+  it.each([
+    ["x", "https://mobile.twitter.com/example/status/1000000000000000001"],
+    ["reddit", "https://old.reddit.com/r/SocialfFilmmakers/comments/1p3r0uy/when_kabaddi_becomes_a_battlefield_bison_caste/"],
+    ["reddit", "https://redd.it/1p3r0uy"],
+    ["threads", "https://www.threads.net/@sari/post/EXAMPLE0001"],
+    ["instagram", "https://www.instagram.com/example/reel/ExAmPlE0002/"],
+    ["facebook", "https://www.facebook.com/aimkbaral/posts/pfbid08pYiLVxQ4sG4w5vDZ5ryRsCRWKyfZ99QNKHtuVYdztqQJ6SoqNyX1YZLEyezAxdrl"],
+    ["linkedin", "https://www.linkedin.com/feed/update/urn:li:activity:7511673984338436097/"],
+    ["youtube", "https://www.youtube.com/watch?v=TC6pMy8VT0M"],
+    ["youtube", "https://youtu.be/TC6pMy8VT0M"],
+  ])("opens a known %s post path at its original URL (%s)", (platform, url) => {
+    render(<ResultsList results={[result({ platform, url })]} commentsByResult={{}} sortMode="relevance" />);
+    expect(screen.getByRole("link").getAttribute("href")).toBe(url);
+  });
+
+  it.each([
+    null,
+    "https://[bad",
+    "http://x.com/example/status/1000000000000000001",
+    "https://x.com.fake.invalid/example/status/1000000000000000001",
+    "https://user:secret@x.com/example/status/1000000000000000001",
+    "https://x.com/search?q=topic",
+    "https://www.threads.net/@sari/post/EXAMPLE0001",
+  ])("keeps results readable without an X permalink (%s)", (url) => {
+    render(<ResultsList results={[result({ platform: "x", url })]} commentsByResult={{}} sortMode="relevance" />);
+    expect(screen.getByRole("heading", { level: 3 })).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
   it("keeps relevance rank across platforms in the all-results tab", () => {
     render(
       <ResultsList

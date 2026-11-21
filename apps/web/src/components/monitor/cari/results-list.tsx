@@ -7,6 +7,7 @@ import { formatRelative } from "@/monitor/format";
 import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
 import type { SnapshotComment, SnapshotResult } from "@/monitor/search/load";
 import { supportedProviders } from "@/monitor/search/platforms";
+import { originalPostHref } from "@/monitor/search/post-permalink";
 import { PLATFORM_ORDER, PlatformTile, platformName } from "./platform-tile";
 
 const compact = new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 });
@@ -76,11 +77,24 @@ function ResultCard(props: {
   const remaining = result.replies == null ? 0 : Math.max(0, result.replies - comments.length);
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
+  const href = originalPostHref(result.platform, result.url);
+  const PostPreview = href ? "a" : "div";
   return (
     <article id={`hasil-${result.id}`} className="border-b border-border pb-4 last:border-b-0 last:pb-0">
-      <div className="flex gap-4">
+      <PostPreview
+        className={cn("flex gap-4", href && "group rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary")}
+        {...(href ? {
+          href,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          "aria-label": `${heading} (buka unggahan asli di ${platformName(result.platform)}, tab baru)`,
+        } : {})}
+      >
         <div className="min-w-0 flex-1">
-          <h3 className="line-clamp-4 break-words text-[14.5px] font-semibold leading-6 text-foreground">
+          <h3 className={cn(
+            "line-clamp-4 break-words text-[14.5px] font-semibold leading-6 text-foreground",
+            href && "underline decoration-muted-foreground/60 underline-offset-2 group-hover:text-primary",
+          )}>
             {heading}
           </h3>
           {result.title && result.text && result.text !== result.title ? (
@@ -126,7 +140,7 @@ function ResultCard(props: {
             </div>
           )}
         </div>
-      </div>
+      </PostPreview>
       {comments.length > 0 ? (
         <div
           className="mt-3 rounded-lg border border-border bg-surface-subtle/60"

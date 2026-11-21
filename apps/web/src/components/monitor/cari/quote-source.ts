@@ -1,4 +1,5 @@
 import type { SnapshotAi, SnapshotComment, SnapshotResult } from "@/monitor/search/load";
+import { originalPostHref } from "@/monitor/search/post-permalink";
 import { platformName } from "./platform-tile";
 
 const STANCES = new Set(["positif", "campuran", "negatif", "netral", "faktual"]);
@@ -26,10 +27,9 @@ function asRecords(value: unknown): Record<string, unknown>[] {
 }
 
 function sourceOf(id: string, record: SourceMetadata, parent: Post, kind: EvidenceSource["kind"]): EvidenceSource {
-  const url = parent.url;
   return {
     id,
-    href: url && /^https?:\/\//i.test(url) ? url : `#hasil-${parent.id}`,
+    href: originalPostHref(parent.platform, parent.url) ?? `#hasil-${parent.id}`,
     platform: record.platform,
     author: (record.authorHandle || record.authorName || "").replace(/^@/, "").trim(),
     kind,
@@ -70,7 +70,7 @@ export function sourceLabel(source: EvidenceSource): string {
 export function sourceLinkProps(source: EvidenceSource) {
   return source.href.startsWith("#")
     ? { href: source.href }
-    : { href: source.href, target: "_blank", rel: "noreferrer" };
+    : { href: source.href, target: "_blank", rel: "noopener noreferrer" };
 }
 
 export function resolveEvidence(

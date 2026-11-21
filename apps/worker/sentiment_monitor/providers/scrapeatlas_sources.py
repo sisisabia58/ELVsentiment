@@ -301,6 +301,11 @@ def _youtube_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[s
             channel = item.get("channel") if isinstance(item.get("channel"), dict) else {}
             title = _optional_text(item.get("title"))
             text = title or ""
+            video_id = _optional_text(item.get("id"))
+            url = _optional_text(item.get("url"))
+            if not url and video_id and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                url = (f"https://www.youtube.com/shorts/{video_id}" if key == "shorts"
+                       else f"https://www.youtube.com/watch?v={video_id}")
             items.append(
                 {
                     "external_id": item.get("id"),
@@ -308,7 +313,7 @@ def _youtube_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[s
                     "title": title,
                     "author_name": channel.get("title"),
                     "author_handle": channel.get("handle"),
-                    "url": item.get("url"),
+                    "url": url,
                     "posted_at": item.get("publishedTime"),
                     "thumbnail_url": item.get("thumbnail"),
                     "views": item.get("viewCountInt"),
@@ -322,15 +327,13 @@ def _youtube_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[s
 
 
 def _reddit_url(item: Mapping[str, Any]) -> str | None:
-    url = _optional_text(item.get("url"))
-    if url:
-        return url
+    # For link submissions, "url" points to the submitted site.
     permalink = _optional_text(item.get("permalink"))
-    if not permalink:
-        return None
-    if permalink.startswith("/"):
-        return f"https://www.reddit.com{permalink}"
-    return permalink
+    if permalink and not permalink.startswith("//"):
+        if permalink.startswith("/"):
+            return f"https://www.reddit.com{permalink}"
+        return permalink
+    return _optional_text(item.get("url"))
 
 
 def _reddit_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
@@ -431,6 +434,11 @@ def _linkedin_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[
     items: list[dict[str, Any]] = []
     for item in _list_items(payload, "posts"):
         author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        url = _optional_text(item.get("url"))
+        if not url:
+            urn = _optional_text(item.get("urn")) or _optional_text(item.get("id"))
+            if urn and re.fullmatch(r"urn:li:activity:[0-9]+", urn):
+                url = f"https://www.linkedin.com/feed/update/{urn}/"
         items.append(
             {
                 "external_id": (_linkedin_activity_id(item.get("id"))
@@ -441,7 +449,7 @@ def _linkedin_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[
                 "title": None,
                 "author_name": author.get("name"),
                 "author_handle": None,
-                "url": item.get("url"),
+                "url": url,
                 "posted_at": item.get("datePublished"),
                 "thumbnail_url": _first_image_url(item),
                 "views": None,
@@ -562,10 +570,15 @@ def _instagram_items(payload: Mapping[str, Any], collected_at: str) -> list[dict
         owner = _mapping(item.get("owner"))
         edges = _list_items(_mapping(item.get("edge_media_to_caption")), "edges")
         caption = _mapping(edges[0].get("node")) if edges else {}
+        url = _optional_text(item.get("url"))
+        shortcode = _optional_text(item.get("shortcode"))
+        if not url and shortcode and re.fullmatch(r"[A-Za-z0-9_-]+", shortcode):
+            kind = "reel" if item.get("product_type") == "clips" else "p"
+            url = f"https://www.instagram.com/{kind}/{shortcode}/"
         posts.append({
             "external_id": item.get("id"),
             "text": caption.get("text"),
-            "url": item.get("url"),
+            "url": url,
             "author_handle": owner.get("username"),
             "author_name": owner.get("full_name"),
             "posted_at": unix_to_iso(item.get("taken_at_timestamp")) or item.get("created_at"),
@@ -588,10 +601,14 @@ def _x_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, An
         except (TypeError, ValueError, OverflowError):
             posted_at = None
         media = _list_items(_mapping(legacy.get("extended_entities")), "media")
+        tweet_id = item.get("rest_id") or legacy.get("id_str")
+        url = _optional_text(item.get("url"))
+        if not url and type(tweet_id) in (str, int) and re.fullmatch(r"[0-9]{1,20}", str(tweet_id)):
+            url = f"https://x.com/i/web/status/{tweet_id}"
         posts.append({
-            "external_id": item.get("rest_id") or legacy.get("id_str"),
+            "external_id": tweet_id,
             "text": legacy.get("full_text"),
-            "url": item.get("url"),
+            "url": url,
             "author_handle": author.get("screen_name"),
             "author_name": author.get("name"),
             "posted_at": posted_at,

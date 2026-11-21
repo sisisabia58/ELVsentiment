@@ -20,7 +20,7 @@ const aiFixture: SnapshotAi = {
 };
 
 const results = [
-  { id: "r1", platform: "threads", url: "https://example.invalid/post", text: "Tukuliling praktis.",
+  { id: "r1", platform: "threads", url: "https://www.threads.net/@sari/post/EXAMPLE0001", text: "Tukuliling praktis.",
     authorHandle: "@sari", authorName: null, title: null },
   { id: "r2", platform: "youtube", url: "https://example.invalid/noise", text: "Kopi keliling.",
     authorHandle: "@pedagang", authorName: null, title: null },
@@ -36,12 +36,27 @@ describe("AiSummary", () => {
     expect(screen.getByText(aiFixture.overallSummary)).toBeTruthy();
     expect(screen.getAllByRole("link", { name: /rina · Threads/ })).toHaveLength(1);
     const reply = screen.getByRole("link", { name: /rina · Threads/ });
-    expect(reply.getAttribute("href")).toBe("https://example.invalid/post");
+    expect(reply.getAttribute("href")).toBe("https://www.threads.net/@sari/post/EXAMPLE0001");
     expect(reply.getAttribute("target")).toBe("_blank");
+    expect(reply.getAttribute("rel")).toBe("noopener noreferrer");
     expect(screen.queryByRole("link", { name: /pedagang/ })).toBeNull();
     expect(screen.getByText(/1 unggahan dan 1 balasan/)).toBeTruthy();
     expect(screen.getByText(/^positif$/i)).toBeTruthy();
     expect(screen.queryByText(/Positif \d+%/)).toBeNull();
+  });
+
+  it.each([
+    null,
+    "https://[bad",
+    "http://www.threads.net/@sari/post/EXAMPLE0001",
+    "https://www.threads.net.fake.invalid/@sari/post/EXAMPLE0001",
+    "https://user:secret@www.threads.net/@sari/post/EXAMPLE0001",
+    "https://www.threads.net/@sari",
+  ])("cites the parent post locally without a verified permalink (%s)", (url) => {
+    render(<AiSummary ai={aiFixture} results={[{ ...results[0], url }]} comments={comments} />);
+    const reply = screen.getByRole("link", { name: /rina · Threads/ });
+    expect(reply.getAttribute("href")).toBe("#hasil-r1");
+    expect(reply.getAttribute("target")).toBeNull();
   });
 
   it("shows pending, failure, and insufficient-evidence states", () => {
