@@ -8,6 +8,7 @@ import { asSources, workingSources, type SourceCredentials, type SourceId } from
 import { applySchedule, normalizeSchedule, readLimits, type ScheduleLimits } from "./schedules";
 import type { ScheduleChoice } from "../monitor/schedule-choice";
 import { toPersist } from "../monitor/schedule-choice";
+import { PANTAU_TRIAGE_SOURCES, pantauFilterTriageEnabled, readImportableSearch, seedProjectFromSearch } from "../monitor/search/seed-project";
 
 export type KeywordInput = string | { text: string; intent: KeywordIntent };
 
@@ -138,20 +139,22 @@ export async function saveProjectSources(
   });
 }
 
+export type ProjectConfiguration = {
+  brandName: string;
+  variants: KeywordInput[];
+  sources: SourceId[];
+  schedule: ScheduleChoice;
+  now?: Date;
+};
+
 export async function saveProjectConfiguration(
   db: Queryable,
   customerId: string,
-  input: {
-    projectId: string;
-    brandName: string;
-    variants: KeywordInput[];
-    sources: SourceId[];
-    schedule: ScheduleChoice;
-    now?: Date;
-  },
+  input: ProjectConfiguration & { projectId: string },
   limits: ScheduleLimits = readLimits(),
   // Fail closed when a caller has not loaded scheduled source availability.
   credentials: SourceCredentials = { x: false, threads: false, instagram: false, tiktok: false },
+  cari?: { importSearchPosts: boolean },
 ): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   const sources = workingSources(input.sources, credentials);
   const anyConfigured = Boolean(
@@ -170,6 +173,37 @@ export async function saveProjectConfiguration(
   if (!schedule.ok) return { ok: false, error: "Jarak jadwal minimal 6 jam." };
   const texts = effectOfKeywordEdit(validated.variants).futureQueries;
   return withCustomer(db, customerId, async () => {
+    let originSearchId: string | undefined;
+    if (cari) {
+      const attempt = await db.query<{ search_id: string }>(
+        "select search_id from cari_onboarding_attempts where id = $1 and customer_id = $2 and expires_at > now()",
+        [input.projectId, customerId],
+      );
+      if (!attempt.rows[0]) {
+        return { ok: false as const, error: "Draf proyek sudah tidak tersedia. Buka kembali pengaturan proyek dari Cari sekarang." };
+      }
+      const searchId = attempt.rows[0].search_id;
+      if (cari.importSearchPosts && pantauFilterTriageEnabled()
+          && sources.some((source) => PANTAU_TRIAGE_SOURCES.includes(source))
+          && await readImportableSearch(db, customerId, searchId)) {
+        originSearchId = searchId;
+      }
+      const created = await db.query<{ id: string }>(
+        `insert into projects (id, customer_id, brand_name, created_at, pantau_filter_triage)
+         values ($1, $2, $3, now(), $4) on conflict (id) do nothing returning id`,
+        [input.projectId, customerId, input.brandName.trim(), originSearchId !== undefined],
+      );
+      if (!created.rows[0]) {
+        const saved = await db.query<{ id: string }>("select id from projects where id = $1", [input.projectId]);
+        return saved.rows[0]
+          ? { ok: true as const, message: "Proyek tersimpan." }
+          : { ok: false as const, error: "Halaman tidak ditemukan atau Anda tidak memiliki akses." };
+      }
+      await db.query(
+        "insert into project_settings (project_id, customer_id, source_filter) values ($1, $2, 'all')",
+        [input.projectId, customerId],
+      );
+    }
     const owned = await db.query<{ id: string }>("select id from projects where id = $1", [input.projectId]);
     if (owned.rows.length !== 1) {
       return { ok: false as const, error: "Halaman tidak ditemukan atau Anda tidak memiliki akses." };
@@ -181,6 +215,9 @@ export async function saveProjectConfiguration(
       input.projectId,
     ]);
     await applySchedule(db, customerId, input.projectId, schedule.value);
+    if (originSearchId) {
+      await seedProjectFromSearch({ db, customerId, projectId: input.projectId, searchId: originSearchId });
+    }
     return {
       ok: true as const,
       message: "Perubahan berlaku untuk pengumpulan berikutnya. Data dan penilaian sebelumnya tidak diubah.",

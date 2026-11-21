@@ -257,3 +257,33 @@ describe("onboarding wizard", () => {
     expect(screen.getAllByText(/WIB/).length).toBeGreaterThan(0);
   });
 });
+
+it("restores an explicit Cari import choice and submits withdrawal with the final sources", async () => {
+  const saveCari = vi.fn(async () => ({ ok: true as const, projectId: "import-project" }));
+  render(wizard({
+    credentials: { x: false, threads: true, instagram: true },
+    saveCari,
+    initial: {
+      step: 5, brand: "tukuliling kopi", keywords: ["tukuliling"], sources: ["threads", "instagram"], schedule,
+      originSearchId: "11111111-1111-4111-8111-111111111111", importSearchPosts: true,
+    },
+  }));
+  expect((screen.getByRole("checkbox", { name: /impor posting/i }) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Langkah 3: Sumber" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /^Instagram/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Lanjut" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "Lanjut" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Lanjut" }));
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: /impor posting/i })).toBeTruthy());
+  fireEvent.click(screen.getByRole("checkbox", { name: /impor posting/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Lewati dulu, ke dasbor" }));
+  await waitFor(() => expect(saveCari).toHaveBeenCalledWith(expect.objectContaining({
+    sources: ["threads"], importSearchPosts: false,
+  })));
+  expect(saveProjectSettingsAction).not.toHaveBeenCalled();
+});
+
+it("keeps import consent out of ordinary onboarding", () => {
+  render(wizard({ initial: { step: 5, brand: "contoh", keywords: ["contoh"], sources: ["threads"], schedule } }));
+  expect(screen.queryByRole("checkbox", { name: /impor posting/i })).toBeNull();
+});

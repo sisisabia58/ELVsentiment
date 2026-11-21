@@ -15,13 +15,9 @@ const MAX_ID_LENGTH = 64;
 
 export type OnboardingDraft = {
   customerId: string;
-  projectId: string | null;
-  step: number;
-  brand: string;
-  keywords: string[];
-  sources: SourceId[];
-  schedule: ScheduleChoice;
-};
+  originSearchId?: string;
+  cariAttemptId?: string;
+} & OnboardingDraftFields;
 
 // Fields the browser may send. The customer id is never one of them.
 export type OnboardingDraftFields = {
@@ -31,6 +27,7 @@ export type OnboardingDraftFields = {
   keywords: string[];
   sources: SourceId[];
   schedule: ScheduleChoice;
+  importSearchPosts?: boolean;
 };
 
 export type SourceCredentials = {
@@ -152,8 +149,16 @@ export function parseOnboardingDraft(raw: string | null | undefined): Onboarding
     if (!schedule) return null;
     const projectId = typeof record.projectId === "string" ? record.projectId : null;
     if (projectId !== null && (projectId.length === 0 || projectId.length > MAX_ID_LENGTH)) return null;
+    const origin = projectId === null && typeof record.originSearchId === "string"
+      && record.originSearchId.length > 0 && record.originSearchId.length <= MAX_ID_LENGTH;
     return {
       customerId: record.customerId,
+      ...(origin ? {
+        originSearchId: record.originSearchId,
+        cariAttemptId: typeof record.cariAttemptId === "string" && record.cariAttemptId.length <= MAX_ID_LENGTH
+          ? record.cariAttemptId : undefined,
+        importSearchPosts: record.importSearchPosts === true,
+      } : {}),
       projectId,
       step,
       brand: record.brand,
@@ -168,10 +173,14 @@ export function parseOnboardingDraft(raw: string | null | undefined): Onboarding
 
 // Bind the draft to the session customer. A customer id on `fields` is ignored,
 // and the returned id must not be used as the tenant for a write.
-export function bindOnboardingDraft(customerId: string, fields: OnboardingDraftFields): OnboardingDraft | null {
+export function bindOnboardingDraft(
+  customerId: string,
+  fields: OnboardingDraftFields,
+  cari?: Pick<OnboardingDraft, "originSearchId" | "cariAttemptId">,
+): OnboardingDraft | null {
   if (typeof customerId !== "string" || customerId.length === 0 || customerId.length > MAX_ID_LENGTH) return null;
   // The session id is applied last so a forged customerId on fields cannot win.
-  const draft = parseOnboardingDraft(JSON.stringify({ ...fields, customerId }));
+  const draft = parseOnboardingDraft(JSON.stringify({ ...fields, originSearchId: cari?.originSearchId, cariAttemptId: cari?.cariAttemptId, customerId }));
   if (!draft || draft.customerId !== customerId) return null;
   if (draft.brand.length > MAX_BRAND_LENGTH) return null;
   if (draft.keywords.length > MAX_KEYWORDS) return null;
@@ -193,13 +202,7 @@ export function resolveOnboardingState(input: {
     schedule: ScheduleChoice;
   } | null;
   credentials: SourceCredentials;
-}): {
-  step: number;
-  brand: string;
-  keywords: string[];
-  sources: SourceId[];
-  schedule: ScheduleChoice;
-} {
+}): Omit<OnboardingDraftFields, "projectId"> & Pick<OnboardingDraft, "originSearchId" | "cariAttemptId"> {
   const blank = {
     step: 1,
     brand: "",
@@ -225,6 +228,11 @@ export function resolveOnboardingState(input: {
         keywords: prefill.keywords.length > 0 ? prefill.keywords : [prefill.brand],
         sources: workingSources(prefill.sources, input.credentials),
         schedule: prefill.schedule,
+        ...(prefill.originSearchId ? {
+          originSearchId: prefill.originSearchId,
+          cariAttemptId: prefill.cariAttemptId,
+          importSearchPosts: prefill.importSearchPosts,
+        } : {}),
       };
       const allowed = allowedOnboardingStep({ ...next, credentials: input.credentials });
       return { ...next, step: Math.min(next.step, allowed) };

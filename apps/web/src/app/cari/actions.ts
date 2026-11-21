@@ -8,6 +8,7 @@ import { createInstantSearch } from "@/monitor/search/mutations";
 import { cariSekarangEnabled, type Env } from "@/monitor/search/feature";
 import { isUuid } from "@/monitor/search/load";
 import { SEARCH_RELEVANCE_VERSION } from "@/monitor/search/relevance";
+import { pantauFilterTriageEnabled } from "@/monitor/search/seed-project";
 import { buildOnboardingFields } from "@/monitor/search/present";
 import { ALL_SOURCES, type OnboardingDraftFields } from "@/monitor/onboarding-draft";
 
@@ -131,7 +132,7 @@ export async function retryQuestionForCustomer(input: {
 }
 
 export type MonitorProjectResult =
-  | { ok: true; href: "/onboarding?baru=1"; fields: OnboardingDraftFields }
+  | { ok: true; href: "/onboarding?baru=1"; fields: OnboardingDraftFields; originSearchId?: string; cariAttemptId?: string }
   | { ok: false; error: string };
 
 export async function monitorAsProjectForCustomer(input: {
@@ -161,10 +162,18 @@ export async function monitorAsProjectForCustomer(input: {
       { query, platforms: sourceRows.rows.map((row) => row.platform) },
       [...ALL_SOURCES],
     );
-    return {
-      ok: true,
-      href: "/onboarding?baru=1",
-      fields: { projectId: null, step: 1, ...fields },
-    };
+    const ready = { ok: true as const, href: "/onboarding?baru=1" as const, fields: { projectId: null, step: 1, ...fields } };
+    if (!pantauFilterTriageEnabled(input.env)) return ready;
+    const attempt = await input.db.query<{ id: string }>(
+      `insert into cari_onboarding_attempts (id, customer_id, search_id)
+       select $1, customer_id, id from instant_searches
+       where customer_id = $2 and id = $3 and status in ('succeeded', 'partial')
+         and finished_at is not null and retention_expires_at > now()
+       returning id`,
+      [randomUUID(), input.customerId, input.searchId],
+    );
+    return attempt.rows[0]
+      ? { ...ready, originSearchId: input.searchId, cariAttemptId: attempt.rows[0].id }
+      : ready;
   });
 }

@@ -17,6 +17,7 @@ import {
   type SourceCredentials,
   type SourceId,
 } from "@/monitor/onboarding-draft";
+import type { ProjectConfiguration } from "@/projects/handlers";
 import type { ScheduleChoice } from "@/monitor/schedule-choice";
 import { choiceLabel } from "@/monitor/schedule-choice";
 import { clearOnboardingDraftAction, saveOnboardingDraftAction } from "@/app/onboarding/draft-actions";
@@ -39,7 +40,10 @@ type Existing = {
 export function OnboardingWizard(props: {
   existing: Existing | null;
   credentials: SourceCredentials;
-  initial?: Pick<OnboardingDraft, "step" | "brand" | "keywords" | "sources" | "schedule">;
+  initial?: Pick<OnboardingDraft, "step" | "brand" | "keywords" | "sources" | "schedule" | "originSearchId" | "importSearchPosts">;
+  saveCari?: (input: Omit<ProjectConfiguration, "now"> & { importSearchPosts: boolean }) =>
+    Promise<{ ok: true; projectId: string } | { ok: false; error: string }>;
+  showCariImport?: boolean;
   onRun: (projectId: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const router = useRouter();
@@ -56,6 +60,9 @@ export function OnboardingWizard(props: {
   const [schedule, setSchedule] = useState<ScheduleChoice>(
     props.initial?.schedule ?? props.existing?.schedule ?? { mode: "off", intervalHours: 6 },
   );
+  const hasCariOrigin = Boolean(props.initial?.originSearchId && props.saveCari);
+  const canImport = hasCariOrigin && props.showCariImport !== false;
+  const [importSearchPosts, setImportSearchPosts] = useState(props.initial?.importSearchPosts === true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [running, setRunning] = useState(false);
@@ -97,6 +104,7 @@ export function OnboardingWizard(props: {
       keywords,
       sources,
       schedule,
+      ...(hasCariOrigin ? { importSearchPosts } : {}),
     };
     if (heldWrite.current?.epoch === saveEpoch.current && heldWrite.current.key === JSON.stringify(fields)) return;
     const epoch = ++saveEpoch.current;
@@ -113,7 +121,7 @@ export function OnboardingWizard(props: {
       window.clearTimeout(timer);
       window.removeEventListener("pagehide", flush);
     };
-  }, [brand, keywords, props.existing?.projectId, schedule, sources, step]);
+  }, [brand, hasCariOrigin, importSearchPosts, keywords, props.existing?.projectId, schedule, sources, step]);
 
   async function lanjut() {
     if (advancing.current || !canNext) return;
@@ -132,6 +140,7 @@ export function OnboardingWizard(props: {
       keywords: nextKeywords,
       sources,
       schedule,
+      ...(hasCariOrigin ? { importSearchPosts } : {}),
     };
     // Drop a draft write that was queued for the step we are leaving, and
     // keep this write on the same chain as later edits and Kembali.
@@ -150,23 +159,35 @@ export function OnboardingWizard(props: {
   async function finish(run: boolean) {
     setError(null);
     setPending(true);
-    const created = props.existing ?? (await createProjectForSession(brand.trim()));
-    if (!created) {
-      setPending(false);
-      setError("Masukkan nama merek.");
-      return;
-    }
-    const saved = await saveProjectSettingsAction({
-      projectId: created.projectId,
+    const configuration = {
       brandName: brand.trim(),
       variants: keywords,
       sources: workingSources(sources, props.credentials),
       schedule,
-    });
-    if (!saved.ok) {
-      setPending(false);
-      setError(saved.error);
-      return;
+    };
+    let projectId: string;
+    if (props.saveCari) {
+      const saved = await props.saveCari({ ...configuration, importSearchPosts: canImport && importSearchPosts });
+      if (!saved.ok) {
+        setPending(false);
+        setError(saved.error);
+        return;
+      }
+      projectId = saved.projectId;
+    } else {
+      const created = props.existing ?? (await createProjectForSession(brand.trim()));
+      if (!created) {
+        setPending(false);
+        setError("Masukkan nama merek.");
+        return;
+      }
+      projectId = created.projectId;
+      const saved = await saveProjectSettingsAction({ ...configuration, projectId });
+      if (!saved.ok) {
+        setPending(false);
+        setError(saved.error);
+        return;
+      }
     }
     const sourcesReady = sources.some((source) => props.credentials[source]);
     if (run && !sourcesReady) {
@@ -176,7 +197,7 @@ export function OnboardingWizard(props: {
     }
     if (run) {
       setRunning(true);
-      const started = await props.onRun(created.projectId);
+      const started = await props.onRun(projectId);
       if (!started.ok) {
         setPending(false);
         setRunning(false);
@@ -188,7 +209,7 @@ export function OnboardingWizard(props: {
     saveEpoch.current += 1;
     writeChain.current = writeChain.current.then(() => clearOnboardingDraftAction()).catch(() => undefined);
     await writeChain.current;
-    router.push(`/dasbor?proyek=${created.projectId}`);
+    router.push(`/dasbor?proyek=${projectId}`);
   }
 
   return (
@@ -332,6 +353,17 @@ export function OnboardingWizard(props: {
                   <dd>{choiceLabel(schedule)}</dd>
                 </div>
               </dl>
+              {canImport ? (
+                <label className="mt-5 flex items-start gap-2 text-sm">
+                  <input type="checkbox" checked={importSearchPosts} disabled={pending}
+                    onChange={(event) => setImportSearchPosts(event.target.checked)} />
+                  <span>Impor posting dari Cari sekarang
+                    <span className="block text-muted-foreground">
+                      Hingga 20 posting yang cocok dari Threads, Instagram, atau TikTok akan masuk dari sumber yang dipilih dan ditinjau otomatis.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
               {running ? <p className="mt-4 text-sm">Permintaan pengumpulan dikirim. Anda bisa menutup halaman ini.</p> : null}
               {error ? (
                 <p role="alert" className="mt-4 text-sm text-danger">

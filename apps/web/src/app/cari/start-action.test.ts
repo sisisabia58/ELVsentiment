@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_FILTERS } from "@/monitor/search/filters";
+import { parseOnboardingDraft, resolveOnboardingState } from "@/monitor/onboarding-draft";
 
 vi.mock("@/auth/request-session", () => ({
   withSessionDeps: (fn: (deps: unknown) => unknown) =>
@@ -39,4 +40,17 @@ describe("startSearchAction input hardening", () => {
       expect(result).toEqual({ ok: false, error: "invalid_query" });
     }
   });
+});
+
+it("resumes a Cari origin and consent only in the initiating customer's fresh draft", () => {
+  const customerId = "11111111-1111-4111-8111-111111111111";
+  const originSearchId = "33333333-3333-4333-8333-333333333333";
+  const draft = parseOnboardingDraft(JSON.stringify({
+    customerId, projectId: null, step: 5, brand: "tukuliling kopi", keywords: ["tukuliling"],
+    sources: ["threads"], schedule: { mode: "off", intervalHours: 6 }, originSearchId, importSearchPosts: true,
+  }));
+  const input = { fresh: true, langkah: "5", draft, customerId, existing: null, credentials: { x: false, threads: true } };
+  expect(resolveOnboardingState(input)).toMatchObject({ originSearchId, importSearchPosts: true });
+  expect(resolveOnboardingState({ ...input, fresh: false })).not.toHaveProperty("originSearchId");
+  expect(resolveOnboardingState({ ...input, customerId: "different" })).not.toHaveProperty("originSearchId");
 });

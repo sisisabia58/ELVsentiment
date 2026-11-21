@@ -96,7 +96,9 @@ export async function monitorAsProjectAction(searchId: string): Promise<MonitorP
       env: process.env,
     });
     if (!prepared.ok) return prepared;
-    const wrote = await writeOnboardingDraftCookie(prepared.fields);
+    const wrote = await writeOnboardingDraftCookie(prepared.fields, {
+      customerId, originSearchId: prepared.originSearchId, cariAttemptId: prepared.cariAttemptId,
+    });
     if (!wrote) return { ok: false as const, error: "unauthenticated" };
     return prepared;
   });

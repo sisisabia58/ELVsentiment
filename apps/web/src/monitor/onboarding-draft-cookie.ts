@@ -8,7 +8,9 @@ import {
   bindOnboardingDraft,
   ONBOARDING_DRAFT_COOKIE,
   ONBOARDING_DRAFT_MAX_AGE_SECONDS,
+  parseOnboardingDraft,
   workingSources,
+  type OnboardingDraft,
   type OnboardingDraftFields,
 } from "./onboarding-draft";
 
@@ -24,7 +26,10 @@ async function cookieContext(): Promise<SessionCookieContext> {
   return { nodeEnv: process.env.NODE_ENV, forwardedProto };
 }
 
-export async function writeOnboardingDraftCookie(fields: OnboardingDraftFields): Promise<boolean> {
+export async function writeOnboardingDraftCookie(
+  fields: OnboardingDraftFields,
+  initiatedCari?: Pick<OnboardingDraft, "originSearchId" | "cariAttemptId"> & { customerId: string },
+): Promise<boolean> {
   const customerId = await sessionCustomerId();
   if (!customerId) return false;
   const credentials = await withClient(loadScheduledSourceAvailability);
@@ -34,9 +39,16 @@ export async function writeOnboardingDraftCookie(fields: OnboardingDraftFields):
     sources: workingSources(fields.sources, credentials),
     credentials,
   });
-  const draft = bindOnboardingDraft(customerId, { ...fields, step: Math.min(fields.step, allowed) });
+  const jar = await cookies();
+  const prior = fields.importSearchPosts !== undefined
+    ? parseOnboardingDraft(jar.get(ONBOARDING_DRAFT_COOKIE)?.value) : null;
+  const cari = initiatedCari ?? prior;
+  const draft = bindOnboardingDraft(
+    customerId, { ...fields, step: Math.min(fields.step, allowed) },
+    cari?.customerId === customerId ? cari : undefined,
+  );
   if (!draft) return false;
-  (await cookies()).set(
+  jar.set(
     ONBOARDING_DRAFT_COOKIE,
     JSON.stringify(draft),
     onboardingDraftCookieOptions(await cookieContext()),
