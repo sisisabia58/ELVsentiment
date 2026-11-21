@@ -1269,3 +1269,177 @@ def test_route_migration_as_owner_without_bypassrls(pg16):
     assert pg16.execute("select platform from provider_settings where provider='off' order by platform").fetchall() == [("tiktok",), ("web",)]
     assert pg16.execute("select count(*) from provider_settings where provider='scrapeatlas'").fetchone() == (8,)
     pg16.rollback()
+
+
+def test_cari_more_keeps_only_new_matches_and_never_redispatches(pg16, monkeypatch):
+    from datetime import datetime
+
+    from sentiment_monitor.instant_search import InstantSearchJob, run_instant_search
+    from sentiment_monitor import instant_search_more
+    from sentiment_monitor.instant_search_more import run_instant_search_more_poll
+    from sentiment_monitor.providers.canonical import CanonicalPost, PlatformFetch, RouteCall
+    from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS, ProviderSetting
+    from sentiment_monitor.scheduler import CursorRowAdapter
+
+    search_id = JOB_A
+    now = datetime.now(timezone.utc)
+    env = {"CARI_MORE_ENABLED": "1"}
+    route = "scrapeatlas.tiktok.keyword"
+    pg16.execute("insert into customers (id, customer_id, created_at) values (%s,%s,now())", (CUSTOMER_A, CUSTOMER_A))
+    pg16.execute("""
+        insert into instant_searches
+          (id, customer_id, query_text, keyword_intent, date_window, sort_mode,
+           language_filter, status, deadline_at)
+        values (%s,%s,'mandalika parfum','phrase','7d','popular','id','queued',now()+interval '1 minute')
+        """, (search_id, CUSTOMER_A))
+    pg16.commit()
+
+    def connect():
+        conn = psycopg.connect(_db_url("sm_pg16"), row_factory=psycopg.rows.dict_row)
+        conn.execute("set role worker_role")
+        return CursorRowAdapter(conn)
+
+    def post(key, *, text="mandalika parfum ini bagus banget", days=1, likes=0):
+        return CanonicalPost(
+            platform="tiktok", external_id=key, text=text, title=None,
+            author_name=None, author_handle=None, url=None,
+            published_at=(now - timedelta(days=days)).isoformat(), thumbnail_url=None,
+            views=None, likes=likes, replies=0, shares=None, top_replies=(),
+            hashtags=(), source_provider="scrapeatlas", routes=(route,),
+            raw_ref=key, collected_at=now.isoformat(),
+        )
+
+    def initial(platform, keyword, settings, **kwargs):
+        return PlatformFetch(
+            platform, posts=[post("existing", likes=5)], state="answered",
+            calls=[RouteCall("scrapeatlas", platform, route, "success", credits_charged=1)],
+            next_cursor="12", next_companion="first-search",
+        )
+
+    settings = {
+        key: value if key == "tiktok" else ProviderSetting(key, "off")
+        for key, value in DEFAULT_SETTINGS.items()
+    }
+    search = InstantSearchJob(search_id, CUSTOMER_A, "mandalika parfum", date_window="7d",
+                              sort_mode="popular", language_filter="id")
+    run_instant_search(connect, search, env=env, now=now, settings=settings, fetcher=initial)
+    original_id = pg16.execute("select id from instant_search_results where search_id=%s",
+                               (search_id,)).fetchone()[0]
+    assert pg16.execute("select route, cursor, companion from instant_search_continuations").fetchone() == (
+        route, "12", "first-search",
+    )
+
+    def enqueue(job_id, generation, *, platform="tiktok", stale=False):
+        pg16.execute("""
+            insert into instant_search_more_jobs (id,search_id,customer_id,platform,generation,created_at)
+            values (%s,%s,%s,%s,%s,now()-%s::interval)
+            """, (job_id, search_id, CUSTOMER_A, platform, generation, "1 minute" if stale else "0 seconds"))
+        pg16.commit()
+
+    enqueue(JOB_B, 0)
+
+    def fetch_page(platform, keyword, _settings, **kwargs):
+        assert platform == "tiktok"
+        assert (keyword, keyword.intent) == ("mandalika parfum", "phrase")
+        assert kwargs["continuation_route"] == route
+        assert (kwargs["cursor"], kwargs["companion"]) == ("12", "first-search")
+        assert kwargs["date_window_days"] == 7
+        assert kwargs["collected_at"] == now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert not run_instant_search_more_poll(connect, env=env, fetcher=fetch_page)
+        return PlatformFetch(
+            platform, posts=[
+                post("existing", likes=200), post("new", likes=10), post("weak", text="kopi ini bagus"),
+                post("old", days=15), post("english", text="mandalika parfum this is very good"),
+            ], state="answered",
+            calls=[RouteCall("scrapeatlas", platform, route, "success", credits_charged=0)],
+            next_cursor="24", next_companion="first-search",
+        )
+
+    assert not run_instant_search_more_poll(connect, env={}, fetcher=fetch_page)
+    assert run_instant_search_more_poll(connect, env=env, fetcher=fetch_page)
+    assert not run_instant_search_more_poll(connect, env=env, fetcher=fetch_page)
+    stored = pg16.execute(
+        "select external_id,rank,id from instant_search_results where search_id=%s order by rank",
+        (search_id,),
+    ).fetchall()
+    assert [(key, rank) for key, rank, _ in stored] == [("new", 1), ("existing", 2)]
+    assert stored[1][2] == original_id
+    assert pg16.execute("select user_credits, credits_used from instant_searches").fetchone() == (1, 1)
+    assert pg16.execute("select result_count from instant_search_sources").fetchone() == (2,)
+    assert pg16.execute("select status,new_result_count from instant_search_more_jobs").fetchone() == ("succeeded", 1)
+    assert pg16.execute(
+        "select credits_charged from search_credit_ledger where more_job_id=%s", (JOB_B,),
+    ).fetchall() == [(0,)]
+    assert pg16.execute("select cursor,generation from instant_search_continuations").fetchone() == ("24", 1)
+
+    enqueue(JOB_FRESH, 1)
+
+    def repeated_cursor(platform, *_args, **kwargs):
+        assert kwargs["cursor"] == "24"
+        return PlatformFetch(
+            platform, posts=[post("existing")], state="answered",
+            calls=[RouteCall("scrapeatlas", platform, route, "success")],
+            next_cursor="12", next_companion="first-search",
+        )
+
+    assert run_instant_search_more_poll(connect, env=env, fetcher=repeated_cursor)
+    assert pg16.execute("select cursor,generation from instant_search_continuations").fetchone() == (None, 2)
+    assert pg16.execute("select status,new_result_count from instant_search_more_jobs where id=%s",
+                        (JOB_FRESH,)).fetchone() == ("succeeded", 0)
+    assert pg16.execute("select credits_charged from search_credit_ledger where more_job_id=%s",
+                        (JOB_FRESH,)).fetchone() == (None,)
+
+    # A stale page on another platform carries no receipt if it never runs.
+    pg16.execute("""
+        insert into instant_search_sources (search_id,customer_id,platform,provider,state)
+        values (%s,%s,'youtube','scrapeatlas','answered')
+        """, (search_id, CUSTOMER_A))
+    pg16.execute("""
+        insert into instant_search_continuations (search_id,customer_id,platform,route,cursor,expires_at)
+        values (%s,%s,'youtube','scrapeatlas.youtube.search','native-long-token',now()+interval '1 minute')
+        """, (search_id, CUSTOMER_A))
+    enqueue(JOB_OLD, 0, platform="youtube", stale=True)
+    assert not run_instant_search_more_poll(connect, env=env, fetcher=lambda *_a, **_k: pytest.fail("stale dispatch"))
+    assert pg16.execute("select status from instant_search_more_jobs where id=%s", (JOB_OLD,)).fetchone() == ("failed",)
+    assert pg16.execute("select count(*) from search_credit_ledger where more_job_id=%s", (JOB_OLD,)).fetchone() == (0,)
+    pg16.execute("update instant_search_continuations set expires_at=now() where platform='youtube'")
+    pg16.commit()
+    assert not run_instant_search_more_poll(connect, env=env, claim=False)
+    assert pg16.execute("select cursor from instant_search_continuations where platform='youtube'").fetchone() == (None,)
+
+    # Force a result write failure after a billable page. Its receipt is
+    # already durable and the same page generation is never dispatched again.
+    pg16.execute("update instant_search_continuations set cursor='36',companion='first-search' where platform='tiktok'")
+    paid_job = "88888888-8888-4888-8888-888888888888"
+    enqueue(paid_job, 2)
+
+    def paid_page(platform, *_args, **_kwargs):
+        return PlatformFetch(
+            platform, posts=[post("fails-to-store")], state="answered",
+            calls=[RouteCall("scrapeatlas", platform, route, "success", credits_charged=2)],
+        )
+
+    def reject_rank(*args):
+        raise RuntimeError("injected merge failure")
+
+    record_actual = instant_search_more.record_call
+    receipt_attempts = []
+
+    def record_with_lost_ack(conn, *args, **kwargs):
+        record_actual(conn, *args, **kwargs)
+        receipt_attempts.append(kwargs["more_job_id"])
+        if len(receipt_attempts) == 1:
+            conn.commit()
+            raise RuntimeError("response lost after commit")
+
+    monkeypatch.setattr(instant_search_more, "_refresh_ranks", reject_rank)
+    monkeypatch.setattr(instant_search_more, "record_call", record_with_lost_ack)
+    assert run_instant_search_more_poll(connect, env=env, fetcher=paid_page)
+    assert not run_instant_search_more_poll(connect, env=env, fetcher=paid_page)
+    assert pg16.execute("select count(*) from instant_search_results").fetchone() == (2,)
+    assert pg16.execute("select status,safe_detail from instant_search_more_jobs where generation=2").fetchone() == (
+        "failed", "storage_failed",
+    )
+    assert receipt_attempts == [paid_job, paid_job]
+    assert pg16.execute("select credits_charged from search_credit_ledger where more_job_id=%s",
+                        (paid_job,)).fetchall() == [(2,)]

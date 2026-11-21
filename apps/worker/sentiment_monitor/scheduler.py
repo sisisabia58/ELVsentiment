@@ -15,7 +15,8 @@ import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
 from sentiment_monitor.mention_triage import pantau_triage_enabled, run_pantau_triage_poll
-from sentiment_monitor.instant_search import MAX_INFLIGHT, retry_named_summary, run_instant_search_poll, run_question_cycle
+from sentiment_monitor.instant_search import MAX_INFLIGHT, cari_more_enabled, retry_named_summary, run_instant_search_poll, run_question_cycle
+from sentiment_monitor.instant_search_more import run_instant_search_more_poll
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
@@ -1007,6 +1008,39 @@ def start_pantau_triage_worker(connect, stop_event, *, log=print):
     return thread
 
 
+def start_instant_search_more_worker(connect, stop_event, *, log=print):
+    if not cari_more_enabled(os.environ):
+        return None
+
+    def loop():
+        from concurrent.futures import ThreadPoolExecutor
+
+        slots = 4
+        executor = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="instant-search-page")
+        in_flight = set()
+        try:
+            while not stop_event.wait(_instant_search_poll_seconds()):
+                in_flight = {future for future in in_flight if not future.done()}
+                available = slots - len(in_flight)
+                for _ in range(max(1, available)):
+                    try:
+                        future = run_instant_search_more_poll(
+                            connect, env=os.environ, submit=executor.submit, claim=available > 0,
+                        )
+                    except Exception:
+                        _safe_log(log, lambda: format_log("instant_search_more_cycle_failed"))
+                        break
+                    if future is None:
+                        break
+                    in_flight.add(future)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    thread = threading.Thread(target=loop, name="instant-search-more", daemon=True)
+    thread.start()
+    return thread
+
+
 def reserve_scheduled_call(conn, job_id, platform, cap):
     # Two-key transaction locks serialize a rolling-window count plus insert.
     # Each call to _call commits this reservation before the provider request.
@@ -1083,6 +1117,7 @@ def serve(
     last_logged = None
     stop_event = threading.Event()
     instant_thread = start_instant_search_worker(connect, stop_event, log=log)
+    start_instant_search_more_worker(connect, stop_event, log=log)
     start_pantau_triage_worker(connect, stop_event, log=log)
     try:
         while True:

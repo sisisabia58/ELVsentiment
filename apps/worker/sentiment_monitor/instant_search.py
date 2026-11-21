@@ -49,8 +49,9 @@ from sentiment_monitor.providers.canonical import (
 )
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
 from sentiment_monitor.providers.comments import fetch_comments
-from sentiment_monitor.providers.fetch import fetch_platform
+from sentiment_monitor.providers.fetch import CONTINUATION_ROUTES, fetch_platform
 from sentiment_monitor.providers.fixtures import fixture_comment_fetch
+from sentiment_monitor.providers.scrapeatlas_sources import continuation_values
 from sentiment_monitor.providers.settings import load_provider_settings
 
 ROUTE_TIMEOUT_SECONDS = 20
@@ -128,6 +129,7 @@ SAFE_DETAILS = frozenset(
         "body_too_large",
         "success_false",
         "storage_failed",
+        "search_session_expired",
         "unknown_error",
         "other",
     }
@@ -158,6 +160,16 @@ def _safe_route(value: Any) -> str:
     if isinstance(value, str) and _ROUTE_PATTERN.fullmatch(value):
         return value
     return "other"
+
+
+def cari_more_enabled(env: Mapping[str, Any], platform: str | None = None) -> bool:
+    value = env.get("CARI_MORE_ENABLED")
+    if not isinstance(value, str) or value.strip().lower() not in {"1", "true"}:
+        return False
+    allowlist = env.get("CARI_MORE_PLATFORMS")
+    if platform is None or not isinstance(allowlist, str):
+        return True
+    return platform in {item.strip() for item in allowlist.split(",")}
 
 
 class _Transactions:
@@ -434,15 +446,24 @@ def insert_comments(
     return inserted
 
 
-def record_call(conn: Any, job: InstantSearchJob, call: RouteCall) -> None:
+def record_call(
+    conn: Any, job: InstantSearchJob, call: RouteCall, *, more_job_id: str | None = None,
+) -> None:
     _set_customer(conn, job.customer_id)
     latency = call.latency_ms if type(call.latency_ms) is int else 0
+    more_column = ", more_job_id" if more_job_id else ""
+    more_value = ", %s" if more_job_id else ""
+    more_constraint = "on conflict (more_job_id) do nothing" if more_job_id else ""
+    # A paid page can settle after search retention. Keep its receipt with a
+    # null parent and lock any retained parent until the insert commits.
+    search_ref = "(select id from instant_searches where id = %s for key share)" if more_job_id else "%s"
     conn.execute(
-        """
+        f"""
         insert into search_credit_ledger
           (id, search_id, customer_id, provider, platform, route, credits_charged,
-           http_status, safe_detail, body_length, latency_ms)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           http_status, safe_detail, body_length, latency_ms{more_column})
+        values (%s, {search_ref}, %s, %s, %s, %s, %s, %s, %s, %s, %s{more_value})
+        {more_constraint}
         """,
         (
             str(uuid.uuid4()),
@@ -456,6 +477,7 @@ def record_call(conn: Any, job: InstantSearchJob, call: RouteCall) -> None:
             _safe_detail(call.safe_detail),
             call.body_length if type(call.body_length) is int else None,
             latency,
+            *((more_job_id,) if more_job_id else ()),
         ),
     )
 
@@ -543,6 +565,24 @@ def _normalize(post: CanonicalPost, job: InstantSearchJob) -> CanonicalPost:
     )
 
 
+def _matching_posts(
+    posts: Iterable[CanonicalPost], job: InstantSearchJob, cutoff_iso: str | None, platform: str,
+) -> list[CanonicalPost]:
+    kept = []
+    for item in posts:
+        try:
+            if item.platform == platform:
+                kept.append(_normalize(item, job))
+        except Exception:
+            # A malformed record must not discard siblings or a paid receipt.
+            continue
+    eligible = [
+        item for item in filter_since(kept, cutoff_iso)
+        if item.relevance != "no_match" and job.language_filter in ("all", item.language)
+    ]
+    return sort_posts(dedupe_posts(eligible), "relevance")[:MAX_PLATFORM_RESULTS]
+
+
 def _known_credit_sum(calls: Iterable[RouteCall]) -> int | None:
     known = [value for call in calls if (value := safe_credit(call.credits_charged)) is not None]
     if not known:
@@ -606,6 +646,7 @@ def _store_answered(
     calls: list[RouteCall],
     detail: str,
     attempted: tuple[str, ...],
+    continuation_anchor: str | None,
 ) -> list[CanonicalPost]:
     insert_posts(conn, job, kept)
     stored = _comment_result_ids(conn, job, platform)
@@ -621,10 +662,39 @@ def _store_answered(
         attempted_providers=attempted,
         safe_detail=detail,
     )
+    if continuation_anchor is not None:
+        _store_continuation(conn, job, platform, result, calls, continuation_anchor)
     return [
         item for item in kept
         if (identity := post_identity(item)) is not None and identity[1] in stored
     ]
+
+
+def _store_continuation(
+    conn: Any, job: InstantSearchJob, platform: str, result: Any, calls: list[RouteCall], anchor: str,
+) -> None:
+    route = CONTINUATION_ROUTES.get(platform)
+    cursor, companion = continuation_values(
+        platform, getattr(result, "next_cursor", None), getattr(result, "next_companion", None),
+    )
+    if not route or not cursor or len(calls) != 1:
+        return
+    call = calls[0]
+    if (call.provider, call.platform, call.route) != ("scrapeatlas", platform, route):
+        return
+    if call.outcome not in ("success", "partial"):
+        return
+    conn.execute(
+        """
+        insert into instant_search_continuations
+          (search_id, customer_id, platform, route, cursor, companion, collected_at, expires_at)
+        select id, customer_id, %s, %s, %s, %s, %s,
+               least(retention_expires_at, now() + interval '15 minutes')
+        from instant_searches where id = %s and customer_id = %s and retention_expires_at > now()
+        on conflict (search_id, platform) do nothing
+        """,
+        (platform, route, cursor, companion, anchor, job.id, job.customer_id),
+    )
 
 
 def _mark_source_failed(
@@ -664,6 +734,7 @@ def _handle_result(
     result: Any,
     cutoff_iso: str | None,
     all_posts: list[CanonicalPost],
+    continuation_anchor: str | None = None,
 ) -> list[CanonicalPost]:
     calls = list(getattr(result, "calls", None) or [])
     # Paid calls are durable before any post is stored, so a later normalisation
@@ -679,21 +750,10 @@ def _handle_result(
     # own source; the other platforms keep their results and ledger rows.
     try:
         if state == "answered":
-            # Sanitise each record before the cutoff filter, and isolate each
-            # record: a poisoned date or normalisation error must drop only
-            # that post, never its siblings or the platform's ledger rows.
-            kept = []
-            for item in result.posts or []:
-                try:
-                    kept.append(_normalize(item, job))
-                except Exception:
-                    continue
-            kept = filter_since(kept, cutoff_iso)
-            kept = [item for item in kept if item.relevance != "no_match"]
-            kept = sort_posts(dedupe_posts(kept), "relevance")[:MAX_PLATFORM_RESULTS]
+            kept = _matching_posts(result.posts or [], job, cutoff_iso, platform)
             stored = tx.run(
                 lambda conn: _store_answered(
-                    conn, job, platform, chain, kept, result, calls, detail, attempted
+                    conn, job, platform, chain, kept, result, calls, detail, attempted, continuation_anchor,
                 )
             )
             all_posts.extend(stored)
@@ -1140,7 +1200,10 @@ def run_instant_search(
                         _info(job.id, platform=platform, state="failed", results=0, latency_ms=0, detail="other")
                         continue
                     try:
-                        kept = _handle_result(tx, job, platform, chain, result, cutoff_iso, all_posts)
+                        continuation_anchor = collected_at if cari_more_enabled(env, platform) else None
+                        kept = _handle_result(
+                            tx, job, platform, chain, result, cutoff_iso, all_posts, continuation_anchor,
+                        )
                     except Exception:
                         # Belt and braces: _handle_result isolates itself, but one
                         # platform must never abort the remaining done futures.

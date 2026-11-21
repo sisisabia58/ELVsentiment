@@ -114,6 +114,54 @@ def _first_list(payload: Mapping[str, Any], keys: tuple[str, ...]) -> list[dict[
     return []
 
 
+_WEB_SEARCH_CURSOR = r"(?:serper:(?:[1-9]|1[01])|(?:atlas|brave):(?:[1-9]|10))"
+_CURSOR_PATTERNS = {
+    "tiktok": r"[0-9]{1,24}",
+    "instagram": _WEB_SEARCH_CURSOR,
+    "x": _WEB_SEARCH_CURSOR,
+    "youtube": r"[A-Za-z0-9+/=%_-]{16,4096}",
+    "reddit": r"[A-Za-z0-9_.=-]+",
+    "linkedin": r"(?:[1-9]|10)",
+}
+
+
+def continuation_values(platform: str, cursor: Any, companion: Any) -> tuple[str | None, str | None]:
+    """Validate the ScrapeAtlas request contract and the shorter storage bound."""
+    if not isinstance(cursor, str) or not cursor.strip() or not cursor.isprintable():
+        return None, None
+    if len(cursor.encode("utf-8")) > 4096:
+        return None, None
+    if platform != "facebook" and not re.fullmatch(_CURSOR_PATTERNS.get(platform, r"(?!)"), cursor):
+        return None, None
+    if platform == "tiktok":
+        if int(cursor) <= 0 or not isinstance(companion, str) or not re.fullmatch(r"[0-9A-Za-z_-]{8,64}", companion):
+            return None, None
+    elif companion is not None:
+        return None, None
+    return cursor, companion
+
+
+def _next_page(
+    platform: str,
+    payload: Mapping[str, Any],
+    cursor_field: str | None,
+    search_id: str | None,
+    web_index: bool,
+) -> tuple[str | None, str | None]:
+    if cursor_field is None or payload.get("has_more") in (False, 0):
+        return None, None
+    raw_cursor = payload.get(cursor_field)
+    if platform == "tiktok":
+        if payload.get("has_more") not in (True, 1):
+            return None, None
+        if type(raw_cursor) is int and 0 < raw_cursor < 10**24:
+            raw_cursor = str(raw_cursor)
+        return continuation_values(platform, raw_cursor, search_id or payload.get("search_id"))
+    if platform == "linkedin" and not web_index:
+        return None, None
+    return continuation_values(platform, raw_cursor, None)
+
+
 def _fetch(
     platform: str,
     path: str,
@@ -128,6 +176,7 @@ def _fetch(
     date_window_days: int | None,
     web_index_from_warnings: bool = False,
     cursor_field: str | None = None,
+    search_id: str | None = None,
 ) -> PlatformFetch:
     if date_window_days is not None and platform in {"threads", "tiktok", "youtube", "reddit", "linkedin"}:
         since = _cutoff(collected_at, date_window_days)
@@ -186,6 +235,12 @@ def _fetch(
         latency_ms=latency_ms,
         safe_detail="ok",
     )
+    if search_id is not None and "search_session_expired" in payload.coverage_warnings:
+        detail = "search_session_expired"
+        return PlatformFetch(
+            platform, "scrapeatlas", [], [replace(call, outcome="failed", safe_detail=detail)],
+            "failed", detail, latency_ms,
+        )
     list_keys = {"youtube": ("videos", "shorts"), "tiktok": ("search_item_list", "item_list", "data")}.get(platform, ("posts",))
     present = [key for key in list_keys if isinstance(payload.get(key), list)]
     if not present:
@@ -227,10 +282,11 @@ def _fetch(
         return PlatformFetch(
             platform, "scrapeatlas", [], [call], "failed", "storage_failed", latency_ms
         )
+    next_cursor, next_companion = _next_page(platform, payload, cursor_field, search_id, web_index)
     return PlatformFetch(
         platform, "scrapeatlas", posts, [call], "answered",
         "web_index_selection" if web_index else "partial_coverage" if partial else "ok", latency_ms,
-        next_cursor=payload.get(cursor_field) if isinstance(payload.get(cursor_field), str) else None,
+        next_cursor=next_cursor, next_companion=next_companion,
     )
 
 
@@ -279,11 +335,16 @@ def fetch_scrapeatlas_tiktok(
     collected_at: str,
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
+    cursor: str | None = None,
+    search_id: str | None = None,
 ) -> PlatformFetch:
+    params = {"query": str(keyword), "region": "ID", "sort_by": "relevance"}
+    if cursor is not None and search_id is not None:
+        params.update({"cursor": cursor, "search_id": search_id})
     return _fetch(
         "tiktok",
         "/v1/tiktok/search/keyword",
-        {"query": str(keyword), "region": "ID", "sort_by": "relevance"},
+        params,
         api_key,
         opener=opener,
         keyword=keyword,
@@ -291,6 +352,8 @@ def fetch_scrapeatlas_tiktok(
         route_id="scrapeatlas.tiktok.keyword",
         extract=_tiktok_items,
         date_window_days=date_window_days,
+        cursor_field="cursor",
+        search_id=search_id,
     )
 
 
@@ -333,7 +396,11 @@ def _reddit_url(item: Mapping[str, Any]) -> str | None:
         if permalink.startswith("/"):
             return f"https://www.reddit.com{permalink}"
         return permalink
-    return _optional_text(item.get("url"))
+    raw_id = _optional_text(item.get("id") or item.get("post_id"))
+    post_id = raw_id.removeprefix("t3_") if raw_id else ""
+    if re.fullmatch(r"[a-z0-9]+", post_id):
+        return f"https://www.reddit.com/comments/{post_id}/"
+    return None
 
 
 def _reddit_items(payload: Mapping[str, Any], collected_at: str) -> list[dict[str, Any]]:
@@ -469,11 +536,15 @@ def fetch_scrapeatlas_youtube(
     collected_at: str,
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
+    cursor: str | None = None,
 ) -> PlatformFetch:
+    params = {"query": str(keyword), "region": "ID", "sortBy": "relevance"}
+    if cursor is not None:
+        params["continuationToken"] = cursor
     return _fetch(
         "youtube",
         "/v1/youtube/search",
-        {"query": str(keyword), "region": "ID", "sortBy": "relevance"},
+        params,
         api_key,
         opener=opener,
         keyword=keyword,
@@ -481,6 +552,7 @@ def fetch_scrapeatlas_youtube(
         route_id="scrapeatlas.youtube.search",
         extract=_youtube_items,
         date_window_days=date_window_days,
+        cursor_field="continuationToken",
     )
 
 
@@ -491,11 +563,15 @@ def fetch_scrapeatlas_reddit(
     collected_at: str,
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
+    cursor: str | None = None,
 ) -> PlatformFetch:
+    params = {"query": str(keyword), "sort": "relevance", "filter": "posts"}
+    if cursor is not None:
+        params["after"] = cursor
     return _fetch(
         "reddit",
         "/v1/reddit/search",
-        {"query": str(keyword), "sort": "relevance", "filter": "posts"},
+        params,
         api_key,
         opener=opener,
         keyword=keyword,
@@ -503,6 +579,7 @@ def fetch_scrapeatlas_reddit(
         route_id="scrapeatlas.reddit.search",
         extract=_reddit_items,
         date_window_days=date_window_days,
+        cursor_field="after",
     )
 
 
@@ -519,14 +596,18 @@ def fetch_scrapeatlas_facebook(
     collected_at: str,
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
+    cursor: str | None = None,
 ) -> PlatformFetch:
     tag = facebook_hashtag(keyword)
     if tag is None:
         return PlatformFetch("facebook", "scrapeatlas", state="unavailable", safe_detail="hashtag_only")
+    params = {"hashtag": tag}
+    if cursor is not None:
+        params["cursor"] = cursor
     return _fetch(
         "facebook",
         "/v1/facebook/hashtag",
-        {"hashtag": tag},
+        params,
         api_key,
         opener=opener,
         keyword=keyword,
@@ -534,6 +615,7 @@ def fetch_scrapeatlas_facebook(
         route_id="scrapeatlas.facebook.hashtag",
         extract=_facebook_items,
         date_window_days=date_window_days,
+        cursor_field="cursor",
     )
 
 
@@ -544,11 +626,15 @@ def fetch_scrapeatlas_linkedin(
     collected_at: str,
     opener: Callable[..., Any] = safe_urlopen,
     date_window_days: int | None = None,
+    cursor: str | None = None,
 ) -> PlatformFetch:
+    params = {"query": str(keyword)}
+    if cursor is not None:
+        params["cursor"] = cursor
     return _fetch(
         "linkedin",
         "/v1/linkedin/search/posts",
-        {"query": str(keyword)},
+        params,
         api_key,
         opener=opener,
         keyword=keyword,
@@ -557,6 +643,7 @@ def fetch_scrapeatlas_linkedin(
         extract=_linkedin_items,
         date_window_days=date_window_days,
         web_index_from_warnings=True,
+        cursor_field="cursor",
     )
 
 

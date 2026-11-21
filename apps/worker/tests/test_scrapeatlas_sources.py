@@ -487,3 +487,14 @@ def test_reddit_prefers_native_permalink_to_submitted_link():
         "https://www.reddit.com/r/SocialfFilmmakers/comments/1p3r0uy/"
         "when_kabaddi_becomes_a_battlefield_bison_caste/"
     )
+
+
+def test_reddit_recovers_native_permalink_from_id_without_using_submitted_url():
+    result = fetch_scrapeatlas_reddit(
+        "example", api_key="fixture", collected_at="2026-11-15T00:00:00Z",
+        opener=lambda *args, **kwargs: Response({"success": True, "status": "success", "posts": [
+            {"id": "t3_abc123", "url": "https://www.reddit.com/comments/other/", "title": "example"},
+            {"id": "invalid/id", "url": "https://www.reddit.com/comments/other/", "title": "example"},
+        ]}),
+    )
+    assert [post.url for post in result.posts] == ["https://www.reddit.com/comments/abc123/", None]

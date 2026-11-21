@@ -14,6 +14,7 @@ from sentiment_monitor.providers.capabilities import (
     resolve_chain,
 )
 from sentiment_monitor.providers.scrapeatlas_sources import (
+    continuation_values,
     facebook_hashtag,
     fetch_scrapeatlas_facebook,
     fetch_scrapeatlas_instagram,
@@ -37,6 +38,16 @@ _SCRAPEATLAS_FETCHERS: dict[str, Callable[..., PlatformFetch]] = {
     "linkedin": fetch_scrapeatlas_linkedin,
 }
 
+CONTINUATION_ROUTES = {
+    "tiktok": "scrapeatlas.tiktok.keyword",
+    "instagram": "scrapeatlas.instagram.posts",
+    "x": "scrapeatlas.twitter.posts",
+    "youtube": "scrapeatlas.youtube.search",
+    "reddit": "scrapeatlas.reddit.search",
+    "facebook": "scrapeatlas.facebook.hashtag",
+    "linkedin": "scrapeatlas.linkedin.posts",
+}
+
 
 def provider_api_key(provider: str, env: Mapping[str, Any]) -> str | None:
     if provider != "scrapeatlas":
@@ -57,6 +68,9 @@ def fetch_platform(
     date_window_days: int | None = None,
     opener: Callable[..., Any] = safe_urlopen,
     timeout: int | None = None,
+    continuation_route: str | None = None,
+    cursor: str | None = None,
+    companion: str | None = None,
 ) -> PlatformFetch:
     chain = resolve_chain(platform, settings)
     if not chain:
@@ -68,6 +82,16 @@ def fetch_platform(
     mode = env.get("CARI_PROVIDER_MODE") if isinstance(env, Mapping) else None
     if not isinstance(mode, str) or not mode:
         mode = os.environ.get("CARI_PROVIDER_MODE", "live")
+    page_args = {}
+    if continuation_route is not None or cursor is not None or companion is not None:
+        cursor, companion = continuation_values(platform, cursor, companion)
+        if (mode == "fixture" or continuation_route is None
+                or continuation_route != CONTINUATION_ROUTES.get(platform)
+                or cursor is None):
+            return PlatformFetch(platform, "scrapeatlas", state="unavailable", safe_detail="unsupported_provider")
+        page_args["cursor"] = cursor
+        if platform == "tiktok":
+            page_args["search_id"] = companion
     if mode == "fixture":
         from sentiment_monitor.providers.fixtures import fixture_platform_fetch
 
@@ -101,5 +125,6 @@ def fetch_platform(
         collected_at=collected_at,
         date_window_days=date_window_days,
         opener=effective_opener,
+        **page_args,
     )
     return replace(result, attempted_providers=(first,) if result.calls else ())

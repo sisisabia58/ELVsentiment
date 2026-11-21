@@ -94,7 +94,8 @@ class PlatformFetch:
     safe_detail: str = "ok"
     latency_ms: int | None = None
     attempted_providers: tuple[str, ...] = ()
-    next_cursor: str | None = None
+    next_cursor: str | None = field(default=None, repr=False)
+    next_companion: str | None = field(default=None, repr=False)
 
 
 _ID_WORDS = frozenset(
