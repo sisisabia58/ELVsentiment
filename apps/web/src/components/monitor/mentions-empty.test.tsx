@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PresentedMention } from "@/monitor/present";
 import type { Workspace } from "@/monitor/load";
 import { MentionsScreen } from "./mentions-view";
 
@@ -58,4 +59,63 @@ describe("mention empty state", () => {
     render(<MentionsScreen workspace={workspace(true)} now="2026-11-01T00:00:00.000Z" mode="sebutan" page={1} range="7" source="" query="" />);
     expect(screen.getByText("Jalankan pengumpulan pertama untuk melihat hasil.")).toBeTruthy();
   });
+});
+
+it("shows a mixed complaint and verified evidence on the attention route", () => {
+  const mention: PresentedMention = {
+    id: "m1",
+    source: "threads",
+    excerpt: "Kopinya enak, tetapi saya ditagih dua kali.",
+    url: "https://www.threads.com/@owner/post/direct",
+    authorLabel: "Pemilik",
+    handle: "@owner",
+    initials: "P",
+    postedAt: "2026-11-01T00:00:00.000Z",
+    collectedAt: "2026-11-01T00:00:00.000Z",
+    occurredAt: "2026-11-01T00:00:00.000Z",
+    read: false,
+    bucket: "included",
+    sentiment: "mixed",
+    relevance: "relevant",
+    topics: [],
+    relevanceConfidence: null,
+    sentimentConfidence: null,
+    corrected: false,
+    confirmed: false,
+    correctionAt: null,
+    originalSentiment: "mixed",
+    originalRelevance: "relevant",
+    uncertainFields: [],
+    needsAttention: true,
+    attentionUnread: true,
+    attentionId: null,
+    sourcePostUnavailable: false,
+    scoringStatus: "succeeded",
+    textMatch: "literal_match",
+    triage: {
+      status: "completed",
+      origin: "opencode",
+      reason: "firsthand_complaint",
+      sentiment: "mixed",
+      issueCategory: "payment",
+      verifiedExcerpt: "saya ditagih dua kali",
+    },
+  };
+  render(<MentionsScreen
+    workspace={{ ...workspace(true), mentions: [mention] }}
+    now="2026-11-01T00:00:00.000Z"
+    mode="perlu-perhatian"
+    page={1}
+    range="7"
+    source=""
+    query=""
+    reviewId="m1"
+  />);
+  expect(screen.getByRole("link", { name: "Tinjau penilaian" }).getAttribute("href")).toContain("/perlu-perhatian?");
+  expect(screen.getByRole("link", { name: /Lihat postingan asli/ }).getAttribute("href")).toBe(mention.url);
+  expect((screen.getByRole("radio", { name: "Campuran" }) as HTMLInputElement).checked).toBe(true);
+  expect(screen.getByText("Penilaian AI · Campuran")).toBeTruthy();
+  expect(screen.getByText("Keluhan langsung dengan kutipan terverifikasi")).toBeTruthy();
+  expect(screen.getByText("saya ditagih dua kali").tagName).toBe("BLOCKQUOTE");
+  expect(screen.getAllByText("Pembayaran")).toHaveLength(2);
 });

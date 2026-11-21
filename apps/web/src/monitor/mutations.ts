@@ -3,7 +3,8 @@ import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
 import type { OwnerCorrection } from "../domain/display";
 import { presentMention, type Sentiment } from "./present";
-import { readMonitorPolicy, reviewTopicChoices, type SourceId } from "./policy";
+import { readMonitorPolicy, reviewTopicChoices } from "./policy";
+import { readStoredMentions } from "./mention-store";
 
 export async function setMentionRead(
   db: Queryable,
@@ -35,7 +36,10 @@ export async function saveMentionReview(
   mentionId: string,
   input: { relevance: "relevant" | "irrelevant"; sentiment: Sentiment | null; topics: string[] },
 ): Promise<{ ok: true; action: "confirm" | "correct" } | { ok: false; reason: "not_found" | "invalid" }> {
-  if (input.relevance === "relevant" && !input.sentiment) return { ok: false, reason: "invalid" };
+  if (input.relevance !== "relevant" && input.relevance !== "irrelevant") return { ok: false, reason: "invalid" };
+  if (input.relevance === "relevant" && !["positive", "neutral", "negative", "mixed"].includes(input.sentiment ?? "")) {
+    return { ok: false, reason: "invalid" };
+  }
   const policy = readMonitorPolicy();
   const allowed = new Set(reviewTopicChoices(policy).map((topic) => topic.id));
   const topics = input.relevance === "relevant" ? input.topics : [];
@@ -46,69 +50,12 @@ export async function saveMentionReview(
     topics,
   };
   return withCustomer(db, customerId, async () => {
-    const rows = await db.query<{
-      id: string;
-      source: SourceId;
-      excerpt: string;
-      url: string | null;
-      author: string | null;
-      posted_at: string | Date | null;
-      collected_at: string | Date;
-      scoring_status: "pending" | "scoring" | "succeeded" | "failed";
-      source_post_unavailable: boolean;
-      read_at: string | Date | null;
-      relevance_noul: number | null;
-      sentiment: Sentiment | null;
-      sentiment_confidence: number | null;
-      topic_nouls: unknown;
-      action: "confirm" | "correct" | null;
-      relevance: "relevant" | "irrelevant" | null;
-      correction_sentiment: Sentiment | null;
-      topics: string[] | null;
-      created_at: string | Date | null;
-      attention_id: string | null;
-      unread: boolean | null;
-    }>(
-      `select m.id, m.source, m.excerpt, m.url, m.author, m.posted_at, m.collected_at, m.scoring_status,
-              m.source_post_unavailable, m.read_at, j.relevance_noul, j.sentiment, j.sentiment_confidence, j.topic_nouls,
-              c.action, c.relevance, c.sentiment as correction_sentiment, c.topics, c.created_at,
-              a.id as attention_id, a.unread
-       from mentions m
-       left join jev_results j on j.mention_id = m.id
-       left join owner_corrections c on c.mention_id = m.id
-       left join attention_items a on a.mention_id = m.id
-       where m.id = $1`,
-      [mentionId],
-    );
-    const row = rows.rows[0];
+    const [row] = await readStoredMentions(db, customerId, { mentionId });
     if (!row) return { ok: false as const, reason: "not_found" as const };
-    const shown = presentMention(
-      {
-        id: row.id,
-        source: row.source,
-        excerpt: row.excerpt,
-        url: row.url,
-        author: row.author,
-        postedAt: row.posted_at instanceof Date ? row.posted_at.toISOString() : row.posted_at,
-        collectedAt: row.collected_at instanceof Date ? row.collected_at.toISOString() : String(row.collected_at),
-        scoringStatus: row.scoring_status,
-        sourcePostUnavailable: row.source_post_unavailable,
-        readAt: row.read_at instanceof Date ? row.read_at.toISOString() : row.read_at,
-        relevanceNoul: row.relevance_noul,
-        sentiment: row.sentiment,
-        sentimentConfidence: row.sentiment_confidence,
-        topicNouls: Array.isArray(row.topic_nouls) ? (row.topic_nouls as { id: string; noul: number }[]) : [],
-        correction:
-          row.action && row.relevance
-            ? { action: row.action, relevance: row.relevance, sentiment: row.correction_sentiment, topics: row.topics ?? [] }
-            : null,
-        correctionAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-        attentionId: row.attention_id,
-        attentionUnread: row.unread === true,
-        associationStatuses: [],
-      },
-      policy.scoring,
-    );
+    const shown = presentMention(row, policy.scoring);
+    if (next.sentiment === "mixed" && (!row.triage || shown.sentiment !== "mixed")) {
+      return { ok: false as const, reason: "invalid" as const };
+    }
     const changed = reviewWouldChange(
       {
         relevance: shown.relevance === "relevant" || shown.relevance === "irrelevant" ? shown.relevance : null,
@@ -126,7 +73,9 @@ export async function saveMentionReview(
              topics = excluded.topics, created_at = now()`,
       [mentionId, customerId, correction.action, correction.relevance, correction.sentiment, correction.topics],
     );
-    const eligible = correction.relevance === "relevant" && correction.sentiment === "negative";
+    const eligible = correction.relevance === "relevant" && (
+      correction.sentiment === "negative" || (correction.sentiment === "mixed" && shown.needsAttention)
+    );
     if (!eligible) {
       await db.query("delete from attention_items where mention_id = $1 and customer_id = $2", [mentionId, customerId]);
     } else {
@@ -152,70 +101,8 @@ export function reviewWouldChange(
 
 export async function attentionStillEligible(db: Queryable, customerId: string, mentionId: string): Promise<boolean> {
   const policy = readMonitorPolicy();
-  const rows = await withCustomer(db, customerId, () =>
-    db.query<{
-      id: string;
-      source: SourceId;
-      excerpt: string;
-      url: string | null;
-      author: string | null;
-      posted_at: string | Date | null;
-      collected_at: string | Date;
-      scoring_status: "pending" | "scoring" | "succeeded" | "failed";
-      source_post_unavailable: boolean;
-      read_at: string | Date | null;
-      relevance_noul: number | null;
-      sentiment: Sentiment | null;
-      sentiment_confidence: number | null;
-      topic_nouls: unknown;
-      action: "confirm" | "correct" | null;
-      relevance: "relevant" | "irrelevant" | null;
-      correction_sentiment: Sentiment | null;
-      topics: string[] | null;
-      created_at: string | Date | null;
-      attention_id: string | null;
-      unread: boolean | null;
-    }>(
-      `select m.id, m.source, m.excerpt, m.url, m.author, m.posted_at, m.collected_at, m.scoring_status,
-              m.source_post_unavailable, m.read_at, j.relevance_noul, j.sentiment, j.sentiment_confidence, j.topic_nouls,
-              c.action, c.relevance, c.sentiment as correction_sentiment, c.topics, c.created_at,
-              a.id as attention_id, a.unread
-       from mentions m
-       left join jev_results j on j.mention_id = m.id
-       left join owner_corrections c on c.mention_id = m.id
-       left join attention_items a on a.mention_id = m.id
-       where m.id = $1`,
-      [mentionId],
-    ),
-  );
-  const row = rows.rows[0];
-  if (!row) return false;
-  const shown = presentMention(
-    {
-      id: row.id,
-      source: row.source,
-      excerpt: row.excerpt,
-      url: row.url,
-      author: row.author,
-      postedAt: row.posted_at instanceof Date ? row.posted_at.toISOString() : row.posted_at,
-      collectedAt: row.collected_at instanceof Date ? row.collected_at.toISOString() : String(row.collected_at),
-      scoringStatus: row.scoring_status,
-      sourcePostUnavailable: row.source_post_unavailable,
-      readAt: row.read_at instanceof Date ? row.read_at.toISOString() : row.read_at,
-      relevanceNoul: row.relevance_noul,
-      sentiment: row.sentiment,
-      sentimentConfidence: row.sentiment_confidence,
-      topicNouls: Array.isArray(row.topic_nouls) ? (row.topic_nouls as { id: string; noul: number }[]) : [],
-      correction:
-        row.action && row.relevance
-          ? { action: row.action, relevance: row.relevance, sentiment: row.correction_sentiment, topics: row.topics ?? [] }
-          : null,
-      correctionAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-      attentionId: row.attention_id,
-      attentionUnread: row.unread === true,
-      associationStatuses: [],
-    },
-    policy.scoring,
-  );
-  return shown.needsAttention;
+  return withCustomer(db, customerId, async () => {
+    const [row] = await readStoredMentions(db, customerId, { mentionId });
+    return row ? presentMention(row, policy.scoring).needsAttention : false;
+  });
 }

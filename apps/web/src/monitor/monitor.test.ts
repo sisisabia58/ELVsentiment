@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { saveMentionReview } from "./mutations";
+import { attentionStillEligible, saveMentionReview, setMentionRead } from "./mutations";
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { registerOwner, saveDisplayName } from "../auth/accounts";
@@ -527,5 +527,106 @@ describe("explicit unknown posting time", () => {
     expect(model.textMatch).toEqual({ candidates: 1, literal: 0, unknown: 1 });
     expect(model.unknownPostedAt).toBe(1);
     expect(model.points.every((point) => point.total === null)).toBe(true);
+  });
+});
+
+describe("Pantau filter triage inboxes", () => {
+  it("projects stored worker decisions and preserves owner reviews when a result arrives late", async () => {
+    const database = new PGlite();
+    try {
+      const db = pgliteQueryable(database);
+      await applyMigration(db);
+      const owner = await registerOwner(db, { email: "pilot@example.com", password: "sandi-panjang" });
+      const project = await createProject(db, owner.customerId, "Tukuliling");
+      await db.query("update projects set pantau_filter_triage = true where id = $1", [project.projectId]);
+      const ids = Object.fromEntries(
+        ["direct", "mixed", "borderline", "praise", "missing", "retrying", "deferred", "failed", "late", "excluded", "unsupported"]
+          .map((name) => [name, randomUUID()]),
+      );
+      for (const [name, id] of Object.entries(ids)) {
+        await db.query(
+          `insert into mentions (id, customer_id, project_id, source, external_id, excerpt, url, posted_at, collected_at, matched_variants, scoring_status)
+           values ($1, $2, $3, $6, $4, 'Tukuliling, saya ditagih dua kali', $5, '2026-11-01T00:00Z', '2026-11-01T00:05Z', array['tukuliling'], 'pending')`,
+          [id, owner.customerId, project.projectId, name, `https://www.threads.com/@owner/post/${name}`, name === "unsupported" ? "x" : "threads"],
+        );
+        if (name !== "missing" && name !== "unsupported") {
+          await db.query(
+            `insert into pantau_triage_jobs (mention_id, customer_id, project_id, source, status)
+             values ($1, $2, $3, 'threads', $4)`,
+            [id, owner.customerId, project.projectId, ["retrying", "deferred", "failed"].includes(name) ? name : name === "late" ? "pending" : "completed"],
+          );
+        }
+      }
+      async function judgment(name: string, destination: string, sentiment: string, reason: string) {
+        const firsthand = destination === "attention";
+        const excluded = destination === "excluded";
+        await db.query(
+          `insert into pantau_triage_judgments (mention_id, customer_id, project_id, destination, origin, relevance_tier, sentiment, actionability, reason, issue_category, verified_excerpt, model_version)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [ids[name], owner.customerId, project.projectId, destination, excluded ? "deterministic" : "opencode",
+            excluded ? "no_match" : reason === "relevance_unclear" ? "all_words_match" : "literal_match",
+            sentiment, firsthand ? "actionable" : "not_actionable",
+            reason, firsthand ? "payment" : null, firsthand ? "saya ditagih dua kali" : null, excluded ? null : "fixture"],
+        );
+      }
+      await judgment("direct", "attention", "negative", "firsthand_complaint");
+      await judgment("mixed", "attention", "mixed", "firsthand_complaint");
+      await judgment("borderline", "ambiguous", "negative", "relevance_unclear");
+      await judgment("praise", "mention", "positive", "non_actionable");
+      await judgment("excluded", "excluded", "unclear", "no_match");
+
+      const now = new Date("2026-11-01T03:00:00Z");
+      const load = () => loadWorkspace(db, owner.customerId, project.projectId, now, readLimits());
+      const workspace = await load();
+      const byId = (current: Workspace, name: string) => current.mentions.find((item) => item.id === ids[name]);
+      const mixedOnly = dashboardFor({
+        ...workspace,
+        mentions: workspace.mentions.filter((item) => item.id === ids.mixed),
+      }, "7", "all", now);
+      expect(mixedOnly).toMatchObject({
+        attentionInRange: 1, attentionUnread: 1, score: { kind: "empty" }, totals: { total: 0 },
+      });
+      expect(mixedOnly.points.at(-1)).toMatchObject({ attention: 1, total: null });
+      expect(workspace.mentions.filter((item) => item.needsAttention).map((item) => item.id).sort())
+        .toEqual([ids.direct, ids.mixed].sort());
+      expect(workspace.mentions.filter((item) => item.bucket === "not_sure").map((item) => item.id)).toEqual([ids.borderline]);
+      expect(byId(workspace, "borderline")?.uncertainFields).toEqual(["relevansi"]);
+      expect(byId(workspace, "direct")).toMatchObject({
+        url: "https://www.threads.com/@owner/post/direct",
+        triage: { origin: "opencode", reason: "firsthand_complaint", issueCategory: "payment", verifiedExcerpt: "saya ditagih dua kali" },
+      });
+      expect(byId(workspace, "mixed")?.sentiment).toBe("mixed");
+      expect(byId(workspace, "praise")?.bucket).toBe("included");
+      expect(byId(workspace, "missing")).toMatchObject({ bucket: "pending", triage: { status: "pending" } });
+      expect(byId(workspace, "retrying")).toMatchObject({ bucket: "pending", triage: { status: "retrying" } });
+      expect(byId(workspace, "deferred")).toMatchObject({ bucket: "pending", triage: { status: "deferred" } });
+      expect(byId(workspace, "failed")).toMatchObject({ bucket: "failed", sentiment: null, triage: { status: "failed" } });
+      expect(byId(workspace, "excluded")?.bucket).toBe("excluded");
+      expect(byId(workspace, "unsupported")).toMatchObject({ bucket: "failed", triage: { status: "unavailable" } });
+      expect(workspace).toMatchObject({ pending: 4, failed: 2 });
+      expect(dashboardFor(workspace, "7", "all", now)).toMatchObject({
+        attentionUnread: 2, uncertainOpen: 1, totals: { positif: 1, netral: 0, negatif: 1, total: 2 },
+      });
+
+      expect(await attentionStillEligible(db, owner.customerId, ids.mixed)).toBe(true);
+      expect(await saveMentionReview(db, owner.customerId, ids.mixed, { relevance: "relevant", sentiment: "mixed", topics: [] }))
+        .toEqual({ ok: true, action: "confirm" });
+      expect(await setMentionRead(db, owner.customerId, ids.mixed, true)).toEqual({ ok: true });
+      expect(await saveMentionReview(db, owner.customerId, ids.borderline, { relevance: "irrelevant", sentiment: null, topics: [] }))
+        .toEqual({ ok: true, action: "correct" });
+      expect(await saveMentionReview(db, owner.customerId, ids.late, { relevance: "relevant", sentiment: "neutral", topics: [] }))
+        .toEqual({ ok: true, action: "correct" });
+      await db.query("update pantau_triage_jobs set status = 'completed' where mention_id = $1", [ids.late]);
+      await judgment("late", "attention", "negative", "firsthand_complaint");
+      const reviewed = await load();
+      expect(byId(reviewed, "late")).toMatchObject({ bucket: "included", sentiment: "neutral", originalSentiment: "negative", needsAttention: false, corrected: true });
+      expect(byId(reviewed, "mixed")).toMatchObject({ needsAttention: true, attentionUnread: false, read: true, confirmed: true });
+      expect(byId(reviewed, "borderline")).toMatchObject({ bucket: "excluded", uncertainFields: [] });
+      expect(dashboardFor(reviewed, "7", "all", now)).toMatchObject({
+        attentionUnread: 1, uncertainOpen: 0, totals: { positif: 1, netral: 1, negatif: 1, total: 3 },
+      });
+    } finally {
+      await database.close();
+    }
   });
 });

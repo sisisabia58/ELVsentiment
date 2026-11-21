@@ -4,7 +4,7 @@ import { formatRelative, formatWib, formatWibClock } from "@/monitor/format";
 import { projectHref } from "@/monitor/links";
 import { selectedSourcesReady, type Workspace } from "@/monitor/load";
 import type { PresentedMention, Sentiment } from "@/monitor/present";
-import { SENTIMENT_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
+import { ISSUE_CATEGORY_LABEL, SENTIMENT_LABEL, TRIAGE_STATUS_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
 import { mentionInWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
 import { TEXT_MATCH_LABEL, textMatchCounts } from "@/monitor/relevance";
 import { emptyCollectionBody } from "@/monitor/copy";
@@ -29,7 +29,8 @@ export function MentionsScreen(props: {
   const projectId = props.workspace.project?.id ?? null;
   const rangeKey = parseRangeKey(props.range);
   const window = rangeWindow(rangeKey, new Date(props.now));
-  const sentiment = props.sentiment === "positive" || props.sentiment === "neutral" || props.sentiment === "negative" ? props.sentiment : "";
+  const showMixed = props.workspace.mentions.some((mention) => mention.sentiment === "mixed");
+  const sentiment = props.sentiment === "positive" || props.sentiment === "neutral" || props.sentiment === "negative" || (showMixed && props.sentiment === "mixed") ? props.sentiment : "";
   const rows = rowsFor(props.workspace, props.mode, props.source, sentiment, window.start, window.end);
   const searched = props.query
     ? rows.filter((row) => row.excerpt.toLocaleLowerCase("id-ID").includes(props.query.toLocaleLowerCase("id-ID")))
@@ -93,6 +94,7 @@ export function MentionsScreen(props: {
               rangeKey={rangeKey}
               source={props.source}
               sentiment={sentiment}
+              showMixed={showMixed}
               query={props.query}
               filtersActive={filtersActive}
             />
@@ -149,7 +151,7 @@ export function MentionsScreen(props: {
                 <Link href={listHref} className="text-sm font-medium text-primary">Tutup</Link>
               </div>
               <div className="mt-4">
-                <ReviewForm mention={review} topics={props.workspace.topicLabels} />
+                <ReviewForm key={review.id} mention={review} topics={props.workspace.topicLabels} />
               </div>
             </aside>
           ) : null}
@@ -184,10 +186,13 @@ function FilterBar(props: {
   rangeKey: string;
   source: string;
   sentiment: string;
+  showMixed: boolean;
   query: string;
   filtersActive: boolean;
 }) {
   const path = pathFor(props.mode);
+  const sentiments: Sentiment[] = ["positive", "neutral", "negative"];
+  if (props.showMixed) sentiments.push("mixed");
   const href = (extra: Record<string, string | undefined>) =>
     projectHref(path, props.projectId, {
       rentang: props.rangeKey,
@@ -225,7 +230,7 @@ function FilterBar(props: {
       {props.mode === "sebutan" ? (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Sentimen">
           <FilterChip href={href({ sentimen: undefined, halaman: undefined })} current={!props.sentiment} label="Semua sentimen" />
-          {(["positive", "neutral", "negative"] as const).map((value) => (
+          {sentiments.map((value) => (
             <FilterChip key={value} href={href({ sentimen: value, halaman: undefined })} current={props.sentiment === value} label={SENTIMENT_LABEL[value]} />
           ))}
         </div>
@@ -294,15 +299,21 @@ function MentionLine(props: { mention: PresentedMention; now: string; href: stri
           <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium">
             {TEXT_MATCH_LABEL[mention.textMatch]}
           </span>
-          {mention.needsAttention ? <span className="rounded-full bg-negatif-bg px-2 py-0.5 text-xs font-medium text-negatif">Sentimen negatif</span> : null}
+          {mention.needsAttention ? <span className="rounded-full bg-negatif-bg px-2 py-0.5 text-xs font-medium text-negatif">{mention.triage ? "Perlu perhatian" : "Sentimen negatif"}</span> : null}
+          {mention.triage?.issueCategory ? (
+            <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium">
+              {ISSUE_CATEGORY_LABEL[mention.triage.issueCategory]}
+            </span>
+          ) : null}
           {mention.uncertainFields.map((field) => (
             <span key={field} className="rounded-full bg-warning-bg px-2 py-0.5 text-xs font-medium text-warning">
               {UNCERTAIN_LABEL[field]}
             </span>
           ))}
-          {mention.bucket === "failed" ? <span className="text-xs text-danger">Penilaian gagal</span> : null}
-          {mention.bucket === "pending" ? <span className="text-xs text-info">Menunggu penilaian</span> : null}
+          {mention.bucket === "failed" ? <span className="text-xs text-danger">{mention.triage ? TRIAGE_STATUS_LABEL[mention.triage.status] : "Penilaian gagal"}</span> : null}
+          {mention.bucket === "pending" ? <span className="text-xs text-info">{mention.triage ? TRIAGE_STATUS_LABEL[mention.triage.status] : "Menunggu penilaian"}</span> : null}
           {mention.bucket === "policy_unapproved" ? <span className="text-xs text-warning">Penilaian belum dipakai di ringkasan</span> : null}
+          {mention.triage && mention.confirmed ? <span className="text-xs text-info">Dikonfirmasi oleh Anda</span> : null}
           {mention.corrected ? <span className="text-xs text-info">Dikoreksi oleh Anda</span> : null}
         </div>
         <Link href={props.href} className="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary">

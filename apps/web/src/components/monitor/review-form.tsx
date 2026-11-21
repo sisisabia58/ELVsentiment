@@ -5,13 +5,16 @@ import { Button } from "@/components/ui/button";
 import { markReadAction, saveReviewAction } from "@/app/sebutan/actions";
 import { formatPercent, formatWib } from "@/monitor/format";
 import type { PresentedMention, Sentiment } from "@/monitor/present";
-import { UNCERTAIN_LABEL } from "@/monitor/present";
+import { ISSUE_CATEGORY_LABEL, SENTIMENT_LABEL, TRIAGE_REASON_LABEL, TRIAGE_STATUS_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
 
 export function ReviewForm(props: {
   mention: PresentedMention;
   topics: { id: string; label: string }[];
 }) {
   const mention = props.mention;
+  const triage = mention.triage;
+  const choices: Sentiment[] = ["positive", "neutral", "negative"];
+  if (mention.sentiment === "mixed") choices.push("mixed");
   const [relevance, setRelevance] = useState<"relevant" | "irrelevant" | "">(
     mention.relevance === "relevant" || mention.relevance === "irrelevant" ? mention.relevance : "",
   );
@@ -44,7 +47,7 @@ export function ReviewForm(props: {
         setError(null);
         void saveReviewAction(mention.id, {
             relevance,
-            sentiment: relevance === "relevant" ? (sentiment as Sentiment) : null,
+            sentiment: relevance === "relevant" && sentiment ? sentiment : null,
             topics: relevance === "relevant" ? topics : [],
           })
           .then((result) => {
@@ -56,6 +59,24 @@ export function ReviewForm(props: {
       }}
     >
       <p className="text-sm leading-6 text-foreground">{mention.excerpt}</p>
+      {triage ? (
+        <div className="space-y-2 rounded-lg bg-surface-subtle p-3 text-sm">
+          {mention.corrected || mention.confirmed ? (
+            <p className="font-medium">{mention.corrected ? "Dikoreksi oleh Anda" : "Dikonfirmasi oleh Anda"}</p>
+          ) : null}
+          {triage.origin ? (
+            <p className="text-muted-foreground">
+              {triage.origin === "opencode" ? "Penilaian AI" : "Pemeriksaan teks otomatis"}
+              {triage.sentiment && triage.sentiment !== "unclear" ? ` · ${SENTIMENT_LABEL[triage.sentiment]}` : ""}
+            </p>
+          ) : (
+            <p>{TRIAGE_STATUS_LABEL[triage.status]}</p>
+          )}
+          {triage.reason ? <p>{TRIAGE_REASON_LABEL[triage.reason]}</p> : null}
+          {triage.issueCategory ? <p className="font-medium">{ISSUE_CATEGORY_LABEL[triage.issueCategory]}</p> : null}
+          {triage.verifiedExcerpt ? <blockquote className="border-l-2 border-border pl-3">{triage.verifiedExcerpt}</blockquote> : null}
+        </div>
+      ) : null}
       {mention.uncertainFields.map((field) => (
         <p key={field} className="text-sm text-warning">
           {UNCERTAIN_LABEL[field]}
@@ -76,10 +97,10 @@ export function ReviewForm(props: {
       {relevance === "relevant" ? (
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium">Sentimen</legend>
-          {(["positive", "neutral", "negative"] as const).map((value) => (
+          {choices.map((value) => (
             <label key={value} className="flex min-h-11 items-center gap-2 text-sm">
               <input type="radio" name="sentimen" checked={sentiment === value} onChange={() => setSentiment(value)} />
-              {value === "positive" ? "Positif" : value === "neutral" ? "Netral" : "Negatif"}
+              {SENTIMENT_LABEL[value]}
             </label>
           ))}
         </fieldset>
@@ -107,13 +128,13 @@ export function ReviewForm(props: {
           )}
         </fieldset>
       ) : null}
-      {mention.relevanceConfidence !== null ? (
+      {!triage && (mention.relevanceConfidence !== null ? (
         <p className="text-xs text-muted-foreground">
           Keyakinan penilaian relevansi: {formatPercent(mention.relevanceConfidence)}. Menunjukkan seberapa yakin sistem, bukan jaminan benar.
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">Tingkat keyakinan tidak tersedia</p>
-      )}
+      ))}
       {mention.sentimentConfidence !== null ? (
         <p className="text-xs text-muted-foreground">Keyakinan penilaian sentimen: {formatPercent(mention.sentimentConfidence)}</p>
       ) : null}

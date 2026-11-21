@@ -59,7 +59,8 @@ export function DashboardScreen(props: {
   const projectId = props.projectId ?? null;
   const range = props.model?.range ?? "7";
   const scoreValue = props.model?.score.kind === "score" ? props.model.score.value : null;
-  const included = props.model?.score.kind === "score" ? props.model.score.included : null;
+  const mixedInRange = props.model?.mixedInRange ?? 0;
+  const included = props.model?.score.kind === "score" ? props.model.score.included : mixedInRange > 0 ? 0 : null;
   const failureCopy = scoringFailureCopy(props.failed ?? 0);
   const runAvailable = !props.runNote;
 
@@ -171,8 +172,11 @@ export function DashboardScreen(props: {
                 {included === null ? (
                   <p className="mt-1 text-sm">Belum ada sebutan yang dinilai</p>
                 ) : (
-                  <p className="mt-1 text-sm tabular-nums">{formatNumber(included)} sebutan dinilai</p>
+                  <p className="mt-1 text-sm tabular-nums">{formatNumber(included)} {mixedInRange > 0 ? "sebutan dalam skor" : "sebutan dinilai"}</p>
                 )}
+                {mixedInRange > 0 ? (
+                  <p className="mt-1 text-xs text-muted-foreground">{formatNumber(mixedInRange)} sebutan campuran dapat dilihat di Sebutan.</p>
+                ) : null}
                 <ChangeLine change={props.model?.comparison.score ?? null} higherIsBetter periodLabel={`${range} hari sebelumnya`} unit="poin" />
               </Panel>
               <Panel>

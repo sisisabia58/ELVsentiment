@@ -130,12 +130,13 @@ export function ScoreValue(props: { value: number | null }) {
   return <span className="text-[32px] font-semibold leading-none tracking-tight tabular-nums text-foreground">{formatSigned(props.value)}</span>;
 }
 
-export function SentimentTag(props: { sentiment: "positive" | "neutral" | "negative" | null }) {
+export function SentimentTag(props: { sentiment: "positive" | "neutral" | "negative" | "mixed" | null }) {
   if (!props.sentiment) return null;
   const map = {
     positive: { label: "Positif", className: "bg-positif-bg text-positif" },
     neutral: { label: "Netral", className: "bg-netral-bg text-netral" },
     negative: { label: "Negatif", className: "bg-negatif-bg text-negatif" },
+    mixed: { label: "Campuran", className: "bg-warning-bg text-warning" },
   } as const;
   const item = map[props.sentiment];
   return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", item.className)}>{item.label}</span>;

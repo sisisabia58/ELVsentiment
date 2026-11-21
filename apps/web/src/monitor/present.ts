@@ -5,9 +5,52 @@ import { initialsFrom } from "./format";
 import type { SourceId } from "./policy";
 import { textMatchOf, type TextMatch } from "./relevance";
 
-export type Sentiment = "positive" | "neutral" | "negative";
+export type LegacySentiment = "positive" | "neutral" | "negative";
+export type Sentiment = LegacySentiment | "mixed";
+
+export const TRIAGE_STATUS_LABEL = {
+  pending: "Menunggu penilaian",
+  processing: "Sedang dinilai",
+  retrying: "Menunggu percobaan ulang",
+  deferred: "Penilaian ditunda",
+  failed: "Penilaian gagal",
+  completed: "Penilaian selesai",
+  unavailable: "Penilaian tidak tersedia",
+} as const;
+
+export const TRIAGE_REASON_LABEL = {
+  firsthand_complaint: "Keluhan langsung dengan kutipan terverifikasi",
+  relevance_unclear: "Kaitan dengan merek perlu diperiksa",
+  complaint_unclear: "Arti keluhan atau tindakan yang diperlukan perlu diperiksa",
+  non_actionable: "Tidak ada keluhan yang perlu ditangani",
+  no_match: "Tidak ditemukan kecocokan dengan kata kunci proyek",
+  insufficient_text: "Teks tidak cukup untuk diperiksa",
+} as const;
+
+export const ISSUE_CATEGORY_LABEL = {
+  payment: "Pembayaran",
+  stock: "Stok",
+  product_quality: "Kualitas produk",
+  order_fulfillment: "Pemenuhan pesanan",
+  service: "Layanan",
+  pricing: "Harga",
+  other: "Lainnya",
+} as const;
+
+export type TriageStatus = keyof typeof TRIAGE_STATUS_LABEL;
+export type TriageJudgment = {
+  destination: "attention" | "ambiguous" | "mention" | "excluded";
+  origin: "deterministic" | "opencode";
+  relevanceTier: "literal_match" | "all_words_match" | "no_match" | "insufficient_text";
+  sentiment: Sentiment | "unclear";
+  reason: keyof typeof TRIAGE_REASON_LABEL;
+  issueCategory: keyof typeof ISSUE_CATEGORY_LABEL | null;
+  verifiedExcerpt: string | null;
+};
+type Triage = { status: TriageStatus } & Partial<TriageJudgment>;
+
 export type MentionBucket = "included" | "excluded" | "not_sure" | "failed" | "pending" | "policy_unapproved";
-export type UncertainField = "relevansi" | "sentimen" | "topik";
+export type UncertainField = "relevansi" | "sentimen" | "topik" | "keluhan";
 
 export type StoredMention = {
   id: string;
@@ -21,7 +64,7 @@ export type StoredMention = {
   sourcePostUnavailable: boolean;
   readAt: string | null;
   relevanceNoul: number | null;
-  sentiment: Sentiment | null;
+  sentiment: LegacySentiment | null;
   sentimentConfidence: number | null;
   topicNouls: { id: string; noul: number }[];
   correction: OwnerCorrection | null;
@@ -29,6 +72,7 @@ export type StoredMention = {
   attentionId: string | null;
   attentionUnread: boolean;
   associationStatuses: string[];
+  triage?: { status: TriageStatus; judgment: TriageJudgment | null };
 };
 
 export type PresentedMention = {
@@ -61,6 +105,7 @@ export type PresentedMention = {
   sourcePostUnavailable: boolean;
   scoringStatus: StoredMention["scoringStatus"];
   textMatch: TextMatch;
+  triage?: Triage;
 };
 
 function asJudgment(row: StoredMention): ParsedJudgment | null {
@@ -105,6 +150,51 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
     scoringStatus: row.scoringStatus,
     textMatch: textMatchOf(row.associationStatuses),
   };
+
+  if (row.triage) {
+    const { judgment } = row.triage;
+    const status = !judgment && (row.source === "x" || row.sourcePostUnavailable)
+      ? "unavailable"
+      : row.triage.status;
+    const result = status === "completed" ? judgment : null;
+    const correction = row.correction;
+    const originalRelevance = result?.destination === "excluded"
+      ? "irrelevant"
+      : result?.destination === "mention" || result?.destination === "attention" || result?.reason === "complaint_unclear"
+        ? "relevant"
+        : null;
+    const originalSentiment = result?.sentiment === "unclear" ? null : result?.sentiment ?? null;
+    const bucket: MentionBucket = correction
+      ? correction.relevance === "relevant" ? "included" : "excluded"
+      : result?.destination === "attention" || result?.destination === "mention" ? "included"
+        : result?.destination === "ambiguous" ? "not_sure"
+          : result?.destination === "excluded" ? "excluded"
+            : status === "failed" || status === "completed" || status === "unavailable" ? "failed" : "pending";
+    const needsAttention = bucket === "included" && (correction
+      ? correction.sentiment === "negative" || (correction.sentiment === "mixed" && row.attentionId !== null)
+      : result?.destination === "attention");
+    const relevance = correction ? correction.relevance : originalRelevance;
+    const textMatch = result?.relevanceTier === "insufficient_text" ? "unknown_text"
+      : result?.relevanceTier === "literal_match" ? "literal_match"
+        : result ? "no_literal_match" : row.associationStatuses.length ? base.textMatch : "unknown_text";
+    return {
+      ...base,
+      textMatch,
+      bucket,
+      relevance,
+      sentiment: relevance === "irrelevant" ? null : correction ? correction.sentiment : originalSentiment,
+      topics: correction?.relevance === "relevant" ? correction.topics : [],
+      relevanceConfidence: null,
+      sentimentConfidence: null,
+      originalSentiment,
+      originalRelevance,
+      uncertainFields: bucket === "not_sure" ? [result?.reason === "complaint_unclear" ? "keluhan" : "relevansi"] : [],
+      needsAttention,
+      attentionUnread: needsAttention && row.readAt === null,
+      scoringStatus: bucket === "pending" ? status === "processing" ? "scoring" : "pending" : bucket === "failed" ? "failed" : "succeeded",
+      triage: { ...result, status: status === "completed" && !result ? "failed" : status },
+    };
+  }
 
   if (row.scoringStatus === "pending" || row.scoringStatus === "scoring") {
     return {
@@ -188,10 +278,12 @@ export const UNCERTAIN_LABEL: Record<UncertainField, string> = {
   relevansi: "Relevansi belum pasti",
   sentimen: "Sentimen belum pasti",
   topik: "Topik belum pasti",
+  keluhan: "Makna keluhan belum pasti",
 };
 
 export const SENTIMENT_LABEL: Record<Sentiment, string> = {
   positive: "Positif",
   neutral: "Netral",
   negative: "Negatif",
+  mixed: "Campuran",
 };

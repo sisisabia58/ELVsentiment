@@ -1,6 +1,5 @@
 import type { Queryable } from "../db/migrate";
 import { withCustomer } from "../db/migrate";
-import type { OwnerCorrection } from "../domain/display";
 import type { KeywordIntent } from "../domain/keyword-intent";
 import { cariAiUiEnabled, cariSekarangEnabled } from "./search/feature";
 import type { ScheduleLimits } from "../projects/schedules";
@@ -8,7 +7,8 @@ import { SCHEDULED_CAP_COPY, SCHEDULED_CAP_PARTIAL_COPY } from "../projects/dash
 import { buildDashboard, type DashboardModel, type SourceKey } from "./dashboard";
 import { asSources, type SourceCredentials } from "./onboarding-draft";
 import { ALL_SOURCES, loadScheduledSourceAvailability, readMonitorPolicy, reviewTopicChoices, SOURCE_NAME, type SourceId } from "./policy";
-import { presentMention, type PresentedMention, type Sentiment, type StoredMention } from "./present";
+import { presentMention, type PresentedMention } from "./present";
+import { readStoredMentions } from "./mention-store";
 import { parseRangeKey, type RangeKey } from "./range";
 import { choiceFromRow, type ScheduleChoice } from "./schedule-choice";
 
@@ -91,17 +91,6 @@ function initials(name: string): string {
     .slice(0, 2)
     .map((word) => word[0]?.toLocaleUpperCase("id-ID") ?? "")
     .join("");
-}
-
-function asTopics(value: unknown): { id: string; noul: number }[] {
-  const parsed = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as { id?: unknown; noul?: unknown };
-    if (typeof record.id !== "string" || typeof record.noul !== "number") return [];
-    return [{ id: record.id, noul: record.noul }];
-  });
 }
 
 function asTextArray(value: unknown): string[] {
@@ -196,64 +185,6 @@ export function sourceHealthCopy(health: SourceHealth): string {
   return SOURCE_COPY[health.state];
 }
 
-type MentionSql = {
-  id: string;
-  source: SourceId;
-  excerpt: string;
-  url: string | null;
-  author: string | null;
-  posted_at: string | Date | null;
-  collected_at: string | Date;
-  scoring_status: StoredMention["scoringStatus"];
-  source_post_unavailable: boolean;
-  read_at: string | Date | null;
-  relevance_noul: number | null;
-  sentiment: Sentiment | null;
-  sentiment_confidence: number | null;
-  topic_nouls: unknown;
-  action: "confirm" | "correct" | null;
-  correction_relevance: "relevant" | "irrelevant" | null;
-  correction_sentiment: Sentiment | null;
-  correction_topics: unknown;
-  correction_at: string | Date | null;
-  attention_id: string | null;
-  attention_unread: boolean | null;
-  association_statuses: unknown;
-};
-
-function toStored(row: MentionSql): StoredMention {
-  const correction: OwnerCorrection | null =
-    row.action && row.correction_relevance
-      ? {
-          action: row.action,
-          relevance: row.correction_relevance,
-          sentiment: row.correction_sentiment,
-          topics: asTextArray(row.correction_topics),
-        }
-      : null;
-  return {
-    id: row.id,
-    source: row.source,
-    excerpt: row.excerpt,
-    url: row.url,
-    author: row.author,
-    postedAt: iso(row.posted_at),
-    collectedAt: iso(row.collected_at) ?? new Date(0).toISOString(),
-    scoringStatus: row.scoring_status,
-    sourcePostUnavailable: row.source_post_unavailable,
-    readAt: iso(row.read_at),
-    relevanceNoul: row.relevance_noul,
-    sentiment: row.sentiment,
-    sentimentConfidence: row.sentiment_confidence,
-    topicNouls: asTopics(row.topic_nouls),
-    correction,
-    correctionAt: iso(row.correction_at),
-    attentionId: row.attention_id,
-    attentionUnread: row.attention_unread === true,
-    associationStatuses: asTextArray(row.association_statuses),
-  };
-}
-
 export async function loadWorkspace(
   db: Queryable,
   customerId: string,
@@ -342,29 +273,8 @@ export async function loadWorkspace(
         isAdmin,
       };
     }
-    const mentionRows = await db.query<MentionSql>(
-      `select m.id, m.source, m.excerpt, m.url, m.author, m.posted_at, m.collected_at, m.scoring_status,
-              m.source_post_unavailable, m.read_at,
-              j.relevance_noul, j.sentiment, j.sentiment_confidence, j.topic_nouls,
-              c.action, c.relevance as correction_relevance, c.sentiment as correction_sentiment,
-              c.topics as correction_topics, c.created_at as correction_at,
-              a.id as attention_id, a.unread as attention_unread,
-              assoc.statuses as association_statuses
-       from mentions m
-       left join jev_results j on j.mention_id = m.id
-       left join owner_corrections c on c.mention_id = m.id
-       left join attention_items a on a.mention_id = m.id
-       left join lateral (
-         select array_agg(distinct a.status) as statuses
-         from mention_keyword_associations a
-         where a.mention_id = m.id and a.customer_id = m.customer_id
-           and a.project_id = m.project_id and a.source = m.source
-       ) assoc on true
-       where m.project_id = $1
-       order by coalesce(m.posted_at, m.collected_at) desc, m.id`,
-      [project.id],
-    );
-    const mentions = mentionRows.rows.map((row) => presentMention(toStored(row), policy.scoring));
+    const mentions = (await readStoredMentions(db, customerId, { projectId: project.id }))
+      .map((row) => presentMention(row, policy.scoring));
     const keywordRows = await db.query<{ text: string; intent: KeywordIntent }>(
       "select text, intent from keyword_variants where project_id = $1 and active order by created_at, text",
       [project.id],
@@ -414,12 +324,6 @@ export async function loadWorkspace(
       };
     });
     const latest = jobs.find((job) => job.detail !== "skipped_overlap") ?? null;
-    const scores = await db.query<{ pending: number | string; failed: number | string }>(
-      `select count(*) filter (where scoring_status in ('pending', 'scoring'))::int as pending,
-              count(*) filter (where scoring_status = 'failed')::int as failed
-       from mentions where project_id = $1`,
-      [project.id],
-    );
     const beat = await db.query<{ last_seen_at: string | Date }>("select last_seen_at from worker_heartbeat where id = 1");
     const active = await db.query<{ id: string }>(
       "select id from jobs where project_id = $1 and status in ('queued', 'claimed') limit 1",
@@ -444,8 +348,8 @@ export async function loadWorkspace(
       mentions,
       sources,
       jobs,
-      pending: Number(scores.rows[0]?.pending ?? 0),
-      failed: Number(scores.rows[0]?.failed ?? 0),
+      pending: mentions.filter((mention) => mention.scoringStatus === "pending" || mention.scoringStatus === "scoring").length,
+      failed: mentions.filter((mention) => mention.scoringStatus === "failed").length,
       latestStatus: latest?.status ?? null,
       lastCollectedAt: project.lastCollectedAt,
       control: {

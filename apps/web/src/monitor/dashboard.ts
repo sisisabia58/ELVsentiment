@@ -1,8 +1,8 @@
 import { overviewScore } from "../domain/aggregates";
 import { describeChange, type ChangeTone } from "./format";
 import type { SourceId } from "./policy";
-import type { PresentedMention, Sentiment } from "./present";
-import { mentionInWindow, rangeWindow, type RangeKey, type RangeWindow } from "./range";
+import type { LegacySentiment, PresentedMention } from "./present";
+import { jakartaDate, mentionInWindow, rangeWindow, type RangeKey, type RangeWindow } from "./range";
 import { textMatchCounts, type TextMatchCounts } from "./relevance";
 
 export type SourceKey = "all" | SourceId;
@@ -40,6 +40,7 @@ export type DashboardModel = {
   attentionItems: PresentedMention[];
   textMatch: TextMatchCounts;
   unknownPostedAt: number;
+  mixedInRange?: number;
   partial: boolean;
 };
 
@@ -50,10 +51,14 @@ function dayLabel(iso: string): string {
   return `${Number(day)} ${SHORT[Number(month) - 1] ?? month}`;
 }
 
+function isCounted(mention: PresentedMention): boolean {
+  return mention.bucket === "included" && mention.sentiment !== null && mention.sentiment !== "mixed";
+}
+
 function counts(mentions: readonly PresentedMention[]): { positif: number; netral: number; negatif: number; total: number } {
   const totals = { positif: 0, netral: 0, negatif: 0, total: 0 };
   for (const mention of mentions) {
-    if (mention.bucket !== "included" || !mention.sentiment) continue;
+    if (!isCounted(mention)) continue;
     totals.total += 1;
     if (mention.sentiment === "positive") totals.positif += 1;
     else if (mention.sentiment === "negative") totals.negatif += 1;
@@ -89,12 +94,9 @@ export function buildDashboard(input: {
   const textMatch = textMatchCounts(current);
   const unknownPostedAt = current.filter((mention) => mention.postedAt === null).length;
   const previous = includedIn(input.mentions, window.previousStart, window.start, input.source);
-  const currentIncluded = current.filter((mention) => mention.bucket === "included" && mention.sentiment);
-  const currentDated = current.filter((mention) => mention.postedAt !== null);
-  const currentDatedIncluded = currentIncluded.filter((mention) => mention.postedAt !== null);
-  const previousIncluded = previous.filter((mention) => mention.bucket === "included" && mention.sentiment);
+  const currentIncluded = current.filter(isCounted);
   const totals = counts(currentIncluded);
-  const previousTotals = counts(previousIncluded);
+  const previousTotals = counts(previous);
   const currentScore = scoreOf(totals);
   const previousScore = scoreOf(previousTotals);
   const score =
@@ -103,21 +105,19 @@ export function buildDashboard(input: {
       : ({ kind: "score", value: currentScore, included: totals.total } as const);
 
   const byDay = new Map<string, PresentedMention[]>();
-  for (const mention of currentDatedIncluded) {
-    const day = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Jakarta",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date(mention.postedAt ?? mention.collectedAt));
+  for (const mention of current) {
+    if (mention.postedAt === null || (!isCounted(mention) && !mention.needsAttention)) continue;
+    const day = jakartaDate(new Date(mention.postedAt));
     const list = byDay.get(day) ?? [];
     list.push(mention);
     byDay.set(day, list);
   }
 
   const points: ChartPoint[] = window.days.map((date) => {
-    const rows = byDay.get(date);
-    if (!rows || rows.length === 0) {
+    const rows = byDay.get(date) ?? [];
+    const attention = rows.filter((mention) => mention.needsAttention).length;
+    const dayTotals = counts(rows);
+    if (dayTotals.total === 0) {
       return {
         date,
         label: dayLabel(date),
@@ -126,20 +126,9 @@ export function buildDashboard(input: {
         negatif: null,
         total: null,
         score: null,
-        attention: null,
+        attention: attention || null,
       };
     }
-    const dayTotals = counts(rows);
-    const attention = currentDated.filter(
-      (mention) =>
-        mention.needsAttention &&
-        new Intl.DateTimeFormat("en-CA", {
-          timeZone: "Asia/Jakarta",
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        }).format(new Date(mention.postedAt ?? mention.collectedAt)) === date,
-    ).length;
     return {
       date,
       label: dayLabel(date),
@@ -182,7 +171,7 @@ export function buildDashboard(input: {
     uncertainInRange: currentUncertain,
     comparison: {
       score: currentScore === null || previousScore === null ? null : Math.round(currentScore) - Math.round(previousScore),
-      mentions: previousIncluded.length === 0 ? null : totals.total - previousTotals.total,
+      mentions: previousTotals.total === 0 ? null : totals.total - previousTotals.total,
       attention: previous.length === 0 ? null : currentAttention - previousAttention,
       uncertain: previous.length === 0 ? null : currentUncertain - previousUncertain,
     },
@@ -192,6 +181,7 @@ export function buildDashboard(input: {
     attentionItems,
     textMatch,
     unknownPostedAt,
+    mixedInRange: current.filter((mention) => mention.bucket === "included" && mention.sentiment === "mixed").length,
     partial: input.partial,
   };
 }
@@ -200,7 +190,7 @@ export function changeTone(change: number | null, higherIsBetter: boolean): Chan
   return describeChange(change, higherIsBetter).tone;
 }
 
-export function sentimentKey(sentiment: Sentiment): "positif" | "netral" | "negatif" {
+export function sentimentKey(sentiment: LegacySentiment): "positif" | "netral" | "negatif" {
   if (sentiment === "positive") return "positif";
   if (sentiment === "negative") return "negatif";
   return "netral";

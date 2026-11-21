@@ -3,14 +3,14 @@ import type { FailedScoring, RouteDecision } from "./routing";
 export type OwnerCorrection = {
   action: "confirm" | "correct";
   relevance: "relevant" | "irrelevant";
-  sentiment: "positive" | "neutral" | "negative" | null;
+  sentiment: "positive" | "neutral" | "negative" | "mixed" | null;
   topics: string[];
 };
 
 export type DisplayState = {
   bucket: "included" | "excluded" | "not_sure" | "failed" | "policy_unapproved";
   relevance: "relevant" | "irrelevant" | null;
-  sentiment: "positive" | "neutral" | "negative" | null;
+  sentiment: "positive" | "neutral" | "negative" | "mixed" | null;
   topics: string[];
   source: "jev" | "owner_confirm" | "owner_correct" | "failed";
 };
