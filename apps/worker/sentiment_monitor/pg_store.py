@@ -133,9 +133,10 @@ class PostgresStore:
                         """
                         insert into mentions (
                           id, customer_id, project_id, source, external_id, excerpt, url, author,
-                          posted_at, collected_at, matched_variants, scoring_status
+                          posted_at, collected_at, matched_variants, scoring_status,
+                          pantau_title, pantau_hashtags
                         ) values (
-                          gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, 'pending'
+                          gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, 'pending', %s, %s
                         )
                         on conflict (customer_id, project_id, source, external_id) do nothing
                         returning id
@@ -150,6 +151,8 @@ class PostgresStore:
                             mention["author"],
                             mention["posted_at"],
                             [mention["variant"]],
+                            mention.get("title"),
+                            list(mention.get("hashtags") or ()),
                         ),
                     )
                     saved += _returned_rows(inserted)

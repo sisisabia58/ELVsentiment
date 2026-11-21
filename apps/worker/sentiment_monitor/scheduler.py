@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 
 from sentiment_monitor.collect_once import gate, sources_allowed
+from sentiment_monitor.mention_triage import pantau_triage_enabled, run_pantau_triage_poll
 from sentiment_monitor.instant_search import MAX_INFLIGHT, retry_named_summary, run_instant_search_poll, run_question_cycle
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.pg_store import CommitOutcomeUnknown, PostgresStore
@@ -990,6 +991,22 @@ def start_instant_search_worker(
     return thread
 
 
+def start_pantau_triage_worker(connect, stop_event, *, log=print):
+    if not pantau_triage_enabled(os.environ):
+        return None
+
+    def loop():
+        while not stop_event.wait(5):
+            try:
+                run_pantau_triage_poll(connect)
+            except Exception:
+                _safe_log(log, lambda: format_log("pantau_triage_cycle_failed"))
+
+    thread = threading.Thread(target=loop, name="pantau-triage", daemon=True)
+    thread.start()
+    return thread
+
+
 def reserve_scheduled_call(conn, job_id, platform, cap):
     # Two-key transaction locks serialize a rolling-window count plus insert.
     # Each call to _call commits this reservation before the provider request.
@@ -1037,7 +1054,7 @@ def scheduled_fetch(platform, variant, *, api_key=None, collected_at=None, opene
         "external_id": post.external_id, "excerpt": post.text, "url": post.url,
         "author": post.author_handle or post.author_name, "posted_at": post.published_at,
         "variant": variant, "route_ids": post.routes, "intent": getattr(variant, "intent", "phrase"),
-        "hashtags": post.hashtags,
+        "title": post.title, "hashtags": post.hashtags,
     } for post in result.posts]
     # Poll a fresh relevance page. A page token is scoped to its search, not a high-water mark.
     return {"mentions": mentions, "next_cursor": None, "route_events": events,
@@ -1066,6 +1083,7 @@ def serve(
     last_logged = None
     stop_event = threading.Event()
     instant_thread = start_instant_search_worker(connect, stop_event, log=log)
+    start_pantau_triage_worker(connect, stop_event, log=log)
     try:
         while True:
             def claim(conn):

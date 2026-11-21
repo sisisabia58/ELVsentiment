@@ -34,6 +34,12 @@ export const SCORING_LEASE_SECONDS = 180;
 
 const CLAIM_TOKEN_SQL = "(extract(epoch from scoring_claimed_at) * 1000000)::bigint::text";
 
+const LEGACY_PROJECT_SQL = `exists (
+  select 1 from projects p
+  where p.id = mentions.project_id and p.customer_id = mentions.customer_id
+    and not p.pantau_filter_triage
+)`;
+
 const CLAIM_SQL = `
 update mentions m
 set scoring_status = 'scoring',
@@ -43,6 +49,7 @@ from (
   select id
   from mentions
   where scoring_status = 'pending'
+    and ${LEGACY_PROJECT_SQL}
     and scoring_attempts < $2
   order by collected_at asc, id asc
   limit $1
@@ -61,6 +68,7 @@ from (
   select id
   from mentions
   where scoring_status = 'pending'
+    and ${LEGACY_PROJECT_SQL}
     and scoring_attempts < $2
     and customer_id = $3
   order by collected_at asc, id asc
@@ -80,6 +88,7 @@ from (
   select id
   from mentions
   where scoring_status = 'scoring'
+    and ${LEGACY_PROJECT_SQL}
     and (
       scoring_claimed_at is null
       or scoring_claimed_at < clock_timestamp() - make_interval(secs => $2::double precision)
@@ -97,6 +106,7 @@ from (
   select id
   from mentions
   where scoring_status = 'scoring'
+    and ${LEGACY_PROJECT_SQL}
     and customer_id = $3
     and (
       scoring_claimed_at is null
@@ -112,6 +122,7 @@ const TOUCH_SQL = `
 update mentions
 set scoring_claimed_at = clock_timestamp()
 where id = $1 and customer_id = $2 and scoring_status = 'scoring' and scoring_attempts = $3
+  and ${LEGACY_PROJECT_SQL}
 returning ${CLAIM_TOKEN_SQL} as claim_token
 `;
 
@@ -189,7 +200,10 @@ export async function touchScoringClaim(
 export async function claimMention(db: Queryable, customerId: string, mentionId: string): Promise<boolean> {
   const claimed = await withCustomer(db, customerId, () =>
     db.query<{ id: string }>(
-      "update mentions set scoring_status = 'scoring' where id = $1 and customer_id = $2 and scoring_status = 'pending' returning id",
+      `update mentions set scoring_status = 'scoring'
+       where id = $1 and customer_id = $2 and scoring_status = 'pending'
+         and ${LEGACY_PROJECT_SQL}
+       returning id`,
       [mentionId, customerId],
     ),
   );

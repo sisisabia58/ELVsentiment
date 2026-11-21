@@ -8,7 +8,7 @@ import { createProject } from "../projects/handlers";
 import { displayOf } from "../domain/display";
 import { ingestMention } from "../ingest/mentions";
 import { attentionDecision } from "../domain/attention";
-import { recordFailure, recordSuccess, releaseToPending, releaseWorkerToPending, saveCorrection } from "./jobs";
+import { claimMention, claimPendingBatch, reclaimStaleClaims, recordFailure, recordSuccess, releaseToPending, releaseWorkerToPending, saveCorrection } from "./jobs";
 
 const policy: ScoringPolicy = {
   approved: true,
@@ -157,5 +157,34 @@ describe("scoring persistence", () => {
     expect(row.rows[0]?.scoring_status).toBe("pending");
     const jev = await db.query("select mention_id from jev_results where mention_id = $1", [mention.id]);
     expect(jev.rows).toEqual([]);
+  });
+});
+
+describe("legacy scoring isolation", () => {
+  it("leaves pilot mentions alone in global and tenant claims and stale reclamation", async () => {
+    const db = pgliteQueryable(new PGlite());
+    await applyMigration(db);
+    const owner = await registerOwner(db, { email: "pilot@example.com", password: "sandi-panjang" });
+    const pilot = await createProject(db, owner.customerId, "tukuliling");
+    const ordinary = await createProject(db, owner.customerId, "regular");
+    await db.query("update projects set pantau_filter_triage = true where id = $1", [pilot.projectId]);
+    const seed = (projectId: string, externalId: string) => ingestMention(db, {
+      customerId: owner.customerId, projectId, source: "threads", externalId,
+      variant: "tukuliling", excerpt: "tukuliling", url: null, author: null,
+      postedAt: "2026-11-01T00:00:00.000Z",
+    });
+    const held = await seed(pilot.projectId, "1");
+    const legacy = await seed(ordinary.projectId, "2");
+    expect((await claimPendingBatch(db, 10)).map(({ id }) => id)).toEqual([legacy.id]);
+    expect(await claimPendingBatch(db, 10, owner.customerId)).toEqual([]);
+    expect(await claimMention(db, owner.customerId, held.id)).toBe(false);
+
+    await db.query("update mentions set scoring_status = 'scoring', scoring_claimed_at = now() - interval '1 hour'");
+    await reclaimStaleClaims(db);
+    await reclaimStaleClaims(db, owner.customerId);
+    const rows = await db.query<{ id: string; scoring_status: string }>("select id, scoring_status from mentions");
+    expect(Object.fromEntries(rows.rows.map(({ id, scoring_status }) => [id, scoring_status]))).toEqual({
+      [held.id]: "scoring", [legacy.id]: "pending",
+    });
   });
 });
