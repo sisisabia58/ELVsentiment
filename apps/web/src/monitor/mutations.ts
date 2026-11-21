@@ -50,6 +50,8 @@ export async function saveMentionReview(
     topics,
   };
   return withCustomer(db, customerId, async () => {
+    // Serialize owner review and read changes before projecting the current decision.
+    await db.query("select id from mentions where id = $1 and customer_id = $2 for update", [mentionId, customerId]);
     const [row] = await readStoredMentions(db, customerId, { mentionId });
     if (!row) return { ok: false as const, reason: "not_found" as const };
     const shown = presentMention(row, policy.scoring);
@@ -64,6 +66,13 @@ export async function saveMentionReview(
       },
       next,
     );
+    const assessmentChanged = shown.relevance !== next.relevance || shown.sentiment !== next.sentiment;
+    if (row.triage && shown.bucket === "not_sure" && !assessmentChanged) {
+      return { ok: false as const, reason: "invalid" as const };
+    }
+    if (row.triage && row.correction && !changed) {
+      return { ok: true as const, action: row.correction.action };
+    }
     const correction: OwnerCorrection = { action: changed ? "correct" : "confirm", ...next };
     await db.query(
       `insert into owner_corrections (mention_id, customer_id, action, relevance, sentiment, topics, created_at)
@@ -73,17 +82,16 @@ export async function saveMentionReview(
              topics = excluded.topics, created_at = now()`,
       [mentionId, customerId, correction.action, correction.relevance, correction.sentiment, correction.topics],
     );
-    const eligible = correction.relevance === "relevant" && (
-      correction.sentiment === "negative" || (correction.sentiment === "mixed" && shown.needsAttention)
-    );
+    const ownerNegative = correction.relevance === "relevant" && correction.sentiment === "negative";
+    const eligible = row.triage && !assessmentChanged ? shown.needsAttention : ownerNegative;
     if (!eligible) {
       await db.query("delete from attention_items where mention_id = $1 and customer_id = $2", [mentionId, customerId]);
     } else {
       await db.query(
         `insert into attention_items (id, customer_id, mention_id, reason, unread, seen_at, created_at)
-         values ($1, $2, $3, 'negative', true, null, now())
+         values ($1, $2, $3, 'negative', $4, $5, now())
          on conflict (mention_id) do nothing`,
-        [randomUUID(), customerId, mentionId],
+        [randomUUID(), customerId, mentionId, !row.triage || !shown.read, row.triage ? row.readAt : null],
       );
     }
     return { ok: true as const, action: correction.action };

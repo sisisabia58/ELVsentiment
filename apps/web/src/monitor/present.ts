@@ -171,7 +171,7 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
           : result?.destination === "excluded" ? "excluded"
             : status === "failed" || status === "completed" || status === "unavailable" ? "failed" : "pending";
     const needsAttention = bucket === "included" && (correction
-      ? correction.sentiment === "negative" || (correction.sentiment === "mixed" && row.attentionId !== null)
+      ? row.attentionId !== null
       : result?.destination === "attention");
     const relevance = correction ? correction.relevance : originalRelevance;
     const textMatch = result?.relevanceTier === "insufficient_text" ? "unknown_text"

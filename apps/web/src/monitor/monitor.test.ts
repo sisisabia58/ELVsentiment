@@ -540,7 +540,7 @@ describe("Pantau filter triage inboxes", () => {
       const project = await createProject(db, owner.customerId, "Tukuliling");
       await db.query("update projects set pantau_filter_triage = true where id = $1", [project.projectId]);
       const ids = Object.fromEntries(
-        ["direct", "mixed", "borderline", "praise", "missing", "retrying", "deferred", "failed", "late", "excluded", "unsupported"]
+        ["direct", "mixed", "borderline", "praise", "discussion", "unclear", "missing", "retrying", "deferred", "failed", "late", "excluded", "unsupported"]
           .map((name) => [name, randomUUID()]),
       );
       for (const [name, id] of Object.entries(ids)) {
@@ -573,6 +573,8 @@ describe("Pantau filter triage inboxes", () => {
       await judgment("mixed", "attention", "mixed", "firsthand_complaint");
       await judgment("borderline", "ambiguous", "negative", "relevance_unclear");
       await judgment("praise", "mention", "positive", "non_actionable");
+      await judgment("discussion", "mention", "negative", "non_actionable");
+      await judgment("unclear", "ambiguous", "negative", "complaint_unclear");
       await judgment("excluded", "excluded", "unclear", "no_match");
 
       const now = new Date("2026-11-01T03:00:00Z");
@@ -589,7 +591,7 @@ describe("Pantau filter triage inboxes", () => {
       expect(mixedOnly.points.at(-1)).toMatchObject({ attention: 1, total: null });
       expect(workspace.mentions.filter((item) => item.needsAttention).map((item) => item.id).sort())
         .toEqual([ids.direct, ids.mixed].sort());
-      expect(workspace.mentions.filter((item) => item.bucket === "not_sure").map((item) => item.id)).toEqual([ids.borderline]);
+      expect(workspace.mentions.filter((item) => item.bucket === "not_sure").map((item) => item.id).sort()).toEqual([ids.borderline, ids.unclear].sort());
       expect(byId(workspace, "borderline")?.uncertainFields).toEqual(["relevansi"]);
       expect(byId(workspace, "direct")).toMatchObject({
         url: "https://www.threads.com/@owner/post/direct",
@@ -605,9 +607,20 @@ describe("Pantau filter triage inboxes", () => {
       expect(byId(workspace, "unsupported")).toMatchObject({ bucket: "failed", triage: { status: "unavailable" } });
       expect(workspace).toMatchObject({ pending: 4, failed: 2 });
       expect(dashboardFor(workspace, "7", "all", now)).toMatchObject({
-        attentionUnread: 2, uncertainOpen: 1, totals: { positif: 1, netral: 0, negatif: 1, total: 2 },
+        attentionUnread: 2, uncertainOpen: 2, totals: { positif: 1, netral: 0, negatif: 2, total: 3 },
       });
 
+      const relevantNegative = { relevance: "relevant", sentiment: "negative" } as const;
+      expect(await saveMentionReview(db, owner.customerId, ids.discussion, { ...relevantNegative, topics: [] }))
+        .toEqual({ ok: true, action: "confirm" });
+      expect(byId(await load(), "discussion")).toMatchObject({
+        bucket: "included", sentiment: "negative", needsAttention: false, confirmed: true,
+      });
+      expect(await saveMentionReview(db, owner.customerId, ids.unclear, { ...relevantNegative, topics: [] }))
+        .toEqual({ ok: false, reason: "invalid" });
+      expect(await saveMentionReview(db, owner.customerId, ids.unclear, { ...relevantNegative, topics: ["lainnya"] }))
+        .toEqual({ ok: false, reason: "invalid" });
+      expect(byId(await load(), "unclear")).toMatchObject({ bucket: "not_sure", needsAttention: false });
       expect(await attentionStillEligible(db, owner.customerId, ids.mixed)).toBe(true);
       expect(await saveMentionReview(db, owner.customerId, ids.mixed, { relevance: "relevant", sentiment: "mixed", topics: [] }))
         .toEqual({ ok: true, action: "confirm" });
@@ -618,12 +631,16 @@ describe("Pantau filter triage inboxes", () => {
         .toEqual({ ok: true, action: "correct" });
       await db.query("update pantau_triage_jobs set status = 'completed' where mention_id = $1", [ids.late]);
       await judgment("late", "attention", "negative", "firsthand_complaint");
+      await setMentionRead(db, owner.customerId, ids.late, true);
+      const correctedAt = byId(await load(), "late")?.correctionAt;
+      expect(await saveMentionReview(db, owner.customerId, ids.late, { relevance: "relevant", sentiment: "neutral", topics: [] }))
+        .toEqual({ ok: true, action: "correct" });
       const reviewed = await load();
-      expect(byId(reviewed, "late")).toMatchObject({ bucket: "included", sentiment: "neutral", originalSentiment: "negative", needsAttention: false, corrected: true });
+      expect(byId(reviewed, "late")).toMatchObject({ bucket: "included", sentiment: "neutral", originalSentiment: "negative", needsAttention: false, read: true, corrected: true, correctionAt: correctedAt });
       expect(byId(reviewed, "mixed")).toMatchObject({ needsAttention: true, attentionUnread: false, read: true, confirmed: true });
       expect(byId(reviewed, "borderline")).toMatchObject({ bucket: "excluded", uncertainFields: [] });
       expect(dashboardFor(reviewed, "7", "all", now)).toMatchObject({
-        attentionUnread: 1, uncertainOpen: 0, totals: { positif: 1, netral: 1, negatif: 1, total: 3 },
+        attentionUnread: 1, uncertainOpen: 1, totals: { positif: 1, netral: 1, negatif: 2, total: 4 },
       });
     } finally {
       await database.close();

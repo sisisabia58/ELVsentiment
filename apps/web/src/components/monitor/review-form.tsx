@@ -25,16 +25,18 @@ export function ReviewForm(props: {
   const [pending, setPending] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
 
-  const changed =
+  const assessmentChanged =
     relevance !== (mention.relevance ?? "") ||
-    (relevance === "relevant" && sentiment !== (mention.sentiment ?? "")) ||
-    topics.join("\0") !== mention.topics.join("\0");
+    (relevance === "relevant" && sentiment !== (mention.sentiment ?? ""));
+  const changed = assessmentChanged || topics.join("\0") !== mention.topics.join("\0");
+  const needsAssessmentChange = Boolean(triage) && mention.bucket === "not_sure" && !assessmentChanged;
 
   return (
     <form
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
+        if (needsAssessmentChange) return;
         if (relevance !== "relevant" && relevance !== "irrelevant") {
           setError("Pilih penilaian untuk melanjutkan.");
           return;
@@ -162,9 +164,12 @@ export function ReviewForm(props: {
           {readError}
         </p>
       ) : null}
+      {needsAssessmentChange ? (
+        <p className="text-sm text-muted-foreground">Ubah relevansi atau sentimen untuk menyelesaikan peninjauan.</p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={pending} className="h-11 bg-primary text-primary-foreground">
-          {changed ? "Simpan perubahan" : "Konfirmasi penilaian"}
+        <Button type="submit" disabled={pending || needsAssessmentChange} className="h-11 bg-primary text-primary-foreground">
+          {changed || needsAssessmentChange ? "Simpan perubahan" : "Konfirmasi penilaian"}
         </Button>
         <Button
           type="button"
