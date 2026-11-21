@@ -9,6 +9,10 @@ export function cariSekarangEnabled(env: Env = process.env): boolean {
   return flag(env.CARI_SEKARANG_ENABLED);
 }
 
+export function cariMoreEnabled(env: Env = process.env): boolean {
+  return cariSekarangEnabled(env) && flag(env.CARI_MORE_ENABLED);
+}
+
 export function cariProviderMode(env: Env = process.env): string {
   return env.CARI_PROVIDER_MODE?.trim() || "live";
 }

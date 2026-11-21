@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
-import { startSearchAction } from "@/app/cari/start-action";
+import { startMoreSourceAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchDetail, SearchScreen } from "./search-screen";
 
 vi.mock("next/navigation", () => ({
@@ -10,6 +10,7 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/app/cari/start-action", () => ({
   startSearchAction: vi.fn(),
+  startMoreSourceAction: vi.fn(),
 }));
 
 afterEach(() => {
@@ -379,4 +380,37 @@ describe("SearchScreen", () => {
       expect(within(button).queryByText("W")).toBeNull();
     }
   });
+});
+
+it("requests the selected source once and shows the merged page without a price", async () => {
+  const initial = finishedSnapshot();
+  const tiktok = {
+    ...initial.sources[0],
+    platform: "tiktok",
+    more: { state: "available" as const, added: null, generation: 0 },
+  };
+  initial.sources = [tiktok, initial.sources[1]];
+  initial.results = [post({ platform: "tiktok" })];
+  vi.mocked(startMoreSourceAction).mockResolvedValue({ ok: true, jobId: "more-job" });
+
+  const updated = {
+    ...initial,
+    sources: [{ ...tiktok, more: { state: "exhausted", added: 1, generation: 1 } }, initial.sources[1]],
+    results: [...initial.results, post({ platform: "tiktok", id: "r2", text: "hasil tambahan yang cocok" })],
+  };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => updated,
+  }));
+  render(<SearchDetail initialSnapshot={initial} />);
+  fireEvent.click(screen.getByRole("button", { name: "TikTok 1" }));
+  const buttons = screen.getAllByRole("button", { name: "Cari lagi di TikTok" });
+  expect(buttons).toHaveLength(2);
+  fireEvent.click(buttons[1]);
+  fireEvent.click(buttons[0]);
+  expect(startMoreSourceAction).toHaveBeenCalledExactlyOnceWith(initial.search.id, "tiktok", 0);
+  expect(await screen.findByText("hasil tambahan yang cocok", {}, { timeout: 3000 })).not.toBeNull();
+  expect(screen.getByText(initial.results[0].text)).not.toBeNull();
+  expect(screen.queryByRole("button", { name: "Cari lagi di TikTok" })).toBeNull();
+  expect(screen.queryByText(/kredit|Rp\s?\d/i)).toBeNull();
 });

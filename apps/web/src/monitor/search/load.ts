@@ -1,6 +1,11 @@
 import type { Queryable } from "../../db/migrate";
 import { withCustomer } from "../../db/migrate";
+import { cariMoreEnabled } from "./feature";
+import { loadMoreSources, type MoreSourceState } from "./more-source";
+import { isUuid } from "./search-id";
 import { savedEvidenceRelevance, SEARCH_RELEVANCE_VERSION } from "./relevance";
+
+export { isUuid } from "./search-id";
 
 const PLATFORM_ORDER = [
   "threads",
@@ -41,6 +46,7 @@ export type SnapshotSource = {
   platform: string;
   state: string;
   resultCount: number;
+  more?: MoreSourceState;
   latencyMs: number | null;
   safeDetail: string;
   updatedAt: string;
@@ -109,6 +115,7 @@ export type SearchSnapshot = {
   totals: { sources: number; done: number; results: number };
   results: SnapshotResult[];
   comments: SnapshotComment[];
+  hasMoreResults?: boolean;
   ai: SnapshotAi | null;
   questions: SnapshotQuestion[];
 };
@@ -167,12 +174,6 @@ function compareLegacyRelevance(a: SnapshotResult, b: SnapshotResult): number {
   return a.externalId < b.externalId ? -1 : 1;
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isUuid(value: unknown): value is string {
-  return typeof value === "string" && UUID_PATTERN.test(value);
-}
-
 export async function loadSearchSnapshot(
   db: Queryable,
   customerId: string,
@@ -211,6 +212,12 @@ export async function loadSearchSnapshot(
     if (!row) return null;
     const currentRelevance = row.relevance_version >= SEARCH_RELEVANCE_VERSION;
     const legacyEvidence = !currentRelevance && row.status !== "queued" && row.status !== "running";
+
+    // A settled page and its result inserts commit together. Read page state first
+    // so a terminal job can never appear alongside pre-merge results.
+    const more = !legacyEvidence && ["succeeded", "partial"].includes(row.status)
+      ? await loadMoreSources(db, customerId, searchId)
+      : null;
 
     const sourceRows = await db.query<{
       platform: string;
@@ -285,10 +292,12 @@ export async function loadSearchSnapshot(
     if (!currentRelevance && row.sort_mode === "relevance") {
       results.sort(compareLegacyRelevance);
     }
+    const moreSources = cariMoreEnabled() ? more?.sources : undefined;
     const order = new Map(PLATFORM_ORDER.map((platform, index) => [platform, index]));
     const sources: SnapshotSource[] = sourceRows.rows
       .map((source) => ({
         platform: source.platform,
+        ...(moreSources?.[source.platform] ? { more: moreSources[source.platform] } : {}),
         state: source.state,
         resultCount: counts.get(source.platform) ?? 0,
         latencyMs: source.latency_ms,
@@ -442,6 +451,7 @@ export async function loadSearchSnapshot(
       },
       results,
       comments,
+      ...(more?.hasMoreResults ? { hasMoreResults: true } : {}),
       ai,
       questions,
     };

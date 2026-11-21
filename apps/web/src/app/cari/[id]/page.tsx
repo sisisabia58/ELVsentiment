@@ -19,7 +19,7 @@ export async function CariDetailPageBody({ id }: { id: string }) {
   if (!snapshot) notFound();
   return (
     <Frame active="/cari" workspace={workspace} logout={<LogoutForm />}>
-      <SearchDetail initialSnapshot={snapshot} now={now.toISOString()} aiEnabled={workspace.cariAiEnabled === true} />
+      <SearchDetail key={snapshot.search.id} initialSnapshot={snapshot} now={now.toISOString()} aiEnabled={workspace.cariAiEnabled === true} />
     </Frame>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Clock, MessageSquareText, Search, Sparkles } from "lucide-react";
@@ -14,12 +14,13 @@ import {
 } from "@/monitor/search/filters";
 import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
 import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platforms";
-import { monitorAsProjectAction, startSearchAction } from "@/app/cari/start-action";
+import { monitorAsProjectAction, startMoreSourceAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
 import { PlatformTile } from "./platform-tile";
 import { AiSummary } from "./ai-summary";
 import { ConversationBreakdown } from "./conversation-breakdown";
 import { AskPanel } from "./ask-panel";
+import type { MoreSourceActions } from "./more-source-control";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
 import { StanceChip } from "./stance-chip";
@@ -106,7 +107,13 @@ function useNow(initialIso: string | undefined): Date {
   return now;
 }
 
-function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boolean; running: boolean }) {
+function SearchBody(props: {
+  snapshot: SearchSnapshot;
+  now: Date;
+  aiEnabled: boolean;
+  running: boolean;
+  moreActions: MoreSourceActions;
+}) {
   const snapshot = props.snapshot;
   if (snapshot.results.length === 0) return null;
   const results = (
@@ -114,6 +121,8 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
       results={snapshot.results}
       commentsByResult={commentsByResult(snapshot)}
       sortMode={snapshot.search.filters.sort}
+      sources={snapshot.sources}
+      moreActions={props.moreActions}
       now={props.now}
     />
   );
@@ -128,6 +137,7 @@ function SearchBody(props: { snapshot: SearchSnapshot; now: Date; aiEnabled: boo
           summaryStatus={summaryStatus}
           results={snapshot.results}
           comments={snapshot.comments}
+          hasMoreResults={snapshot.hasMoreResults}
         />
       </aside>
       <div className="min-w-0 lg:order-1">
@@ -156,13 +166,52 @@ function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComm
 }
 
 export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string; aiEnabled?: boolean }) {
-  const { snapshot, stale } = useSearchPoll(
+  const { snapshot, stale, refresh } = useSearchPoll(
     props.initialSnapshot.search.id,
     props.initialSnapshot,
   );
   const router = useRouter();
   const now = useNow(props.now);
   const search = snapshot.search;
+  const moreRequests = useRef(new Set<string>());
+  const [moreBusy, setMoreBusy] = useState<string[]>([]);
+  const [moreAdmitted, setMoreAdmitted] = useState<Partial<Record<string, number>>>({});
+  const [moreErrors, setMoreErrors] = useState<Partial<Record<string, string>>>({});
+  const moreActions: MoreSourceActions = {
+    busy: (platform) => {
+      const more = snapshot.sources.find((source) => source.platform === platform)?.more;
+      return moreBusy.includes(platform) ||
+        (more?.state === "available" && more.generation === moreAdmitted[platform]);
+    },
+    errors: moreErrors,
+    request: (platform, generation) => void requestMore(platform, generation),
+  };
+
+  async function requestMore(platform: string, generation: number) {
+    if (moreRequests.current.has(platform)) return;
+    moreRequests.current.add(platform);
+    setMoreBusy((sources) => [...sources, platform]);
+    setMoreErrors((errors) => ({ ...errors, [platform]: undefined }));
+    try {
+      const result = await startMoreSourceAction(search.id, platform, generation);
+      if (result.ok) {
+        setMoreAdmitted((sources) => ({ ...sources, [platform]: generation }));
+        refresh();
+        return;
+      }
+      if (result.error === "unavailable") refresh();
+      const message = result.error === "unavailable"
+        ? "Halaman tambahan sudah tidak tersedia."
+        : ERROR_COPY[result.error] ?? "Pencarian tambahan belum tersedia.";
+      setMoreErrors((errors) => ({ ...errors, [platform]: message }));
+    } catch {
+      setMoreErrors((errors) => ({ ...errors, [platform]: "Gagal mengirim permintaan." }));
+    } finally {
+      moreRequests.current.delete(platform);
+      setMoreBusy((sources) => sources.filter((source) => source !== platform));
+    }
+  }
+
   const [monitorError, setMonitorError] = useState<string | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
@@ -276,14 +325,14 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </div>
       ) : null}
       <div className="mt-5">
-        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={aiEnabled} />
+        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={aiEnabled} moreActions={moreActions} />
       </div>
       {!legacy && !running && !failureCopy && snapshot.results.length === 0 ? (
         <p className="mt-5 rounded-[14px] border border-border bg-surface px-5 py-4 text-[13px] text-muted-foreground">
           Tidak ada hasil yang cocok dengan kata kunci.
         </p>
       ) : null}
-      <SearchBody snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} />
+      <SearchBody snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
     </div>
   );
 }

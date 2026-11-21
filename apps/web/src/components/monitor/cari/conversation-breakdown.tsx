@@ -41,6 +41,9 @@ export function ConversationBreakdown({ snapshot }: { snapshot: SearchSnapshot }
           </li>
         ))}
       </ul>
+      {snapshot.hasMoreResults && (quotes.length > 0 || themes.length > 0 || platforms.length > 0) ? (
+        <p className="mt-4 text-[12px] text-muted-foreground">Kutipan, topik, dan sikap berasal dari pencarian awal.</p>
+      ) : null}
       {quotes.length > 0 ? (
         <>
           <h3 className={SECTION_HEADING}>Kutipan</h3>

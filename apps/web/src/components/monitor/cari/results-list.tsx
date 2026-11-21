@@ -5,9 +5,10 @@ import { MessageSquareText } from "lucide-react";
 import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
 import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
-import type { SnapshotComment, SnapshotResult } from "@/monitor/search/load";
+import type { SnapshotComment, SnapshotResult, SnapshotSource } from "@/monitor/search/load";
 import { supportedProviders } from "@/monitor/search/platforms";
 import { originalPostHref } from "@/monitor/search/post-permalink";
+import { MoreSourceControl, type MoreSourceActions } from "./more-source-control";
 import { PLATFORM_ORDER, PlatformTile, platformName } from "./platform-tile";
 
 const compact = new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 });
@@ -179,6 +180,8 @@ export function ResultsList(props: {
   results: SnapshotResult[];
   commentsByResult: Record<string, SnapshotComment[]>;
   sortMode: SortMode;
+  sources?: SnapshotSource[];
+  moreActions?: MoreSourceActions;
   now?: Date;
 }) {
   const [platform, setPlatform] = useState<string | null>(null);
@@ -250,12 +253,17 @@ export function ResultsList(props: {
       </div>
       <div className="mt-3 px-5 py-4">
         {selected ? (
-          <div className="mb-3 flex items-center gap-2.5">
+          <div className="mb-3 flex flex-wrap items-center gap-2.5">
             <PlatformTile platform={selected.key} size={26} />
-            <div>
+            <div className="flex-1">
               <p className="text-[14px] font-semibold text-foreground">{platformName(selected.key)}</p>
               <p className="text-[12px] text-muted-foreground">{selected.rows.length} hasil</p>
             </div>
+            <MoreSourceControl
+              platform={selected.key}
+              more={props.sources?.find((source) => source.platform === selected.key)?.more}
+              actions={props.moreActions}
+            />
           </div>
         ) : null}
         <div className="space-y-4">

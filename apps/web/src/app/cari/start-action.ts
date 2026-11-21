@@ -4,6 +4,7 @@ import { withSessionDeps } from "@/auth/request-session";
 import { writeOnboardingDraftCookie } from "@/monitor/onboarding-draft-cookie";
 import { customerIdFromSessionToken } from "@/auth/session";
 import { readSearchLimits } from "@/monitor/search/limits";
+import { requestMoreSource, type RequestMoreResult } from "@/monitor/search/more-source";
 import {
   askQuestionForCustomer,
   monitorAsProjectForCustomer,
@@ -101,5 +102,28 @@ export async function monitorAsProjectAction(searchId: string): Promise<MonitorP
     });
     if (!wrote) return { ok: false as const, error: "unauthenticated" };
     return prepared;
+  });
+}
+
+export async function startMoreSourceAction(
+  searchId: string,
+  platform: string,
+  generation: number,
+): Promise<RequestMoreResult> {
+  return withSessionDeps(async (deps) => {
+    let customerId: string;
+    try {
+      customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
+    } catch {
+      return { ok: false as const, error: "unauthenticated" };
+    }
+    return requestMoreSource({
+      db: deps.db,
+      customerId,
+      searchId,
+      platform,
+      generation,
+      dailyLimit: readSearchLimits().cariDailySearchLimit,
+    });
   });
 }

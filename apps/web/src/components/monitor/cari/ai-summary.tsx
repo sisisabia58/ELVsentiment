@@ -12,6 +12,7 @@ export function AiSummary(props: {
   summaryStatus?: string;
   results?: SnapshotResult[];
   comments?: SnapshotComment[];
+  hasMoreResults?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = props.summaryStatus ?? (props.ai ? "done" : "pending");
@@ -44,7 +45,7 @@ export function AiSummary(props: {
       <p className="mt-2 text-[13.5px] leading-6 text-foreground">{ai.overallSummary}</p>
       <EvidenceLinks sources={sources} label="Sumber ringkasan" />
       <p className="mt-2 text-[12px] text-muted-foreground">
-        Cuplikan AI · {postCount} unggahan dan {sample.size - postCount} balasan
+        {props.hasMoreResults ? "Cuplikan AI dari pencarian awal" : "Cuplikan AI"} · {postCount} unggahan dan {sample.size - postCount} balasan
       </p>
       {isStance(ai.overallStance) ? (
         <div className="mt-3"><StanceChip stance={ai.overallStance} /></div>

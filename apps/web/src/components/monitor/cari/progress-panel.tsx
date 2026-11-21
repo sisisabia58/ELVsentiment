@@ -2,6 +2,7 @@ import { Check, Loader2 } from "lucide-react";
 import { cn } from "cn";
 import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
+import { MoreSourceControl, type MoreSourceActions } from "./more-source-control";
 import { elapsedSeconds } from "./snapshot-format";
 
 // Comments ship with this milestone. The AI summary stays hidden until it does.
@@ -56,7 +57,7 @@ function DotMap(props: { total: number; done: number }) {
   );
 }
 
-function SourceRow(props: { source: SnapshotSource; max: number }) {
+function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: MoreSourceActions }) {
   const source = props.source;
   const label = STATE_LABEL[source.state] ?? source.state;
   const width = source.resultCount > 0 ? Math.max(4, Math.round((source.resultCount / props.max) * 100)) : 0;
@@ -69,7 +70,7 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
   return (
     <div
       className={cn(
-        "grid grid-cols-[14px_112px_minmax(0,1fr)_32px_132px] items-center gap-2 text-[13px]",
+        "grid grid-cols-[10px_minmax(74px,102px)_minmax(0,1fr)_24px_minmax(60px,110px)] lg:grid-cols-[14px_112px_minmax(0,1fr)_32px_132px] items-center gap-2 text-[13px]",
         (source.state === "unavailable" || source.state === "failed") && "opacity-70",
       )}
     >
@@ -117,11 +118,16 @@ function SourceRow(props: { source: SnapshotSource; max: number }) {
           label
         )}
       </span>
+      {source.more && props.moreActions ? (
+        <div className="col-span-full">
+          <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} compact />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean }) {
+export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean; moreActions?: MoreSourceActions }) {
   const snapshot = props.snapshot;
   const now = props.now ?? new Date();
   const done = snapshot.totals.done;
@@ -213,7 +219,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
           </div>
           <div className="mt-4 space-y-2.5">
             {snapshot.sources.map((source) => (
-              <SourceRow key={source.platform} source={source} max={max} />
+              <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} />
             ))}
           </div>
         </div>
