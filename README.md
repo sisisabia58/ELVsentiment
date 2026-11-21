@@ -56,6 +56,12 @@ Names only; set real values in Railway. Do not commit values.
 - Platform admin is **not** an env var. After the real owner has signed up, the operator grants it once with SQL: `insert into platform_admins (user_id) select id from users where email = 'owner@example.com';` Run that as the migration/table-owner role (`MIGRATION_DATABASE_URL`), not as `app_user`. Only a live session for a row in `platform_admins` can write `/pengaturan/provider`. Revoke with `delete from platform_admins where user_id = (select id from users where email = 'owner@example.com');`.
 - `CARI_DAILY_SEARCH_LIMIT` — optional per-customer daily instant-search cap (web and worker, default 20).
 
+### Pantau triage pilot
+
+Set `PANTAU_FILTER_TRIAGE_ENABLED=1` on both the web and worker services after the web pre-deploy step applies migrations 019 and 020. The flag defaults to off. The worker uses its existing `OPENCODE_API_KEY` and `OPENCODE_MODEL`. Projects created from Cari enter the pilot when the owner chooses to import results.
+
+An import copies up to 20 eligible native posts from the existing search. Future collected posts join the same classification queue. The worker admits up to 20 OpenCode attempts per project per rolling 24 hours, including retries. With the flag off, queued work pauses and existing judgments and owner corrections remain available.
+
 The web service pre-deploy command is `node src/db/migrate-cli.mjs`.
 Wait for the web migration step to apply `017_instant_search_relevance.sql` before starting the revised Railway worker. When deploying the worker independently, run the web migration command first. The worker service starts the scheduler directly.
 

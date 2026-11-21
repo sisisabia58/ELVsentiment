@@ -94,8 +94,10 @@ export function OnboardingWizard(props: {
 
   useEffect(() => {
     const url = new URL(window.location.href);
-    url.searchParams.set("langkah", String(step));
-    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    if (url.searchParams.get("langkah") !== String(step)) {
+      url.searchParams.set("langkah", String(step));
+      window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    }
     if (finished.current) return;
     const fields: OnboardingDraftFields = {
       projectId: props.existing?.projectId ?? null,

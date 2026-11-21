@@ -287,3 +287,23 @@ it("keeps import consent out of ordinary onboarding", () => {
   render(wizard({ initial: { step: 5, brand: "contoh", keywords: ["contoh"], sources: ["threads"], schedule } }));
   expect(screen.queryByRole("checkbox", { name: /impor posting/i })).toBeNull();
 });
+
+it("keeps a keyword edit from restoring the current Cari wizard URL", () => {
+  window.history.replaceState(null, "", "/onboarding?baru=1&langkah=2");
+  const replace = vi.spyOn(window.history, "replaceState");
+  try {
+    render(wizard({
+      saveCari: async () => ({ ok: true, projectId: "import-project" }),
+      initial: {
+        step: 2, brand: "tukuliling kopi", keywords: ["tukuliling kopi"], sources: ["threads"], schedule,
+        originSearchId: "11111111-1111-4111-8111-111111111111",
+      },
+    }));
+    fireEvent.change(screen.getByLabelText("Variasi kata kunci"), { target: { value: "tukuliling" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tambahkan" }));
+    expect(screen.getByRole("checkbox", { name: /^tukuliling$/ })).toHaveProperty("checked", true);
+    expect(replace).not.toHaveBeenCalled();
+  } finally {
+    replace.mockRestore();
+  }
+});
