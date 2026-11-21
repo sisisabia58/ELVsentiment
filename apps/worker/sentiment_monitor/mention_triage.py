@@ -11,6 +11,7 @@ from sentiment_monitor.gemini import GeminiError, _run_short
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.opencode import OpenCodeClient, create_opencode
 from sentiment_monitor.providers.canonical import text_relevance
+from sentiment_monitor.relevance import normalize_match_text
 
 MAX_ATTEMPTS = 3
 DAILY_ADMISSIONS = 20
@@ -22,6 +23,15 @@ _ACTIONABILITY = ("actionable", "not_actionable", "unclear")
 _ATTRIBUTION = ("firsthand", "quoted", "repost", "hearsay", "unclear")
 _ISSUE_CATEGORIES = ("payment", "stock", "product_quality", "order_fulfillment", "service", "pricing", "other")
 _MODEL = re.compile(r"[A-Za-z0-9._-]{1,80}")
+_WORD = re.compile(r"[^\W_]+")
+_QUOTED = re.compile(r'''"[^"\n]+"|“[^”\n]+”|‘[^’\n]+’|(?<!\w)'[^'\n]+'(?!\w)''')
+_THIRD_PARTY = re.compile(
+    r"(?:^|(?<=[.!?])\s+|\n+)\s*(?:katanya\b|kata\s+(?:teman|orang|dia)\b|"
+    r"(?:aku |saya )?dengar\b|(?:i )?heard\b|someone (?:said|told me)\b|"
+    r"according to\b|(?:rt|via)\s+@|repost(?:ed)?\s*(?:from\b|dari\b|:|@))",
+    re.IGNORECASE,
+)
+_CLAUSE_END = re.compile(r"[.!?](?=\s|$)|\n")
 _SCHEMA = {
     "type": "object",
     "required": ["sentiment", "actionability", "source", "excerpt", "issue_category"],
@@ -94,6 +104,30 @@ def _deterministic(mention: TriageInput, tier: str) -> TriageDecision | None:
     return None
 
 
+def _has_firsthand_evidence(mention: TriageInput, excerpt: str) -> bool:
+    # The model assesses what happened. These gates catch name-only evidence
+    # and explicit quotation or third-party attribution around a real substring.
+    brand_words = set(_WORD.findall(normalize_match_text(" ".join(mention.terms))))
+    evidence_words = _WORD.findall(normalize_match_text(excerpt))
+    if len(set(evidence_words) - brand_words) < 2:
+        return False
+
+    for field in (mention.text, mention.title or ""):
+        # A title can duplicate text from the caption. In that case, keep the
+        # caption's attribution context when judging the excerpt.
+        if excerpt not in field:
+            continue
+        attributed = [(quote.start(), quote.end()) for quote in _QUOTED.finditer(field)]
+        for marker in _THIRD_PARTY.finditer(field):
+            end = _CLAUSE_END.search(field, marker.end())
+            attributed.append((marker.start(), end.end() if end else len(field)))
+        return any(
+            not any(match.start() < end and match.end() > start for start, end in attributed)
+            for match in re.finditer(re.escape(excerpt), field)
+        )
+    return False
+
+
 def _classify(mention: TriageInput, tier: str, client: OpenCodeClient, *, mention_id=None) -> TriageDecision:
     result = client.generate_json(
         system=_SYSTEM, schema=_SCHEMA, purpose="pantau_triage",
@@ -125,9 +159,13 @@ def _classify(mention: TriageInput, tier: str, client: OpenCodeClient, *, mentio
     if actionability == "actionable" and source == "firsthand":
         if excerpt is None or sentiment not in ("negative", "mixed"):
             raise GeminiError("invalid_response")
-        destination, reason = (
-            ("attention", "firsthand_complaint") if tier == "literal_match" else ("ambiguous", "relevance_unclear")
-        )
+        if not _has_firsthand_evidence(mention, excerpt):
+            destination, reason = "ambiguous", "complaint_unclear"
+            actionability = "unclear"
+        else:
+            destination, reason = (
+                ("attention", "firsthand_complaint") if tier == "literal_match" else ("ambiguous", "relevance_unclear")
+            )
     elif sentiment == "unclear" or actionability != "not_actionable":
         destination, reason = "ambiguous", "relevance_unclear" if tier == "all_words_match" else "complaint_unclear"
     else:

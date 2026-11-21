@@ -365,8 +365,11 @@ class OpenCodeClient:
             self._log_parse(payload, text, purpose, search_id)
             raise
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-        prompt = int(usage.get("prompt_tokens") or 0)
-        output = int(usage.get("completion_tokens") or 0)
+        try:
+            prompt = int(usage.get("prompt_tokens") or 0)
+            output = int(usage.get("completion_tokens") or 0)
+        except (TypeError, ValueError, OverflowError):
+            raise GeminiError("invalid_response") from None
         reported = payload.get("model")
         model = reported if isinstance(reported, str) and _MODEL_PATTERN.fullmatch(reported) else self.model
         _log.info(

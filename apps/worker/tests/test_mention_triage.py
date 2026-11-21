@@ -65,6 +65,41 @@ def test_invalid_output_cannot_create_attention(overrides):
         triage_mention(TriageInput(("tukuliling",), BODY), Classifier(**overrides))
 
 
+@pytest.mark.parametrize("text,excerpt", [
+    (f'Katanya "{BODY}"', BODY),
+    (f"Katanya {BODY}", BODY),
+    (f"RT @kopilokal: {BODY}", BODY),
+    (f"Tukuliling: “{BODY}”", BODY),
+    (f'Tukuliling: "{BODY}"', f'Tukuliling: "{BODY}"'),
+    ("Kopi Tukuliling enak", "Tukuliling"),
+    ("Kopi Tukuliling enak", "Kopi Tukuliling"),
+    ("Tukuliling Kopi", "Tukuliling Kopi"),
+    ("Someone said Tukuliling denied my refund", "denied my refund"),
+])
+def test_weak_or_attributed_evidence_stays_ambiguous(text, excerpt):
+    decision = triage_mention(TriageInput(("tukuliling", "tukuliling kopi"), text), Classifier(excerpt=excerpt))
+    assert (decision.destination, decision.reason, decision.actionability) == (
+        "ambiguous", "complaint_unclear", "unclear"
+    )
+
+
+def test_native_title_repeating_a_repost_is_not_independent_evidence():
+    mention = TriageInput(("tukuliling",), f"RT @kopilokal: {BODY}", BODY)
+    decision = triage_mention(mention, Classifier())
+    assert decision.destination == "ambiguous"
+
+
+@pytest.mark.parametrize("text,excerpt", [
+    ("Tukuliling: Stok habis", "Stok habis"),
+    ("Tukuliling: Refund denied", "Refund denied"),
+    ('Katanya "stok habis". Tukuliling charged me twice.', "charged me twice"),
+])
+def test_concrete_evidence_can_qualify_independently(text, excerpt):
+    decision = triage_mention(TriageInput(("tukuliling",), text), Classifier(excerpt=excerpt))
+    assert decision.destination == "attention"
+    assert decision.verified_excerpt == excerpt
+
+
 def seed_project(prod_db, count=1, *, pilot=True, seeded=False):
     project_id = uuid4()
     db = prod_db.admin

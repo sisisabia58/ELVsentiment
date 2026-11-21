@@ -220,6 +220,17 @@ def test_opencode_skips_a_decoy_brace_before_the_json_object():
     assert result.data == {"answer": "Antrean.", "citations": []}
 
 
+@pytest.mark.parametrize("bad_counter", ["invalid", {"raw": "provider details"}, float("inf")])
+def test_malformed_usage_returns_safe_provider_error(bad_counter):
+    def opener(request, timeout):
+        del request, timeout
+        return _Response(_chat('{"sentiment":"negative"}', usage={"prompt_tokens": bad_counter}))
+
+    client = create_opencode({"OPENCODE_API_KEY": KEY}, opener=opener)
+    with pytest.raises(GeminiError, match="^invalid_response$"):
+        client.generate_json(system="s", user="u", schema={}, purpose="pantau_triage")
+
+
 def test_blank_content_is_logged_without_the_reasoning_text(caplog):
     def opener(request, timeout):
         del request, timeout
