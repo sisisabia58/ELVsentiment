@@ -58,7 +58,7 @@ Names only; set real values in Railway. Do not commit values.
 
 ### Pantau triage pilot
 
-Set `PANTAU_FILTER_TRIAGE_ENABLED=1` on both the web and worker services after the web pre-deploy step applies migrations 019 and 020. The flag defaults to off. The worker uses its existing `OPENCODE_API_KEY` and `OPENCODE_MODEL`. Projects created from Cari enter the pilot when the owner chooses to import results.
+First apply migrations 019 and 020 through the web pre-deploy step, then deploy the revised worker. For the one-tenant pilot, use an isolated staging environment before setting `PANTAU_FILTER_TRIAGE_ENABLED=1` on web and worker. The flag defaults to off and exposes the opt-in to eligible customers in that environment. The worker uses its existing `OPENCODE_API_KEY` and `OPENCODE_MODEL`. Projects created from Cari enter the pilot when the owner chooses to import results.
 
 An import copies up to 20 eligible native posts from the existing search. Future collected posts join the same classification queue. The worker admits up to 20 OpenCode attempts per project per rolling 24 hours, including retries. With the flag off, queued work pauses and existing judgments and owner corrections remain available.
 
