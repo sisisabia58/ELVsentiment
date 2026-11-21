@@ -349,34 +349,38 @@ def test_instant_search_worker_thread_starts_and_stops(monkeypatch):
 
 
 def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
-    import time
+    from threading import Event
 
     # The cycle budget is 0.2s, under the production launch floor. Drop the
     # floor so this test actually starts the hung fetch and joins it.
     monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 0.5)
     launched: list[str] = []
+    release = Event()
+    provider_finished = Event()
 
     def hung(platform, keyword, settings, **kwargs):
         launched.append(platform)
         if platform == "youtube":
-            time.sleep(3)
+            release.wait(timeout=5)
+            provider_finished.set()
         return _fast_fetch(platform, keyword, settings, **kwargs)
 
-    started = time.monotonic()
-    processed = instant_search.run_instant_search_cycle(
-        prod_db.connect,
-        env={},
-        now=datetime.now(timezone.utc),
-        limits=None,
-        fetcher=hung,
-        deadline_seconds=0.2,
-    )
-    elapsed = time.monotonic() - started
+    try:
+        processed = instant_search.run_instant_search_cycle(
+            prod_db.connect,
+            env={},
+            now=datetime.now(timezone.utc),
+            limits=None,
+            fetcher=hung,
+            deadline_seconds=0.2,
+        )
+        assert not provider_finished.is_set(), "the cycle waited for the hung provider"
+    finally:
+        release.set()
     assert processed == 1
     assert launched, "the cycle returned before any route was launched"
     assert "youtube" in launched
-    assert elapsed < 0.2 + 0.5 + 0.5, elapsed
     view = prod_db.view(prod_db.search)
     assert view["search"]["status"] in ("partial", "failed"), view
     assert "youtube" not in view["counts"], view
@@ -838,7 +842,9 @@ def test_search_finishes_by_its_own_deadline_not_claim_plus_budget(prod_db, monk
     import time
 
     monkeypatch.setattr(instant_search, "ROUTE_TIMEOUT_SECONDS", 0.3)
-    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 1.0)
+    # The start-floor policy is tested separately. Exercise in-flight deadline
+    # handling even when the database takes more than 200ms to claim the row.
+    monkeypatch.setattr(instant_search, "MIN_LAUNCH_SECONDS", 0.0)
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=1.2)
     calls: list[str] = []

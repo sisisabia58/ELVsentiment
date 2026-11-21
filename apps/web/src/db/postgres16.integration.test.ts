@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { authenticateOwner, openSession, registerOwner } from "../auth/accounts";
 import { runNowAction } from "../app/dasbor/actions";
 import { saveVariantsAction } from "../app/onboarding/actions";
-import { createProject } from "../projects/handlers";
+import { createProject, saveProjectConfiguration } from "../projects/handlers";
 import { createInstantSearch } from "../monitor/search/mutations";
 import { saveProviderSetting } from "../monitor/search/provider-settings";
 import { type Queryable, withCustomer } from "./migrate";
@@ -421,16 +421,26 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
       expect((await asB("select id from projects")).rows).toEqual([]);
       expect((await asB("select id from keyword_variants")).rows).toEqual([]);
 
-      const previousToken = process.env.X_BEARER_TOKEN;
-      process.env.X_BEARER_TOKEN = "test-token";
+      const previousToken = process.env.SCRAPEATLAS_API_KEY;
+      process.env.SCRAPEATLAS_API_KEY = "fixture-key";
       let run: Awaited<ReturnType<typeof runNowAction>>;
       try {
+        const configured = await withClient((client) => saveProjectConfiguration(
+          client, ownerA.customerId, {
+            projectId: project.projectId,
+            brandName: "ayam geprek pak gembus",
+            variants: ["geprek gembus"],
+            sources: ["threads"],
+            schedule: { mode: "off", intervalHours: 6 },
+          }, undefined, { x: false, threads: true },
+        ));
+        expect(configured.ok).toBe(true);
         run = await withClient((client) =>
           runNowAction(project.projectId, { db: client, readSessionToken: async () => sessionA.token }),
         );
       } finally {
-        if (previousToken === undefined) delete process.env.X_BEARER_TOKEN;
-        else process.env.X_BEARER_TOKEN = previousToken;
+        if (previousToken === undefined) delete process.env.SCRAPEATLAS_API_KEY;
+        else process.env.SCRAPEATLAS_API_KEY = previousToken;
       }
       expect(run.ok).toBe(true);
       expect(
@@ -821,10 +831,12 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
       expect(count.rows[0].n).toBe(1);
       const sources = await withClient((client) =>
         withCustomer(client, owner.customerId, () =>
-          client.query<{ n: number }>("select count(*)::int as n from instant_search_sources"),
+          client.query<{ platform: string }>("select platform from instant_search_sources order by platform"),
         ),
       );
-      expect(sources.rows[0].n).toBe(7);
+      expect(sources.rows.map(({ platform }) => platform)).toEqual([
+        "facebook", "instagram", "linkedin", "reddit", "threads", "tiktok", "x", "youtube",
+      ]);
     } finally {
       await endPool();
       delete process.env.DATABASE_URL;
