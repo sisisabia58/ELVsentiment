@@ -13,11 +13,11 @@ export function pantauFilterTriageEnabled(env: Env = process.env): boolean {
 
 export async function readImportableSearch(db: Queryable, customerId: string, searchId: string) {
   if (!isUuid(searchId)) return null;
-  const found = await db.query<{ query_text: string; keyword_intent: string; relevance_version: number }>(
-    `select query_text, keyword_intent, relevance_version from instant_searches
+  const found = await db.query<{ id: string }>(
+    `select id from instant_searches
      where id = $1 and customer_id = $2 and status in ('succeeded', 'partial')
-       and finished_at is not null and retention_expires_at > now()`,
-    [searchId, customerId],
+       and finished_at is not null and retention_expires_at > now() and relevance_version >= $3`,
+    [searchId, customerId, SEARCH_RELEVANCE_VERSION],
   );
   return found.rows[0] ?? null;
 }
@@ -76,10 +76,9 @@ export async function seedProjectFromSearch({ db, customerId, projectId, searchI
     if (selected.length >= MAX_SEED_POSTS) break;
     if (!sources.has(post.platform) || !post.answered || post.web_index
         || !post.external_id.trim() || post.external_id.startsWith("url:")) continue;
-    const wasVisible = search.relevance_version >= SEARCH_RELEVANCE_VERSION
-      ? post.relevance === "literal_match" || post.relevance === "all_words_match"
-      : savedEvidenceRelevance(post, search.query_text, search.keyword_intent) !== null;
-    if (!wasVisible) continue;
+    if (post.relevance !== "literal_match" && post.relevance !== "all_words_match") continue;
+    // Check the retained caption/title against the final variants for admission.
+    // The worker makes the authoritative canonical relevance determination.
     const matched = variants.rows.filter(({ text, intent }) => savedEvidenceRelevance(post, text, intent));
     if (matched.length === 0) continue;
     // Cari snapshots store inline hashtags with the caption and title.
@@ -99,6 +98,7 @@ export async function seedProjectFromSearch({ db, customerId, projectId, searchI
     `with eligible_search as (
        select id from instant_searches where id = $3 and customer_id = $1
          and status in ('succeeded', 'partial') and finished_at is not null and retention_expires_at > now()
+         and relevance_version >= $5
      ), inserted as (
        insert into mentions (
          id, customer_id, project_id, source, external_id, excerpt, url, author, posted_at,
@@ -114,7 +114,7 @@ export async function seedProjectFromSearch({ db, customerId, projectId, searchI
        on conflict (customer_id, project_id, source, external_id) do nothing returning id
      )
      select exists (select 1 from eligible_search) as eligible, (select count(*)::int from inserted) as added`,
-    [customerId, projectId, searchId, JSON.stringify(selected)],
+    [customerId, projectId, searchId, JSON.stringify(selected), SEARCH_RELEVANCE_VERSION],
   );
   const result = inserted.rows[0];
   if (!result?.eligible) return { ...counts, skipped: posts.rows.length };

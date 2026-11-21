@@ -168,9 +168,9 @@ export async function monitorAsProjectForCustomer(input: {
       `insert into cari_onboarding_attempts (id, customer_id, search_id)
        select $1, customer_id, id from instant_searches
        where customer_id = $2 and id = $3 and status in ('succeeded', 'partial')
-         and finished_at is not null and retention_expires_at > now()
+         and finished_at is not null and retention_expires_at > now() and relevance_version >= $4
        returning id`,
-      [randomUUID(), input.customerId, input.searchId],
+      [randomUUID(), input.customerId, input.searchId, SEARCH_RELEVANCE_VERSION],
     );
     return attempt.rows[0]
       ? { ...ready, originSearchId: input.searchId, cariAttemptId: attempt.rows[0].id }

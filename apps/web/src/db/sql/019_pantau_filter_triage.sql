@@ -26,7 +26,7 @@ create policy cari_onboarding_attempts_insert on cari_onboarding_attempts
       select 1 from instant_searches s
       where s.id = cari_onboarding_attempts.search_id and s.customer_id = cari_onboarding_attempts.customer_id
         and s.status in ('succeeded', 'partial') and s.finished_at is not null
-        and s.retention_expires_at > now()
+        and s.retention_expires_at > now() and s.relevance_version >= 1
     )
   );
 
@@ -44,7 +44,7 @@ create policy mentions_cari_origin_insert on mentions as restrictive
         select 1 from instant_searches s
         where s.id = mentions.pantau_origin_search_id and s.customer_id = mentions.customer_id
           and s.status in ('succeeded', 'partial') and s.finished_at is not null
-          and s.retention_expires_at > now()
+          and s.retention_expires_at > now() and s.relevance_version >= 1
       )
     )
   );
@@ -60,3 +60,12 @@ grant insert (
 ) on mentions to worker_role;
 grant update (matched_variants, scoring_status, scoring_claimed_at, scoring_attempts)
   on mentions to worker_role;
+
+
+-- Preserve legacy application writers while keeping imported evidence stable.
+revoke update on mentions from app_user;
+grant update (
+  id, customer_id, project_id, source, external_id, excerpt, url, author,
+  posted_at, collected_at, matched_variants, scoring_status, source_post_unavailable,
+  read_at, scoring_claimed_at, scoring_attempts
+) on mentions to app_user;

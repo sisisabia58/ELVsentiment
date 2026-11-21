@@ -175,15 +175,16 @@ export async function saveProjectConfiguration(
   return withCustomer(db, customerId, async () => {
     let originSearchId: string | undefined;
     if (cari) {
-      const attempt = await db.query<{ search_id: string }>(
-        "select search_id from cari_onboarding_attempts where id = $1 and customer_id = $2 and expires_at > now()",
+      const attempt = await db.query<{ search_id: string; unexpired: boolean }>(
+        `select search_id, expires_at > now() as unexpired
+         from cari_onboarding_attempts where id = $1 and customer_id = $2`,
         [input.projectId, customerId],
       );
       if (!attempt.rows[0]) {
         return { ok: false as const, error: "Draf proyek sudah tidak tersedia. Buka kembali pengaturan proyek dari Cari sekarang." };
       }
       const searchId = attempt.rows[0].search_id;
-      if (cari.importSearchPosts && pantauFilterTriageEnabled()
+      if (attempt.rows[0].unexpired && cari.importSearchPosts && pantauFilterTriageEnabled()
           && sources.some((source) => PANTAU_TRIAGE_SOURCES.includes(source))
           && await readImportableSearch(db, customerId, searchId)) {
         originSearchId = searchId;
