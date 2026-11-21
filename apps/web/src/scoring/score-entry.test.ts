@@ -114,13 +114,9 @@ function cmdline(pid: number): string {
 }
 
 function childPids(pid: number): number[] {
-  try {
-    const text = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
-    if (!text) return [];
-    return text.split(/\s+/).map((value) => Number(value)).filter((value) => value > 0);
-  } catch {
-    return [];
-  }
+  // Some kernels omit /proc/<pid>/task/<tid>/children.
+  const children = spawnSync("ps", ["-o", "pid=", "--ppid", String(pid)], { encoding: "utf8" });
+  return (children.stdout ?? "").trim().split(/\s+/).map(Number).filter((value) => value > 0);
 }
 
 function walkPids(pid: number): number[] {

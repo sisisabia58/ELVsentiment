@@ -585,16 +585,13 @@ def test_oversized_credit_headers_are_unknown_and_do_not_leave_the_search_runnin
     assert [row["credits_charged"] for row in ledger] == [None, None], ledger
 
 
-def _eight_platform_fetch(*, poison_date: str | None = None, delay: float = 0.0):
+def _eight_platform_fetch(*, poison_date: str | None = None):
     from dataclasses import replace
-    import time
 
     calls: list[str] = []
 
     def fetch(platform, keyword, settings, **kwargs):
         calls.append(platform)
-        if delay:
-            time.sleep(delay)
         posts = [_post(platform, f"{platform}-{index}") for index in range(3)]
         if platform == "youtube" and poison_date is not None:
             posts[0] = replace(posts[0], published_at=poison_date)
@@ -807,16 +804,18 @@ def _poll_once(prod_db, fetcher, *, deadline_seconds=instant_search.SEARCH_DEADL
 
 
 def test_eight_platform_routes_run_in_one_wave(prod_db):
-    import time
+    from threading import Barrier
 
     prod_db.admin.execute("delete from instant_searches")
     search_id = _queue_search(prod_db, "barayam", deadline_seconds=30)
-    fetcher, calls = _eight_platform_fetch(delay=0.4)
+    fetcher, calls = _eight_platform_fetch()
+    wave = Barrier(8, timeout=5)
 
-    started = time.monotonic()
-    _poll_once(prod_db, fetcher)
-    elapsed = time.monotonic() - started
-    assert elapsed < 0.7, elapsed
+    def fetch_in_wave(*args, **kwargs):
+        wave.wait()
+        return fetcher(*args, **kwargs)
+
+    _poll_once(prod_db, fetch_in_wave)
     assert sorted(calls) == sorted(
         ["threads", "tiktok", "instagram", "youtube", "reddit", "facebook", "linkedin", "x"]
     )

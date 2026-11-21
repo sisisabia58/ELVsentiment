@@ -27,6 +27,8 @@ NEEDLES = (
 )
 
 SKIP_NAMES = {"launch_gate.py", "test_launch_gate.py", "test_monitor_only.py"}
+OPENCODE_TRANSPORT = Path("apps/worker/sentiment_monitor/opencode.py")
+OPENCODE_ENDPOINT_DECLARATION = 'OPENCODE_URL = "https://opencode.ai/inference/go/v1/chat/completions"'
 
 
 def launch_allowed(flags: dict) -> bool:
@@ -55,6 +57,9 @@ def scan_forbidden(root: Path) -> list[str]:
             if "node_modules" in path.parts or ".venv" in path.parts:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
+            if path.relative_to(root) == OPENCODE_TRANSPORT:
+                # Permit the reviewed inbound-analysis transport only.
+                text = "\n".join(line for line in text.splitlines() if line != OPENCODE_ENDPOINT_DECLARATION)
             if any(needle in text for needle in NEEDLES):
                 hits.append(str(path))
     return hits

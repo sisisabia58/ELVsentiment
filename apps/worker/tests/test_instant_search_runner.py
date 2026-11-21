@@ -419,9 +419,11 @@ def test_deadline_path_joins_started_route_threads_with_a_bound(db, monkeypatch)
 def test_runner_keeps_answered_sources_when_another_fails(db):
     from sentiment_monitor.providers.canonical import PlatformFetch
 
-    def mixed(platform, *args, **kwargs):
+    def mixed(platform, *args, collected_at, **kwargs):
         if platform == "youtube":
-            return PlatformFetch("youtube", "scrapeatlas", [post()], [], "answered", "ok", 10)
+            return PlatformFetch(
+                "youtube", "scrapeatlas", [replace(post(), published_at=collected_at)], [], "answered", "ok", 10
+            )
         return PlatformFetch(platform, "scrapeatlas", [], [], "failed", "http_500", 10)
 
     job = claim_instant_search(db, "worker-1")
@@ -677,12 +679,14 @@ def test_comments_follow_the_visible_order_and_skip_posts_with_no_replies(db):
     shown = replace(post("threads", "shown"), text="barayam enak", views=2, replies=4)
     unknown = replace(post("threads", "unknown"), text="barayam juga", views=0, replies=None)
 
-    def fetcher(platform, *args, **kwargs):
+    def fetcher(platform, *args, collected_at, **kwargs):
         del args, kwargs
         if platform != "threads":
             return PlatformFetch(platform, "scrapeatlas", [], [], "unavailable", "unavailable", 10)
         return PlatformFetch(
-            platform, "scrapeatlas", [viral, quiet, shown, unknown], [], "answered", "ok", 10
+            platform, "scrapeatlas",
+            [replace(item, published_at=collected_at) for item in (viral, quiet, shown, unknown)],
+            [], "answered", "ok", 10,
         )
 
     def comment_fetch(platform, item, **kwargs):
@@ -773,11 +777,12 @@ def test_slow_source_does_not_block_comments_for_fast_platforms(db, monkeypatch,
     caplog.set_level(logging.INFO, logger="sentiment_monitor.instant_search")
     calls: list[str] = []
 
-    def fetcher(platform, *args, **kwargs):
+    def fetcher(platform, *args, collected_at, **kwargs):
         del args, kwargs
         if platform == "reddit":
             time.sleep(0.35)
-        return PlatformFetch(platform, "scrapeatlas", [post(platform, f"{platform}-1")], [], "answered", "ok", 10)
+        item = replace(post(platform, f"{platform}-1"), published_at=collected_at)
+        return PlatformFetch(platform, "scrapeatlas", [item], [], "answered", "ok", 10)
 
     def comment_fetch(platform, item, **kwargs):
         del item, kwargs
