@@ -1,6 +1,6 @@
 import type { Queryable } from "../../db/migrate";
 import { withCustomer } from "../../db/migrate";
-import { cariMoreEnabled } from "./feature";
+import { cariMoreEnabled, cariMorePlatformEnabled } from "./feature";
 import { loadMoreSources, type MoreSourceState } from "./more-source";
 import { isUuid } from "./search-id";
 import { savedEvidenceRelevance, SEARCH_RELEVANCE_VERSION } from "./relevance";
@@ -297,7 +297,8 @@ export async function loadSearchSnapshot(
     const sources: SnapshotSource[] = sourceRows.rows
       .map((source) => ({
         platform: source.platform,
-        ...(moreSources?.[source.platform] ? { more: moreSources[source.platform] } : {}),
+        ...(moreSources?.[source.platform] && cariMorePlatformEnabled(source.platform)
+          ? { more: moreSources[source.platform] } : {}),
         state: source.state,
         resultCount: counts.get(source.platform) ?? 0,
         latencyMs: source.latency_ms,

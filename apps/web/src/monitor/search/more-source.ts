@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { withCustomer, type Queryable } from "@/db/migrate";
-import { cariMoreEnabled, type Env } from "./feature";
+import { cariMoreEnabled, cariMorePlatformEnabled, type Env } from "./feature";
 import { startOfJakartaDay } from "./filters";
 import { isUuid } from "./search-id";
 import { SEARCH_RELEVANCE_VERSION } from "./relevance";
@@ -30,6 +30,7 @@ export async function requestMoreSource(input: {
   if (!cariMoreEnabled(input.env)) return { ok: false, error: "disabled" };
   const { db, customerId, searchId, platform, generation } = input;
   if (!isUuid(searchId) || typeof platform !== "string" || !PLATFORMS.has(platform) ||
+      !cariMorePlatformEnabled(platform, input.env) ||
       typeof generation !== "number" || !Number.isInteger(generation) || generation < 0 || generation >= PAGE_CAP) {
     return { ok: false, error: "unavailable" };
   }

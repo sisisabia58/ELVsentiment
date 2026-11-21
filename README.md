@@ -45,6 +45,7 @@ Names only; set real values in Railway. Do not commit values.
 
 - `CARI_SEKARANG_ENABLED` — off by default. Only `1`/`true` enables the `/cari` pages, the polling route, and the nav entry.
 - `CARI_MORE_ENABLED` — off by default. Apply migration 021 before enabling it on both web and worker. Eligible ScrapeAtlas searches can request up to three extra pages per source while the original cursor is valid. Additional requests share a separate per-customer daily cap set by `CARI_DAILY_SEARCH_LIMIT`. The worker records provider usage in the ledger.
+- `CARI_MORE_PLATFORMS` — optional comma-separated list such as `tiktok,reddit`. Use the same list on web and worker to limit rollout to sources verified on staging.
 - `CARI_PROVIDER_MODE` — live by default. Fixture data is used only when this is explicitly `fixture`.
 - `CARI_AI_PROVIDER` — defaults to `demo` when unset. `demo` writes a zero-cost summary and hides summary, stance, quote, theme, and question UI. `gemini` and `opencode` show that UI and call that provider. `off` stores no summary.
 - `GEMINI_API_KEY` — required only when `CARI_AI_PROVIDER=gemini`. A missing key marks the summary failed and still shows the posts.

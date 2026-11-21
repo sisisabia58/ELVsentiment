@@ -30,10 +30,10 @@ beforeAll(async () => {
 
 afterAll(() => pg.close());
 
-function request(customerId = owner, platform = "tiktok", generation = 0, enabled = true) {
+function request(customerId = owner, platform = "tiktok", generation = 0, enabled = true, allowlist?: string) {
   return requestMoreSource({
     db, customerId, searchId: search, platform, generation, dailyLimit: 20,
-    env: { CARI_SEKARANG_ENABLED: "1", CARI_MORE_ENABLED: enabled ? "1" : "0" },
+    env: { CARI_SEKARANG_ENABLED: "1", CARI_MORE_ENABLED: enabled ? "1" : "0", CARI_MORE_PLATFORMS: allowlist },
   });
 }
 
@@ -42,6 +42,7 @@ it("admits eligible owner requests once and exposes only the public job state", 
   expect(await request(owner, "youtube")).toEqual({ ok: false, error: "unavailable" });
   expect(await request(owner, "tiktok", 0, false)).toEqual({ ok: false, error: "disabled" });
   expect(await request(owner, "tiktok", 1)).toEqual({ ok: false, error: "unavailable" });
+  expect(await request(owner, "tiktok", 0, true, "reddit, youtube")).toEqual({ ok: false, error: "unavailable" });
   const job = await request();
   expect(job).toMatchObject({ ok: true });
   expect(await request()).toEqual(job);
@@ -74,6 +75,10 @@ it("admits eligible owner requests once and exposes only the public job state", 
     expect(expanded).toMatchObject({ hasMoreResults: true, totals: { results: 1 } });
     expect(expanded?.sources.find((source) => source.platform === "tiktok")?.more)
       .toEqual({ state: "exhausted", generation: 1, added: 1 });
+    vi.stubEnv("CARI_MORE_PLATFORMS", "reddit, youtube");
+    const partial = await loadSearchSnapshot(db, owner, search);
+    expect(partial?.hasMoreResults).toBe(true);
+    expect(partial?.sources.find((source) => source.platform === "tiktok")?.more).toBeUndefined();
     vi.stubEnv("CARI_MORE_ENABLED", "0");
     const controlsOff = await loadSearchSnapshot(db, owner, search);
     expect(controlsOff).toMatchObject({ hasMoreResults: true, totals: { results: 1 } });
