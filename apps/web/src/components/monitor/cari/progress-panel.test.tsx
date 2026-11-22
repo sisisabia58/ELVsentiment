@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot } from "@/monitor/search/load";
 import { ProgressPanel } from "./progress-panel";
@@ -61,6 +61,21 @@ const snapshotWithStates = snapshot({
 });
 
 describe("ProgressPanel", () => {
+  it("keeps the additional search action with the source status", () => {
+    const request = vi.fn();
+    const sources = snapshotWithStates.sources.map((source) => source.platform === "tiktok"
+      ? { ...source, safeDetail: "partial_coverage", more: { state: "available" as const, generation: 1, added: 1 } }
+      : source);
+    render(<ProgressPanel snapshot={snapshot({ sources })} moreActions={{ request, busy: () => false, errors: {} }} />);
+
+    const tiktok = within(screen.getByRole("group", { name: "Status dan tindakan TikTok" }));
+    expect(tiktok.getByText("Cakupan sebagian")).toBeTruthy();
+    expect(tiktok.getByText("+1 hasil cocok")).toBeTruthy();
+    act(() => tiktok.getByRole("button", { name: "Cari lagi di TikTok" }).click());
+    expect(request).toHaveBeenCalledExactlyOnceWith("tiktok", 1);
+  });
+
+
   it("renders searching, answered, and unavailable source states", () => {
     render(<ProgressPanel snapshot={snapshotWithStates} now={new Date("2026-11-16T10:00:14Z")} />);
     expect(screen.getByText("Mencari sumber")).toBeTruthy();

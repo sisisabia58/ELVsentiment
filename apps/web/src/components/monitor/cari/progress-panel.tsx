@@ -57,7 +57,7 @@ function DotMap(props: { total: number; done: number }) {
   );
 }
 
-function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: MoreSourceActions }) {
+function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: MoreSourceActions; hasMoreControls: boolean }) {
   const source = props.source;
   const label = STATE_LABEL[source.state] ?? source.state;
   const width = source.resultCount > 0 ? Math.max(4, Math.round((source.resultCount / props.max) * 100)) : 0;
@@ -67,10 +67,36 @@ function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: M
       : source.state === "searching" || source.state === "queued"
         ? "…"
         : "—";
+  const sourceStatus = (
+    <span className="min-w-0 wrap-anywhere text-right text-[11px] leading-tight text-muted-foreground">
+      {source.safeDetail === "hashtag_only" ? (
+        <span>Hanya mendukung tagar</span>
+      ) : source.safeDetail === "partial_coverage" ? (
+        <span>Cakupan sebagian</span>
+      ) : source.safeDetail === "web_index_selection" ? (
+        <span>Cakupan indeks terbatas</span>
+      ) : source.state === "answered" && source.resultCount === 0 ? (
+        <span className="font-medium text-foreground">Selesai · 0 hasil</span>
+      ) : source.state === "answered" ? (
+        <span>
+          <span className="font-medium text-foreground">Selesai</span> · {latency}
+        </span>
+      ) : source.state === "searching" || source.state === "queued" ? (
+        <span>Mencari</span>
+      ) : source.safeDetail === "deadline" ? (
+        <span>waktu habis</span>
+      ) : (
+        label
+      )}
+    </span>
+  );
   return (
     <div
       className={cn(
-        "grid grid-cols-[10px_minmax(74px,102px)_minmax(0,1fr)_24px_minmax(60px,110px)] lg:grid-cols-[14px_112px_minmax(0,1fr)_32px_132px] items-center gap-2 text-[13px]",
+        "grid items-center text-[13px]",
+        props.hasMoreControls
+          ? "grid-cols-[8px_minmax(68px,90px)_minmax(0,1fr)_20px_minmax(110px,138px)] gap-1.5 @min-[520px]:grid-cols-[14px_112px_minmax(0,1fr)_32px_220px] @min-[520px]:gap-2"
+          : "grid-cols-[10px_minmax(74px,102px)_minmax(0,1fr)_24px_minmax(60px,110px)] gap-2 lg:grid-cols-[14px_112px_minmax(0,1fr)_32px_132px]",
         (source.state === "unavailable" || source.state === "failed") && "opacity-70",
       )}
     >
@@ -97,32 +123,9 @@ function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: M
         ) : null}
       </div>
       <span className="text-right tabular-nums">{source.state === "answered" ? source.resultCount : "—"}</span>
-      <span className="text-right text-[11px] text-muted-foreground">
-        {source.safeDetail === "hashtag_only" ? (
-          <span>Hanya mendukung tagar</span>
-        ) : source.safeDetail === "partial_coverage" ? (
-          <span>Cakupan sebagian</span>
-        ) : source.safeDetail === "web_index_selection" ? (
-          <span>Cakupan indeks terbatas</span>
-        ) : source.state === "answered" && source.resultCount === 0 ? (
-          <span className="font-medium text-foreground">Selesai · 0 hasil</span>
-        ) : source.state === "answered" ? (
-          <span>
-            <span className="font-medium text-foreground">Selesai</span> · {latency}
-          </span>
-        ) : source.state === "searching" || source.state === "queued" ? (
-          <span>Mencari</span>
-        ) : source.safeDetail === "deadline" ? (
-          <span>waktu habis</span>
-        ) : (
-          label
-        )}
-      </span>
       {source.more && props.moreActions ? (
-        <div className="col-span-full">
-          <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} compact />
-        </div>
-      ) : null}
+        <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} sourceStatus={sourceStatus} />
+      ) : sourceStatus}
     </div>
   );
 }
@@ -132,6 +135,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
   const now = props.now ?? new Date();
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
+  const hasMoreControls = Boolean(props.moreActions && snapshot.sources.some((source) => source.more));
   const max = Math.max(1, ...snapshot.sources.map((source) => source.resultCount));
   const finished = ["succeeded", "partial", "failed"].includes(snapshot.search.status);
   const running = !finished;
@@ -206,7 +210,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
             </div>
           </div>
         </div>
-        <div className="p-5">
+        <div className="@container p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="flex items-center gap-2 text-[15px] font-semibold text-foreground">
               {running ? (
@@ -219,7 +223,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
           </div>
           <div className="mt-4 space-y-2.5">
             {snapshot.sources.map((source) => (
-              <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} />
+              <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} hasMoreControls={hasMoreControls} />
             ))}
           </div>
         </div>
