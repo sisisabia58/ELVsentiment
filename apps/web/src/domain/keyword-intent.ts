@@ -3,6 +3,7 @@ export type KeywordIntent = "phrase" | "hashtag";
 export type Keyword = { text: string; intent: KeywordIntent };
 
 const ROUTE_COUNT: Record<string, Record<KeywordIntent, number>> = {
+  x: { phrase: 1, hashtag: 1 },
   threads: { phrase: 1, hashtag: 1 },
   instagram: { phrase: 2, hashtag: 2 },
   tiktok: { phrase: 3, hashtag: 2 },

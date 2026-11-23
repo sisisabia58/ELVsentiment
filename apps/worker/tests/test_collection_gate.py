@@ -41,13 +41,13 @@ _ROWS = [
     (False, "shared_operator", True, "yes", "yes", 2, set()),
     (False, "shared_operator", False, "yes", "yes", 2, set()),
     (True, "per_customer", True, "yes", "yes", 2, set()),
-    (True, "shared_operator", False, "no", "yes", 0, {"threads", "instagram", "tiktok"}),
-    (True, "shared_operator", False, "yes", "yes", 0, {"threads", "instagram", "tiktok"}),
+    (True, "shared_operator", False, "no", "yes", 0, {"x", "threads", "instagram", "tiktok"}),
+    (True, "shared_operator", False, "yes", "yes", 0, {"x", "threads", "instagram", "tiktok"}),
     (True, "shared_operator", False, "no", "no", 0, set()),
     (True, "shared_operator", False, "yes", "no", 0, set()),
-    (True, "shared_operator", True, "no", "yes", 0, {"threads", "instagram", "tiktok"}),
+    (True, "shared_operator", True, "no", "yes", 0, {"x", "threads", "instagram", "tiktok"}),
     (True, "shared_operator", True, "yes", "no", 0, set()),
-    (True, "shared_operator", True, "yes", "yes", 0, {"threads", "instagram", "tiktok"}),
+    (True, "shared_operator", True, "yes", "yes", 0, {"x", "threads", "instagram", "tiktok"}),
     (True, "shared_operator", True, "no", "no", 0, set()),
     (True, "shared_operator", True, "blank", "blank", 0, set()),
 ]
@@ -74,20 +74,20 @@ def test_gate_ignores_x_budget_and_sources_follow_tokens(
     assert sources_allowed(root, _env(x_token, sc_token)) == expected_allowed
 
 
-def test_atlas_api_key_enables_threads_instagram_and_tiktok_when_credential_policy_approved() -> None:
+def test_atlas_api_key_enables_all_monitoring_sources_when_credential_policy_approved() -> None:
     root = Path(__file__).resolve().parents[3]
 
     allowed = collect_once.sources_allowed(root, {"SCRAPEATLAS_API_KEY": "sc-live-key"})
 
-    assert allowed == {"threads", "instagram", "tiktok"}
+    assert allowed == {"x", "threads", "instagram", "tiktok"}
 
 
-def test_threads_remains_available_when_x_budget_is_unapproved(tmp_path) -> None:
+def test_scrapeatlas_x_uses_the_shared_budget_instead_of_direct_x_approval(tmp_path) -> None:
     root = _root(tmp_path, True, "shared_operator", False)
 
     allowed = collect_once.sources_allowed(root, {"SCRAPEATLAS_API_KEY": "sc-token"})
 
-    assert allowed == {"threads", "instagram", "tiktok"}
+    assert allowed == {"x", "threads", "instagram", "tiktok"}
 
 
 class _LoopWorld:
@@ -150,7 +150,7 @@ class _LoopConn:
         return None
 
 
-def test_threads_fetch_runs_without_an_approved_x_budget(tmp_path, monkeypatch):
+def test_threads_and_x_fetch_without_an_approved_direct_x_budget(tmp_path, monkeypatch):
     monkeypatch.delenv("X_BEARER_TOKEN", raising=False)
     monkeypatch.setenv("SCRAPEATLAS_API_KEY", "test-sc-token")
     root = _root(tmp_path, True, "shared_operator", False)
@@ -179,7 +179,7 @@ def test_threads_fetch_runs_without_an_approved_x_budget(tmp_path, monkeypatch):
             fetch_threads,
         )
 
-    assert [item for item in fetched if item == "x"] == []
+    assert [item for item in fetched if item == "x"] == ["x"]
     threads_fetches = [item for item in fetched if isinstance(item, tuple)]
     assert len(threads_fetches) == 1
     assert any(
@@ -256,7 +256,7 @@ def test_cap_blocks_the_request_before_fetch(tmp_path, monkeypatch):
     assert not any("insert into scheduled_provider_calls" in sql for sql in statements)
 
 
-def test_mixed_selection_admits_only_scheduled_atlas_platform(tmp_path, monkeypatch):
+def test_mixed_selection_admits_x_through_the_shared_scrapeatlas_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("X_BEARER_TOKEN", "test-x-token")
     monkeypatch.setenv("SCRAPEATLAS_API_KEY", "test-sc-token")
     root = _root(tmp_path, True, "shared_operator", True)
@@ -273,10 +273,8 @@ def test_mixed_selection_admits_only_scheduled_atlas_platform(tmp_path, monkeypa
 
     _serve_until_sleep(world, root, fetch_x, fetch_threads)
 
-    assert fetched == ["threads"]
-    statements = _statements(world)
-    thread_inserts = [index for index, sql in enumerate(statements) if "insert into scheduled_provider_calls" in sql]
-    x_inserts = [index for index, sql in enumerate(statements) if "insert into x_read_counters" in sql]
-    assert len(thread_inserts) == 1
-    assert len(x_inserts) == 0
+    assert set(fetched) == {"x", "threads"}
+    reservations = [params[2] for sql, params in world.calls if "insert into scheduled_provider_calls" in sql.lower()]
+    assert sorted(reservations) == ["threads", "x"]
+    assert not any("insert into x_read_counters" in sql for sql in _statements(world))
 

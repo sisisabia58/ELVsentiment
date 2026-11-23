@@ -1243,12 +1243,19 @@ def test_concurrent_scheduled_reservations_share_one_request_cap(pg16):
             return reserve_scheduled_call(CursorRowAdapter(conn), JOB_A, platform, 1)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first, second = pool.map(reserve, ["threads", "instagram"])
+        first, second = pool.map(reserve, ["threads", "x"])
     assert (first is None) != (second is None)
     call_id = first or second
     assert pg16.execute("select credits_charged, outcome from scheduled_provider_calls").fetchall() == [(None, "reserved")]
     finish_scheduled_call(CursorRowAdapter(pg16), call_id, "partial", 2, 200)
     assert pg16.execute("select credits_charged, outcome from scheduled_provider_calls").fetchall() == [(2, "partial")]
+
+    x_call = reserve_scheduled_call(CursorRowAdapter(pg16), JOB_A, "x", 2)
+    assert x_call is not None
+    finish_scheduled_call(CursorRowAdapter(pg16), x_call, "success", 1, 200)
+    assert pg16.execute(
+        "select platform, outcome, credits_charged from scheduled_provider_calls where id = %s", (x_call,)
+    ).fetchone() == ("x", "success", 1)
 
 
 def test_route_migration_as_owner_without_bypassrls(pg16):

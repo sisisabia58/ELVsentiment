@@ -31,6 +31,6 @@ describe("keyword intent", () => {
     expect(requestCount([phrase], ["threads", "instagram", "tiktok"])).toBe(6);
     expect(requestCount([hashtag], ["threads", "instagram", "tiktok"])).toBe(5);
     expect(requestCount([phrase, hashtag], ["threads", "instagram", "tiktok"])).toBe(11);
-    expect(requestCount([phrase], ["x"])).toBe(0);
+    expect(requestCount([phrase, hashtag], ["x"])).toBe(2);
   });
 });

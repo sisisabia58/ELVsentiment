@@ -1109,8 +1109,7 @@ def serve(
     fetch_instagram: Callable[[str], Any] | None = None,
     fetch_tiktok: Callable[[str], Any] | None = None,
 ) -> None:
-    # Keep the historical injection signature for callers; scheduled X has no admitted route.
-    del fetch_x
+    fetchers = {"threads": fetch_threads, "instagram": fetch_instagram, "tiktok": fetch_tiktok, "x": fetch_x}
     if monotonic is None:
         monotonic = time.monotonic
     interval = _heartbeat_log_seconds(heartbeat_log_seconds)
@@ -1180,7 +1179,6 @@ def serve(
                             )
                             for variant in job["variants"]:
                                 key = f"{job['customer_id']}:{job['project_id']}:{variant}"
-                                fetchers = {"threads": fetch_threads, "instagram": fetch_instagram, "tiktok": fetch_tiktok}
                                 for source, fetcher in fetchers.items():
                                     if source not in sources or fetcher is None:
                                         continue
@@ -1397,7 +1395,7 @@ if __name__ == "__main__":
 
     serve(
         connect, time.sleep, limits, worker_id, root,
-        fetch_x=None,
+        fetch_x=partial(scheduled_fetch, "x"),
         fetch_threads=partial(scheduled_fetch, "threads"),
         fetch_instagram=partial(scheduled_fetch, "instagram"),
         fetch_tiktok=partial(scheduled_fetch, "tiktok"),

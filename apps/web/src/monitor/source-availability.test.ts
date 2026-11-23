@@ -11,7 +11,7 @@ import { sourceStatusLines } from "./source-status";
 afterEach(cleanup);
 
 describe("source availability without an X token", () => {
-  it("reports Threads from its token and leaves X unavailable", () => {
+  it("uses the ScrapeAtlas key for X and the other scheduled sources", () => {
     expect(sourceCredentials({ THREADS_ACCESS_TOKEN: "test-threads-token" })).toEqual({
       x: false,
       threads: false,
@@ -20,11 +20,10 @@ describe("source availability without an X token", () => {
     });
     expect(
       sourceCredentials({
-        X_BEARER_TOKEN: "x-token",
         SCRAPEATLAS_API_KEY: "sa-key",
       }),
     ).toEqual({
-      x: false,
+      x: true,
       threads: true,
       instagram: true,
       tiktok: true,

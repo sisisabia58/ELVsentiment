@@ -430,9 +430,9 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
             projectId: project.projectId,
             brandName: "ayam geprek pak gembus",
             variants: ["geprek gembus"],
-            sources: ["threads"],
+            sources: ["x"],
             schedule: { mode: "off", intervalHours: 6 },
-          }, undefined, { x: false, threads: true },
+          }, undefined, { x: true, threads: false },
         ));
         expect(configured.ok).toBe(true);
         run = await withClient((client) =>

@@ -26,7 +26,7 @@ def sources_allowed(root: Path, env: Mapping[str, str]) -> set[str]:
         return set()
 
     if str(env.get("SCRAPEATLAS_API_KEY") or "").strip():
-        return {"threads", "instagram", "tiktok"}
+        return {"x", "threads", "instagram", "tiktok"}
     return set()
 
 

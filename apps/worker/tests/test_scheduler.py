@@ -538,27 +538,17 @@ class _SecondXPageCapped(_LoopConn):
 
 
 
-def test_one_pass_reads_the_cursor_and_commits_it_with_the_mentions(tmp_path):
+def test_scheduled_x_fetches_fresh_without_a_legacy_cursor(tmp_path):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus"], cursor="cursor-1")
     seen = {}
 
-    def fetch_x(variant, limit, cursor, since=None, since_id=None):
-        seen["x"] = (variant, limit, cursor, since, since_id)
-        return (
-            [{
-                "external_id": "100",
-                "excerpt": "geprek gembus",
-                "url": "https://x.com/i/status/100",
-                "author": "ani",
-                "posted_at": "2026-11-01T00:00:00+00:00",
-                "variant": variant,
-            }],
-            "cursor-2",
-        )
+    def fetch_x(variant):
+        seen["x"] = variant
+        return [], None
 
     def fetch_threads(variant):
         seen["threads"] = variant
-        return ([], None)
+        return [], None
 
     def stop(seconds):
         seen["slept"] = seconds
@@ -568,15 +558,13 @@ def test_one_pass_reads_the_cursor_and_commits_it_with_the_mentions(tmp_path):
     with pytest.raises(SystemExit):
         serve(world.connect, stop, limits, "worker-1", _policy_root(tmp_path, True), fetch_x, fetch_threads)
 
-    assert seen["slept"] == 20
-    assert "x" not in seen
-    assert seen["threads"] == "geprek gembus"
+    assert seen == {"slept": 20, "x": "geprek gembus", "threads": "geprek gembus"}
 
 
 def test_job_succeeds_only_after_every_variant_is_stored(tmp_path):
     world = LoopWorld(jobs=[_due_job()], variants=["geprek gembus", "ayam geprek"], cursor=None)
 
-    def fetch_x(variant, limit, cursor, since=None, since_id=None):
+    def fetch_post(variant):
         return (
             [{
                 "external_id": "100" if variant == "geprek gembus" else "200",
@@ -589,19 +577,16 @@ def test_job_succeeds_only_after_every_variant_is_stored(tmp_path):
             None,
         )
 
-    def fetch_threads(variant):
-        return fetch_x(variant, 10, None)
-
     def stop(seconds):
         raise SystemExit
 
     limits = load_limits(Path("config/limits.json"), {})
     with pytest.raises(SystemExit):
-        serve(world.connect, stop, limits, "worker-1", _policy_root(tmp_path, True), fetch_x, fetch_threads)
+        serve(world.connect, stop, limits, "worker-1", _policy_root(tmp_path, True), fetch_post, fetch_post)
 
     succeeded = [index for index, (sql, _params) in enumerate(world.calls) if "status = 'succeeded'" in sql.lower()]
     mentions = [index for index, (sql, _params) in enumerate(world.calls) if "insert into mentions" in sql.lower()]
-    assert len(mentions) == 2
+    assert len(mentions) == 4
     assert succeeded == [index for index in succeeded if index > mentions[-1]]
     assert len(succeeded) == 1
     sql_text = "\n".join(sql for sql, _params in world.calls)

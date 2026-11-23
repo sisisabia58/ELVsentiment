@@ -498,3 +498,30 @@ def test_reddit_recovers_native_permalink_from_id_without_using_submitted_url():
         ]}),
     )
     assert [post.url for post in result.posts] == ["https://www.reddit.com/comments/abc123/", None]
+
+def test_scheduled_x_uses_the_scrapeatlas_route_without_storing_a_page_cursor():
+    from urllib.parse import parse_qs, urlsplit
+    from sentiment_monitor.intent import Keyword
+    from sentiment_monitor.scheduler import scheduled_fetch
+
+    def opener(request, **_):
+        url = urlsplit(request.full_url)
+        assert url.path == "/v1/twitter/search/posts"
+        assert parse_qs(url.query) == {"query": ["#tukuliling"]}
+        return Response({
+            "success": True,
+            "cursor": "serper:2",
+            "posts": [
+                {"rest_id": "1234567890", "legacy": {"full_text": "Cobain #tukuliling",
+                    "created_at": "Fri Nov 20 12:00:00 +0000 2026"}},
+                {"rest_id": "9876543210", "legacy": {"full_text": "Lama #tukuliling",
+                    "created_at": "Fri Nov 06 12:00:00 +0000 2026"}},
+            ],
+        }, headers={"x-credits-charged": "1"})
+
+    result = scheduled_fetch("x", Keyword("#tukuliling", "hashtag"), api_key="fixture",
+        collected_at="2026-11-23T00:00:00Z", opener=opener)
+    mention, = result["mentions"]
+    assert mention["url"] == "https://x.com/i/web/status/1234567890"
+    assert result["next_cursor"] is None
+    assert result["credits_charged"] == 1

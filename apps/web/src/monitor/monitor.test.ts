@@ -397,13 +397,13 @@ describe("truthful workspace source state", () => {
       const workspace = await loadWorkspace(db, owner.customerId, project.projectId, new Date(), readLimits());
       const threads = workspace.sources.find((item) => item.source === "threads");
       expect(threads).toMatchObject({ configured: true, state: "untested", detail: "", lastSuccessAt: null });
-      expect(workspace.sources.filter((item) => item.source !== "x").every((item) => item.state === "untested")).toBe(true);
-      expect(workspace.sources.find((item) => item.source === "x")).toMatchObject({ configured: false, state: "unavailable" });
-      expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(true);
-      await db.query("update provider_settings set provider = 'off' where platform = 'threads'");
+      expect(workspace.sources.every((item) => item.configured && item.state === "untested")).toBe(true);
+      expect(dashboardFor(workspace, "7", "all", new Date()).partial).toBe(false);
+      await db.query("update provider_settings set provider = 'off' where platform = 'x'");
       const disabled = await loadWorkspace(db, owner.customerId, project.projectId, new Date(), readLimits());
-      expect(disabled.sources.find((item) => item.source === "threads")).toMatchObject({ configured: false, state: "unavailable" });
-      expect(disabled.credentials.threads).toBe(false);
+      expect(disabled.sources.find((item) => item.source === "x")).toMatchObject({ configured: false, state: "unavailable" });
+      expect(disabled.credentials.x).toBe(false);
+      expect(dashboardFor(disabled, "7", "all", new Date()).partial).toBe(true);
     } finally {
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name];

@@ -100,7 +100,7 @@ export function sourceCredentials(
   env: Record<string, string | undefined> = process.env,
 ): Record<SourceId, boolean> {
   const available = Boolean(env.SCRAPEATLAS_API_KEY?.trim());
-  return { x: false, threads: available, instagram: available, tiktok: available };
+  return { x: available, threads: available, instagram: available, tiktok: available };
 }
 
 export async function loadScheduledSourceAvailability(db: Queryable): Promise<Record<SourceId, boolean>> {
@@ -112,7 +112,7 @@ export async function loadScheduledSourceAvailability(db: Queryable): Promise<Re
   }
   const settings = await loadProviderSettings(db);
   return {
-    x: false,
+    x: settings.x.provider === "scrapeatlas",
     threads: settings.threads.provider === "scrapeatlas",
     instagram: settings.instagram.provider === "scrapeatlas",
     tiktok: settings.tiktok.provider === "scrapeatlas",
