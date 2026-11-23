@@ -361,6 +361,16 @@ def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
     launched: list[str] = []
     release = Event()
     provider_finished = Event()
+    receipt_finished = Event()
+    record_late_calls = instant_search._record_late_calls
+
+    def record_receipt(connect, job, future):
+        try:
+            record_late_calls(connect, job, future)
+        finally:
+            receipt_finished.set()
+
+    monkeypatch.setattr(instant_search, "_record_late_calls", record_receipt)
 
     def hung(platform, keyword, settings, **kwargs):
         launched.append(platform)
@@ -377,13 +387,20 @@ def test_hung_route_thread_does_not_extend_the_cycle(prod_db, monkeypatch):
             limits=None,
             fetcher=hung,
             deadline_seconds=0.2,
+            settings={"youtube": DEFAULT_SETTINGS["youtube"]},
         )
+        assert launched == ["youtube"], "the cycle returned before launching YouTube"
         assert not provider_finished.is_set(), "the cycle waited for the hung provider"
     finally:
         release.set()
+        settled = receipt_finished.wait(timeout=5)
     assert processed == 1
-    assert launched, "the cycle returned before any route was launched"
-    assert "youtube" in launched
+    assert settled, "the late receipt did not settle"
+    receipts = prod_db.admin.execute(
+        "select credits_charged from search_credit_ledger where search_id = %s and platform = 'youtube'",
+        (prod_db.search,),
+    ).fetchall()
+    assert receipts == [{"credits_charged": 1}]
     view = prod_db.view(prod_db.search)
     assert view["search"]["status"] in ("partial", "failed"), view
     assert "youtube" not in view["counts"], view
