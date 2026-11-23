@@ -23,9 +23,9 @@ describe("server actions take the customer from the session", () => {
     process.env.SCRAPEATLAS_API_KEY = "test-token";
     let result: Awaited<ReturnType<typeof runNowAction>>;
     try {
-      await db.query("update provider_settings set provider = 'off' where platform in ('threads', 'instagram', 'tiktok')");
+      await db.query("update provider_settings set provider = 'off' where platform in ('x', 'threads', 'instagram', 'tiktok')");
       expect(await runNowAction(project.projectId, forged)).toEqual({ ok: false, reason: "sources_unavailable" });
-      await db.query("update provider_settings set provider = 'scrapeatlas' where platform = 'threads'");
+      await db.query("update provider_settings set provider = 'scrapeatlas' where platform = 'x'");
       result = await runNowAction(project.projectId, forged);
     } finally {
       if (previousToken === undefined) delete process.env.SCRAPEATLAS_API_KEY;
