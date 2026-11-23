@@ -166,13 +166,16 @@ def test_paid_comment_charge_survives_bad_data_and_storage_failure(prod_db, monk
 
     monkeypatch.setattr(instant_search, "_default_comment_fetcher", lambda env, opener: comments)
     processed = instant_search.run_instant_search_cycle(
-        prod_db.connect, env={"CARI_AI_PROVIDER": "off"}, now=datetime.now(timezone.utc), limits=None,
+        prod_db.connect, env={"CARI_AI_PROVIDER": "off"},
+        # Keep the fixed _fast_fetch post within the seeded seven-day window.
+        now=datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc), limits=None,
         fetcher=_fast_fetch,
         settings={"youtube": DEFAULT_SETTINGS["youtube"], "comments": DEFAULT_SETTINGS["comments"]},
     )
     assert processed == 1
     view = prod_db.view(prod_db.search)
     assert view["search"]["status"] == "succeeded"
+    assert view["counts"] == {"youtube": 1}
     assert view["search"]["credits_used"] == 3
     assert view["ledger"] == 2
     rows = prod_db.admin.execute(
