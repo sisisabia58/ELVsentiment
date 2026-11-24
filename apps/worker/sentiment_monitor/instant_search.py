@@ -49,7 +49,7 @@ from sentiment_monitor.providers.canonical import (
 )
 from sentiment_monitor.providers.capabilities import ProviderSetting, resolve_chain
 from sentiment_monitor.providers.comments import fetch_comments
-from sentiment_monitor.providers.fetch import CONTINUATION_ROUTES, fetch_platform
+from sentiment_monitor.providers.fetch import fetch_platform, supports_continuation_route
 from sentiment_monitor.providers.fixtures import fixture_comment_fetch
 from sentiment_monitor.providers.scrapeatlas_sources import continuation_values
 from sentiment_monitor.providers.settings import load_provider_settings
@@ -673,14 +673,16 @@ def _store_answered(
 def _store_continuation(
     conn: Any, job: InstantSearchJob, platform: str, result: Any, calls: list[RouteCall], anchor: str,
 ) -> None:
-    route = CONTINUATION_ROUTES.get(platform)
     cursor, companion = continuation_values(
         platform, getattr(result, "next_cursor", None), getattr(result, "next_companion", None),
     )
-    if not route or not cursor or len(calls) != 1:
+    if not cursor or len(calls) != 1:
         return
     call = calls[0]
-    if (call.provider, call.platform, call.route) != ("scrapeatlas", platform, route):
+    if (call.provider, call.platform) != ("scrapeatlas", platform):
+        return
+    route = call.route
+    if not supports_continuation_route(platform, Keyword(job.query, job.intent), route):
         return
     if call.outcome not in ("success", "partial"):
         return

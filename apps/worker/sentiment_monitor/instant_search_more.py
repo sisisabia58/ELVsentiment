@@ -27,7 +27,7 @@ from sentiment_monitor.instant_search import (
 )
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.canonical import CanonicalPost, PlatformFetch, RouteCall
-from sentiment_monitor.providers.fetch import CONTINUATION_ROUTES, fetch_platform
+from sentiment_monitor.providers.fetch import fetch_platform, supports_continuation_route
 from sentiment_monitor.providers.scrapeatlas_sources import continuation_values
 from sentiment_monitor.providers.settings import load_provider_settings
 
@@ -108,7 +108,8 @@ def _claim(conn: Any) -> MoreJob | None:
         dispatch_expires_at=_row_value(row, "dispatch_expires_at", 15),
     )
     cursor, _ = continuation_values(job.platform, job.cursor, job.companion)
-    if job.route != CONTINUATION_ROUTES.get(job.platform) or cursor is None:
+    keyword = Keyword(job.search.query, job.search.intent)
+    if cursor is None or not supports_continuation_route(job.platform, keyword, job.route):
         conn.execute(
             """
             update instant_search_more_jobs

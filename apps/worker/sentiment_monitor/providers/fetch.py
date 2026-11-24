@@ -14,6 +14,8 @@ from sentiment_monitor.providers.capabilities import (
     resolve_chain,
 )
 from sentiment_monitor.providers.scrapeatlas_sources import (
+    X_SEARCH_ROUTE,
+    X_TUKULILING_ROUTE,
     continuation_values,
     facebook_hashtag,
     fetch_scrapeatlas_facebook,
@@ -24,6 +26,7 @@ from sentiment_monitor.providers.scrapeatlas_sources import (
     fetch_scrapeatlas_threads,
     fetch_scrapeatlas_tiktok,
     fetch_scrapeatlas_youtube,
+    is_tukuliling_phrase,
 )
 from sentiment_monitor.providers.canonical import PlatformFetch
 
@@ -38,15 +41,21 @@ _SCRAPEATLAS_FETCHERS: dict[str, Callable[..., PlatformFetch]] = {
     "linkedin": fetch_scrapeatlas_linkedin,
 }
 
-CONTINUATION_ROUTES = {
+_CONTINUATION_ROUTES = {
     "tiktok": "scrapeatlas.tiktok.keyword",
     "instagram": "scrapeatlas.instagram.posts",
-    "x": "scrapeatlas.twitter.posts",
+    "x": X_SEARCH_ROUTE,
     "youtube": "scrapeatlas.youtube.search",
     "reddit": "scrapeatlas.reddit.search",
     "facebook": "scrapeatlas.facebook.hashtag",
     "linkedin": "scrapeatlas.linkedin.posts",
 }
+
+
+def supports_continuation_route(platform: str, keyword: Keyword, route: str) -> bool:
+    return route == _CONTINUATION_ROUTES.get(platform) or (
+        platform == "x" and route == X_TUKULILING_ROUTE and is_tukuliling_phrase(keyword)
+    )
 
 
 def provider_api_key(provider: str, env: Mapping[str, Any]) -> str | None:
@@ -86,12 +95,14 @@ def fetch_platform(
     if continuation_route is not None or cursor is not None or companion is not None:
         cursor, companion = continuation_values(platform, cursor, companion)
         if (mode == "fixture" or continuation_route is None
-                or continuation_route != CONTINUATION_ROUTES.get(platform)
+                or not supports_continuation_route(platform, keyword, continuation_route)
                 or cursor is None):
             return PlatformFetch(platform, "scrapeatlas", state="unavailable", safe_detail="unsupported_provider")
         page_args["cursor"] = cursor
         if platform == "tiktok":
             page_args["search_id"] = companion
+        if platform == "x":
+            page_args["continuation_route"] = continuation_route
     if mode == "fixture":
         from sentiment_monitor.providers.fixtures import fixture_platform_fetch
 

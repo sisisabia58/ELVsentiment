@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from typing import Any, Callable, Mapping
 from sentiment_monitor.providers.http import urlopen as safe_urlopen
 
-from sentiment_monitor.intent import Keyword
+from sentiment_monitor.intent import Keyword, parse_keyword
 from sentiment_monitor.providers.canonical import (
     MAX_EXTERNAL_ID_BYTES,
     CanonicalPost,
@@ -28,6 +28,8 @@ from sentiment_monitor.sources.tiktok import normalize_tiktok_item
 from sentiment_monitor.sources.threads import normalize_threads_item
 
 DEFAULT_TIMEOUT = 20
+X_SEARCH_ROUTE = "scrapeatlas.twitter.posts"
+X_TUKULILING_ROUTE = "scrapeatlas.twitter.posts.tukuliling"
 
 
 def _optional_int(value: Any) -> int | None:
@@ -728,13 +730,24 @@ def fetch_scrapeatlas_x(
     keyword: Keyword, *, api_key: str, collected_at: str,
     opener: Callable[..., Any] = safe_urlopen, date_window_days: int | None = None,
     cursor: str | None = None,
+    continuation_route: str | None = None,
 ) -> PlatformFetch:
-    params = {"query": str(keyword)}
+    # The indexed search has returned direct brand mentions with this phrase.
+    # Keep the query variant with the cursor so older raw-query pages still work.
+    route = continuation_route or (
+        X_TUKULILING_ROUTE if is_tukuliling_phrase(keyword) else X_SEARCH_ROUTE
+    )
+    params = {"query": "tukuliling kopi" if route == X_TUKULILING_ROUTE else str(keyword)}
     if cursor is not None:
         params["cursor"] = cursor
     return _fetch(
         "x", "/v1/twitter/search/posts", params, api_key,
         opener=opener, keyword=keyword, collected_at=collected_at,
-        route_id="scrapeatlas.twitter.posts", extract=_x_items,
+        route_id=route, extract=_x_items,
         date_window_days=date_window_days, web_index_from_warnings=True, cursor_field="cursor",
     )
+
+
+def is_tukuliling_phrase(keyword: str) -> bool:
+    text, intent = parse_keyword(keyword, getattr(keyword, "intent", None))
+    return intent == "phrase" and text.casefold() == "tukuliling"

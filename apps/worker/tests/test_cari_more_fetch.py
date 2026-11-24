@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from sentiment_monitor.instant_search import InstantSearchJob, _matching_posts
 from sentiment_monitor.intent import Keyword
 from sentiment_monitor.providers.capabilities import DEFAULT_SETTINGS
 from sentiment_monitor.providers.fetch import fetch_platform
@@ -137,3 +138,39 @@ def test_expired_tiktok_search_session_is_failed_with_one_receipt():
     assert result.state == "failed" and result.safe_detail == "search_session_expired"
     assert result.posts == [] and result.next_cursor is None
     assert len(result.calls) == 1 and result.calls[0].credits_charged == 1
+
+
+def test_x_tukuliling_uses_index_query_and_preserves_existing_cursors():
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(parse_qs(urlsplit(request.full_url).query))
+        return Page(posts=[
+            {"rest_id": "123", "legacy": {"full_text": "Tukuliling di MRT ASEAN"}},
+            {"rest_id": "456", "legacy": {"full_text": "Kopi keliling di Jakarta"}},
+        ], cursor="serper:2", coverage={"warnings": ["web_index_selection"]})
+
+    def fetch(keyword, **continuation):
+        return fetch_platform(
+            "x", keyword, DEFAULT_SETTINGS, env={"SCRAPEATLAS_API_KEY": "fixture"},
+            collected_at="2026-11-24T00:00:00Z", opener=opener, **continuation,
+        )
+
+    keyword = Keyword("Tukuliling")
+    result = fetch(keyword)
+    assert requests == [{"query": ["tukuliling kopi"]}]
+    matches = _matching_posts(result.posts, InstantSearchJob("search", "customer", keyword), None, "x")
+    assert [(post.external_id, post.relevance) for post in matches] == [("123", "literal_match")]
+    assert result.safe_detail == "web_index_selection"
+    assert result.calls[0].route != "scrapeatlas.twitter.posts"
+    fetch(keyword, continuation_route=result.calls[0].route, cursor=result.next_cursor)
+    fetch(keyword, continuation_route="scrapeatlas.twitter.posts", cursor="serper:2")
+    fetch(Keyword("#tukuliling", "hashtag"))
+    unrelated = fetch(Keyword("mandalika"), continuation_route=result.calls[0].route, cursor="serper:2")
+    assert unrelated.state == "unavailable"
+    assert not unrelated.calls
+    assert requests[1:] == [
+        {"query": ["tukuliling kopi"], "cursor": ["serper:2"]},
+        {"query": ["Tukuliling"], "cursor": ["serper:2"]},
+        {"query": ["#tukuliling"]},
+    ]
