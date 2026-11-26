@@ -92,7 +92,7 @@ describe("workspace shell", () => {
     });
   });
 
-  it("moves focus to the current desktop link when an open drawer crosses the desktop breakpoint", async () => {
+  it("reveals and focuses the current desktop link when an open drawer crosses the desktop breakpoint", async () => {
     const desktop = Object.assign(new EventTarget(), { matches: false });
     vi.stubGlobal("matchMedia", () => desktop);
     render(
@@ -101,6 +101,8 @@ describe("workspace shell", () => {
       </WorkspaceShell>,
     );
     const desktopLink = screen.getByRole("link", { name: "Riwayat pencarian" });
+    const revealLink = vi.fn();
+    desktopLink.scrollIntoView = revealLink;
     const trigger = screen.getByRole("button", { name: "Buka menu navigasi" });
     trigger.focus();
     fireEvent.click(trigger);
@@ -116,6 +118,7 @@ describe("workspace shell", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Menu navigasi" })).toBeNull();
       expect(document.activeElement).toBe(desktopLink);
+      expect(revealLink).toHaveBeenCalledWith({ block: "nearest", behavior: "instant" });
     });
   });
 

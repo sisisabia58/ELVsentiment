@@ -66,7 +66,10 @@ export function WorkspaceShell(props: {
 
   function drawerReturnFocus() {
     if (window.matchMedia?.(DESKTOP_MEDIA_QUERY).matches) {
-      return desktopSidebar.current?.querySelector<HTMLAnchorElement>('a[aria-current="page"]') ?? main.current;
+      const currentLink = desktopSidebar.current?.querySelector<HTMLAnchorElement>('a[aria-current="page"]');
+      // Base UI restores focus without scrolling, so reveal the link in the sidebar first.
+      currentLink?.scrollIntoView?.({ block: "nearest", behavior: "instant" });
+      return currentLink ?? main.current;
     }
     return trigger.current;
   }
