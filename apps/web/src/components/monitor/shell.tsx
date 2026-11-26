@@ -29,6 +29,7 @@ const NAV = [
   { href: "/pengumpulan", label: "Pengumpulan", icon: Database, count: null },
   { href: "/proyek", label: "Proyek", icon: FolderKanban, count: null },
 ];
+const DESKTOP_MEDIA_QUERY = "(min-width: 64rem)";
 
 export function WorkspaceShell(props: {
   active: string;
@@ -48,17 +49,27 @@ export function WorkspaceShell(props: {
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
+  const desktopSidebar = useRef<HTMLElement>(null);
+  const main = useRef<HTMLElement>(null);
   const closeDrawer = () => setOpen(false);
 
   useEffect(() => {
     if (!open || !window.matchMedia) return;
-    const desktop = window.matchMedia("(min-width: 64rem)");
+    const desktop = window.matchMedia(DESKTOP_MEDIA_QUERY);
     const dismissOnDesktop = () => {
       if (desktop.matches) setOpen(false);
     };
     desktop.addEventListener("change", dismissOnDesktop);
+    dismissOnDesktop();
     return () => desktop.removeEventListener("change", dismissOnDesktop);
   }, [open]);
+
+  function drawerReturnFocus() {
+    if (window.matchMedia?.(DESKTOP_MEDIA_QUERY).matches) {
+      return desktopSidebar.current?.querySelector<HTMLAnchorElement>('a[aria-current="page"]') ?? main.current;
+    }
+    return trigger.current;
+  }
 
   const counts = { attention: props.attention, uncertain: props.uncertain };
   const searchEnabled = props.searchEnabled ?? false;
@@ -219,7 +230,7 @@ export function WorkspaceShell(props: {
       <a href="#konten" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-2 focus:z-50 focus:flex focus:min-h-11 focus:items-center focus:rounded-md focus:bg-surface focus:px-3">
         Lewati ke konten
       </a>
-      <aside className="sticky top-0 hidden h-dvh w-[248px] shrink-0 flex-col border-r border-border bg-surface lg:flex">
+      <aside ref={desktopSidebar} className="sticky top-0 hidden h-dvh w-[248px] shrink-0 flex-col border-r border-border bg-surface lg:flex">
         <div className="flex h-(--workspace-header-height) shrink-0 items-center px-5">
           <Wordmark />
         </div>
@@ -241,7 +252,7 @@ export function WorkspaceShell(props: {
           <Dialog.Portal>
             <Dialog.Backdrop className="workspace-drawer-backdrop fixed inset-0 z-40 bg-slate-950/45 lg:hidden" />
             <Dialog.Popup
-              finalFocus={trigger}
+              finalFocus={drawerReturnFocus}
               className="workspace-drawer fixed inset-y-0 left-0 z-50 flex w-[min(19rem,calc(100vw-2.75rem))] flex-col border-r border-border bg-surface shadow-float lg:hidden"
             >
               <div className="flex h-(--workspace-header-height) shrink-0 items-center justify-between gap-2 px-3">
@@ -254,7 +265,7 @@ export function WorkspaceShell(props: {
             </Dialog.Popup>
           </Dialog.Portal>
         </Dialog.Root>
-        <main id="konten" tabIndex={-1} className="min-w-0 flex-1">
+        <main ref={main} id="konten" tabIndex={-1} className="min-w-0 flex-1">
           {props.children}
         </main>
       </div>

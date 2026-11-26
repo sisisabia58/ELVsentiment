@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LogoutForm } from "@/components/logout-form";
 import { WorkspaceShell } from "./shell";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const baseProps = {
   active: "/cari",
@@ -86,6 +89,33 @@ describe("workspace shell", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Menu navigasi" })).toBeNull();
       expect(document.activeElement).toBe(trigger);
+    });
+  });
+
+  it("moves focus to the current desktop link when an open drawer crosses the desktop breakpoint", async () => {
+    const desktop = Object.assign(new EventTarget(), { matches: false });
+    vi.stubGlobal("matchMedia", () => desktop);
+    render(
+      <WorkspaceShell {...baseProps} active="/cari/riwayat" searchEnabled>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    const desktopLink = screen.getByRole("link", { name: "Riwayat pencarian" });
+    const trigger = screen.getByRole("button", { name: "Buka menu navigasi" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const drawer = screen.getByRole("dialog", { name: "Menu navigasi" });
+    const close = within(drawer).getByRole("button", { name: "Tutup menu" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+
+    act(() => {
+      desktop.matches = true;
+      desktop.dispatchEvent(new Event("change"));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Menu navigasi" })).toBeNull();
+      expect(document.activeElement).toBe(desktopLink);
     });
   });
 
