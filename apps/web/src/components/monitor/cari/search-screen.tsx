@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Clock, MessageSquareText, Search, Sparkles } from "lucide-react";
-import { formatRelative } from "@/monitor/format";
+import { ArrowRight, MessageSquareText, Search, Sparkles } from "lucide-react";
 import {
   DATE_LABEL,
   DEFAULT_FILTERS,
@@ -16,6 +14,7 @@ import type { SearchSnapshot, SnapshotComment } from "@/monitor/search/load";
 import { LAUNCH_PLATFORMS, SEARCH_PLATFORM_NAME } from "@/monitor/search/platforms";
 import { monitorAsProjectAction, startMoreSourceAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-form";
+import { HistoryList } from "./history-list";
 import { PlatformTile } from "./platform-tile";
 import { AiSummary } from "./ai-summary";
 import { ConversationBreakdown } from "./conversation-breakdown";
@@ -23,7 +22,6 @@ import { AskPanel } from "./ask-panel";
 import type { MoreSourceActions } from "./more-source-control";
 import { ProgressPanel } from "./progress-panel";
 import { ResultsList } from "./results-list";
-import { StanceChip } from "./stance-chip";
 import { elapsedSeconds } from "./snapshot-format";
 import { useSearchPoll } from "./use-search-poll";
 
@@ -52,40 +50,6 @@ const ERROR_COPY: Record<string, string> = {
   invalid_query: "Kata kunci minimal 2 karakter.",
   query_too_long: "Kata kunci maksimal 160 karakter.",
 };
-
-function RecentSearches(props: { history: SearchHistoryRow[]; now: string; aiEnabled: boolean }) {
-  return (
-    <section className="mt-8 rounded-[14px] border border-border bg-surface shadow-card">
-      <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-        <h3 className="text-[15px] font-semibold text-foreground">Pencarian terakhir</h3>
-        <Link href="/cari/riwayat" className="text-[13px] font-medium text-primary">
-          Lihat semua
-        </Link>
-      </div>
-      {props.history.length === 0 ? (
-        <p className="px-5 py-4 text-[13px] text-muted-foreground">Belum ada pencarian. Coba kata kunci pertama Anda.</p>
-      ) : (
-        <ul className="divide-y divide-border text-[13.5px]">
-          {props.history.map((row) => (
-            <li key={row.id} className="flex items-center gap-3 px-5 py-3">
-              <Clock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <Link href={`/cari/${row.id}`} className="min-w-0 flex-1 truncate font-medium text-foreground hover:text-primary">
-                {row.query}
-              </Link>
-              <span className="hidden text-muted-foreground sm:inline">
-                {row.resultCount} hasil · {row.sourceCount} sumber
-              </span>
-                {props.aiEnabled && row.stance ? <StanceChip stance={row.stance} /> : null}
-              <span className="w-20 text-right text-[12px] text-muted-foreground">
-                {formatRelative(row.createdAt, new Date(props.now))}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
 
 const LAUNCH_SOURCE_NAMES = LAUNCH_PLATFORMS.map((platform) => SEARCH_PLATFORM_NAME[platform]);
 const LAUNCH_SOURCE_SUMMARY = `${LAUNCH_SOURCE_NAMES.slice(0, -1).join(", ")}, dan ${LAUNCH_SOURCE_NAMES[LAUNCH_SOURCE_NAMES.length - 1]}`;
@@ -130,8 +94,8 @@ function SearchBody(props: {
   const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
   const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
   return (
-    <div className="mt-5 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-5">
-      <aside className="order-first mb-5 lg:order-2 lg:mb-0 lg:sticky lg:top-4">
+    <div className="mt-5 min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)] lg:items-start lg:gap-5">
+      <aside className="mb-5 min-w-0 lg:sticky lg:top-4 lg:order-2 lg:mb-0">
         <AiSummary
           ai={snapshot.ai}
           summaryStatus={summaryStatus}
@@ -252,19 +216,21 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   }
 
   return (
-    <div className="mt-5">
-      <section className="rounded-[14px] border border-border bg-surface shadow-card">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-5 pt-4 font-mono text-[13px]">
-          <span className="font-semibold text-primary">$</span>
-          <span>cari &quot;{search.query}&quot;</span>
-          <span className="text-muted-foreground">{filterSummary(search.filters)}</span>
+    <div className="mt-5 min-w-0">
+      <section className="min-w-0 rounded-xl bg-surface p-4 shadow-card sm:p-5">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span aria-hidden="true" className="shrink-0 font-mono font-semibold text-primary">$</span>
+          <div className="min-w-0">
+            <h2 className="wrap-anywhere text-base font-semibold tracking-tight sm:text-lg">cari &quot;{search.query}&quot;</h2>
+            <p className="mt-1 wrap-anywhere text-sm text-muted-foreground">{filterSummary(search.filters)}</p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-4 pt-2">
-          <p className="font-mono text-[12.5px] text-muted-foreground">{receipt.join(" · ")}</p>
+        <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <p className="min-w-0 wrap-anywhere text-sm text-muted-foreground">{receipt.join(" · ")}</p>
           {!running ? (
             <button
               type="button"
-              className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-[13px] font-medium text-foreground"
+              className="workspace-feedback inline-flex min-h-11 min-w-11 items-center rounded-lg border border-border px-3 text-sm font-medium text-foreground hover:bg-surface-subtle"
               onClick={() => {
                 void (async () => {
                   setMonitorError(null);
@@ -316,7 +282,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
               type="button"
               disabled={rerunning}
               onClick={() => void rerun()}
-              className="inline-flex h-9 items-center rounded-lg border border-border px-3 font-medium text-foreground"
+              className="workspace-feedback inline-flex min-h-11 min-w-11 items-center rounded-lg border border-border px-3 font-medium text-foreground hover:bg-surface-subtle"
             >
               {rerunning ? "Memulai…" : "Cari ulang"}
             </button>
@@ -365,23 +331,23 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
   }
 
   return (
-    <div className="mt-5">
-      <section className="mx-auto max-w-[760px] pt-4 text-center lg:pt-10">
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-[12px] font-medium text-muted-foreground shadow-card">
-          <span className="h-1.5 w-1.5 rounded-full bg-positif" aria-hidden="true" />
+    <div className="mx-auto mt-6 min-w-0 max-w-[960px] space-y-5 md:mt-8 md:space-y-6">
+      <section className="max-w-2xl">
+        <span className="inline-flex items-center gap-2 text-xs font-medium text-info">
+          <Search className="size-3.5 shrink-0" aria-hidden="true" />
           Hingga {LAUNCH_PLATFORMS.length} sumber · hasil dalam ±30 detik
         </span>
-        <h2 className="mt-5 text-[28px] font-semibold leading-tight tracking-tight text-foreground lg:text-[36px]">
+        <h2 className="mt-2 text-2xl font-semibold leading-tight tracking-tight text-foreground md:text-4xl">
           Apa kata orang tentang merek Anda?
         </h2>
-        <p className="mx-auto mt-2 max-w-xl text-[15px] leading-6 text-muted-foreground">
+        <p className="mt-2 max-w-xl leading-6 text-muted-foreground">
           {aiEnabled
             ? "Ketik merek, produk, atau topik. Kami mencari di media sosial dan web sekarang juga, lalu merangkum apa yang dibicarakan — lengkap dengan kutipan aslinya."
             : "Ketik merek, produk, atau topik. Kami mencari di media sosial dan web, lalu menampilkan hasilnya."}
         </p>
       </section>
 
-      <div className="mx-auto mt-6 max-w-[960px]">
+      <div className="min-w-0">
         <SearchForm onSubmit={start} pending={starting} />
         {error ? (
           <p role="alert" className="mt-2 rounded-lg border border-negatif/30 bg-negatif-bg px-3 py-2 text-[13px] text-negatif">
@@ -390,28 +356,27 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
         ) : null}
       </div>
 
-      <section className="mx-auto mt-8 max-w-[960px]">
-        <p className="text-[11px] font-semibold tracking-wide text-muted-foreground">COBA CONTOH PENCARIAN</p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="min-w-0">
+        <h3 className="text-base font-semibold tracking-tight">Coba contoh pencarian</h3>
+        <div className="mt-2 grid gap-2 md:grid-cols-2 lg:grid-cols-4">
           {EXAMPLE_SEARCHES.map((example, index) => (
             <button
               key={example.query}
               type="button"
               disabled={starting}
               onClick={() => void startExample(example.query)}
-              className="group flex items-center gap-3 rounded-[14px] border border-border bg-surface p-4 text-left shadow-card transition hover:border-primary/40 hover:shadow-float disabled:opacity-60"
+              className="workspace-feedback group flex min-h-11 min-w-0 items-center gap-3 rounded-xl bg-surface px-3 py-2.5 text-left shadow-card hover:bg-info-bg disabled:opacity-60"
             >
               <PlatformTile platform={LAUNCH_PLATFORMS[index] ?? "threads"} size={32} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[14px] font-semibold text-foreground">{example.query}</span>
+                <span className="block wrap-anywhere text-sm font-semibold text-foreground">{example.query}</span>
                 <span className="block text-[12px] text-muted-foreground">{example.label}</span>
               </span>
-              <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary" aria-hidden="true" />
+              <ArrowRight className="size-4 shrink-0 text-muted-foreground group-hover:text-primary" aria-hidden="true" />
             </button>
           ))}
         </div>
-
-        <div className="mt-8 grid gap-4 lg:grid-cols-3">
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {[
             {
               icon: Search,
@@ -432,12 +397,12 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
                   },
                 ]
               : []),
-          ].map((panel, index) => {
+          ].map((panel) => {
             const Icon = panel.icon;
             return (
-              <div key={panel.title} className="rounded-[14px] border border-border bg-surface p-5 shadow-card">
+              <div key={panel.title} className="min-w-0 rounded-xl bg-surface-subtle p-4">
                 <span className="grid h-8 w-8 place-items-center rounded-lg bg-info-bg text-primary">
-                  {index === 0 ? <span className="text-[13px] font-semibold">1</span> : <Icon className="h-4 w-4" aria-hidden="true" />}
+                  <Icon className="size-4" aria-hidden="true" />
                 </span>
                 <h3 className="mt-3 text-[15px] font-semibold text-foreground">{panel.title}</h3>
                 <p className="mt-1 text-[13px] leading-5 text-muted-foreground">{panel.body}</p>
@@ -446,8 +411,8 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
           })}
         </div>
 
-        <RecentSearches history={props.history} now={props.now} aiEnabled={aiEnabled} />
       </section>
+      <HistoryList rows={props.history} now={new Date(props.now)} aiEnabled={aiEnabled} recent />
     </div>
   );
 }

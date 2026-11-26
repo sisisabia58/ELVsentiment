@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { Dialog } from "@base-ui/react/dialog";
 import {
   CircleHelp,
   Database,
   FolderKanban,
+  History,
   LayoutDashboard,
   Menu,
   MessageSquareText,
@@ -13,7 +15,6 @@ import {
   Settings,
   TriangleAlert,
   Wallet,
-  History,
   X,
 } from "lucide-react";
 import { cn } from "cn";
@@ -46,14 +47,24 @@ export function WorkspaceShell(props: {
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const closeDrawer = () => setOpen(false);
+
+  useEffect(() => {
+    if (!open || !window.matchMedia) return;
+    const desktop = window.matchMedia("(min-width: 64rem)");
+    const dismissOnDesktop = () => {
+      if (desktop.matches) setOpen(false);
+    };
+    desktop.addEventListener("change", dismissOnDesktop);
+    return () => desktop.removeEventListener("change", dismissOnDesktop);
+  }, [open]);
+
   const counts = { attention: props.attention, uncertain: props.uncertain };
   const searchEnabled = props.searchEnabled ?? false;
   const aiEnabled = props.aiEnabled ?? false;
   const nav = (
-    <div className="flex h-full flex-col">
-      <div className="flex h-14 items-center px-4">
-        <Wordmark />
-      </div>
+    <div className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
       {searchEnabled ? (
         <div className="px-3 pb-2">
           <div className="rounded-lg border border-border bg-surface p-3 shadow-card">
@@ -89,19 +100,20 @@ export function WorkspaceShell(props: {
               <Link
                 key={project.id}
                 href={projectHref("/dasbor", project.id)}
+                onNavigate={closeDrawer}
                 className="flex min-h-[44px] min-w-0 max-w-full items-center gap-2 rounded-md px-2 text-sm hover:bg-surface-subtle"
                 aria-current={project.id === props.projectId ? "true" : undefined}
               >
                 <span className="truncate">{project.name}</span>
               </Link>
             ))}
-            <Link href="/proyek" className="flex min-h-[44px] min-w-0 max-w-full items-center rounded-md px-2 text-sm text-muted-foreground hover:bg-surface-subtle">
+            <Link href="/proyek" onNavigate={closeDrawer} className="flex min-h-[44px] min-w-0 max-w-full items-center rounded-md px-2 text-sm text-muted-foreground hover:bg-surface-subtle">
               Semua proyek
             </Link>
           </div>
         </details>
       </div>
-      <nav aria-label="Navigasi utama" className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+      <nav aria-label="Navigasi utama" className="mt-5 space-y-1 px-3 pb-4">
         {searchEnabled ? (
           <>
             <p className="px-3 pb-1 text-[11px] font-semibold tracking-wide text-muted-foreground">CARI</p>
@@ -116,17 +128,14 @@ export function WorkspaceShell(props: {
                   key={item.href}
                   href={item.href}
                   aria-current={active ? "page" : undefined}
-                  onClick={() => setOpen(false)}
+                  onNavigate={closeDrawer}
                   className={cn(
-                    "flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium lg:h-10",
-                    active ? "bg-info-bg text-primary" : "text-muted-foreground hover:bg-surface-subtle hover:text-foreground",
+                    "workspace-feedback flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium",
+                    active ? "bg-info-bg font-semibold text-primary" : "text-muted-foreground hover:bg-surface-subtle hover:text-foreground",
                   )}
                 >
                   <Icon className={cn("size-[18px]", active ? "text-primary" : "text-muted-foreground")} aria-hidden="true" />
                   <span className="flex-1 truncate">{item.label}</span>
-                  {item.href === "/cari" ? (
-                    <span aria-hidden="true" className="rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">Baru</span>
-                  ) : null}
                 </Link>
               );
             })}
@@ -143,33 +152,33 @@ export function WorkspaceShell(props: {
           return (
             <div key={item.href}>
               {section}
-            <Link
-              href={projectHref(item.href, props.projectId)}
-              aria-current={active ? "page" : undefined}
-              onClick={() => setOpen(false)}
-              className={cn(
-                "flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium lg:h-10",
-                active ? "bg-info-bg text-primary" : "text-muted-foreground hover:bg-surface-subtle hover:text-foreground",
-              )}
-            >
-              <Icon className={cn("size-[18px]", active ? "text-primary" : "text-muted-foreground")} aria-hidden="true" />
-              <span className="flex-1 truncate">{item.label}</span>
-              {count !== null ? (
-                <span
-                  className="rounded-full bg-surface-subtle px-1.5 text-xs font-medium tabular-nums text-foreground"
-                  aria-label={
-                    item.count === "attention" ? `${count} sebutan belum dilihat` : `${count} penilaian belum diselesaikan`
-                  }
-                >
-                  {count}
-                </span>
-              ) : null}
-            </Link>
+              <Link
+                href={projectHref(item.href, props.projectId)}
+                aria-current={active ? "page" : undefined}
+                onNavigate={closeDrawer}
+                className={cn(
+                  "workspace-feedback flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium",
+                  active ? "bg-info-bg font-semibold text-primary" : "text-muted-foreground hover:bg-surface-subtle hover:text-foreground",
+                )}
+              >
+                <Icon className={cn("size-[18px]", active ? "text-primary" : "text-muted-foreground")} aria-hidden="true" />
+                <span className="flex-1 truncate">{item.label}</span>
+                {count !== null ? (
+                  <span
+                    className="rounded-full bg-surface-subtle px-1.5 text-xs font-medium tabular-nums text-foreground"
+                    aria-label={
+                      item.count === "attention" ? `${count} sebutan belum dilihat` : `${count} penilaian belum diselesaikan`
+                    }
+                  >
+                    {count}
+                  </span>
+                ) : null}
+              </Link>
             </div>
           );
         })}
       </nav>
-      <div className="border-t border-border p-3">
+      <div className="mt-auto border-t border-border p-3">
         <div className="flex items-center gap-3 rounded-lg p-2">
           <span className="grid size-8 place-items-center rounded-full bg-info-bg text-xs font-semibold text-primary">
             {props.initials}
@@ -183,13 +192,20 @@ export function WorkspaceShell(props: {
           {props.admin ? (
             <Link
               href="/pengaturan/provider"
-              className="flex min-h-11 items-center gap-2 rounded-md px-2 text-sm text-foreground hover:bg-surface-subtle"
+              onNavigate={closeDrawer}
+              aria-current={props.active === "/pengaturan/provider" ? "page" : undefined}
+              className="workspace-feedback flex min-h-11 items-center gap-2 rounded-md px-2 text-sm text-foreground hover:bg-surface-subtle aria-[current=page]:bg-info-bg aria-[current=page]:text-primary"
             >
               <Settings className="size-4 text-muted-foreground" aria-hidden="true" />
               Pengaturan provider
             </Link>
           ) : null}
-          <Link href="/akun" className="flex min-h-11 items-center rounded-md px-2 text-sm text-foreground hover:bg-surface-subtle">
+          <Link
+            href="/akun"
+            onNavigate={closeDrawer}
+            aria-current={props.active === "/akun" ? "page" : undefined}
+            className="workspace-feedback flex min-h-11 items-center rounded-md px-2 text-sm text-foreground hover:bg-surface-subtle aria-[current=page]:bg-info-bg aria-[current=page]:text-primary"
+          >
             Profil
           </Link>
           {props.logout}
@@ -199,40 +215,49 @@ export function WorkspaceShell(props: {
   );
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <a href="#konten" className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-surface focus:px-3 focus:py-2">
+    <div className="flex min-h-dvh min-w-0 bg-background text-foreground">
+      <a href="#konten" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-2 focus:z-50 focus:flex focus:min-h-11 focus:items-center focus:rounded-md focus:bg-surface focus:px-3">
         Lewati ke konten
       </a>
-      <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 border-r border-border bg-surface lg:block">{nav}</aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 min-w-0 items-center justify-between border-b border-border bg-surface px-2 lg:hidden">
-          <button type="button" className="grid size-11 place-items-center" aria-label="Buka menu navigasi" onClick={() => setOpen(true)}>
-            <Menu className="size-5" aria-hidden="true" />
-          </button>
+      <aside className="sticky top-0 hidden h-dvh w-[248px] shrink-0 flex-col border-r border-border bg-surface lg:flex">
+        <div className="flex h-(--workspace-header-height) shrink-0 items-center px-5">
           <Wordmark />
-          {searchEnabled ? (
-            <span className="rounded-full bg-surface-subtle px-2 py-1 text-[11px] font-medium tabular-nums text-foreground">
-              1 kr / cari
-            </span>
-          ) : (
-            <span className="size-11" />
-          )}
-        </header>
-        <main id="konten" className="min-w-0 flex-1">
+        </div>
+        {nav}
+      </aside>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Dialog.Root open={open} onOpenChange={setOpen}>
+          <header className="flex h-(--workspace-header-height) min-w-0 items-center gap-2 border-b border-border bg-surface px-2 lg:hidden">
+            <Dialog.Trigger ref={trigger} className="workspace-feedback grid size-11 shrink-0 place-items-center rounded-lg hover:bg-surface-subtle" aria-label="Buka menu navigasi">
+              <Menu className="size-5" aria-hidden="true" />
+            </Dialog.Trigger>
+            <Wordmark />
+            {searchEnabled ? (
+              <span className="ml-auto shrink-0 rounded-full bg-info-bg px-2 py-1 text-xs font-medium tabular-nums text-info">
+                1 kr / cari
+              </span>
+            ) : null}
+          </header>
+          <Dialog.Portal>
+            <Dialog.Backdrop className="workspace-drawer-backdrop fixed inset-0 z-40 bg-slate-950/45 lg:hidden" />
+            <Dialog.Popup
+              finalFocus={trigger}
+              className="workspace-drawer fixed inset-y-0 left-0 z-50 flex w-[min(19rem,calc(100vw-2.75rem))] flex-col border-r border-border bg-surface shadow-float lg:hidden"
+            >
+              <div className="flex h-(--workspace-header-height) shrink-0 items-center justify-between gap-2 px-3">
+                <Dialog.Title className="pl-2 text-base font-semibold tracking-tight">Menu navigasi</Dialog.Title>
+                <Dialog.Close className="workspace-feedback grid size-11 shrink-0 place-items-center rounded-lg hover:bg-surface-subtle" aria-label="Tutup menu">
+                  <X className="size-5" aria-hidden="true" />
+                </Dialog.Close>
+              </div>
+              {nav}
+            </Dialog.Popup>
+          </Dialog.Portal>
+        </Dialog.Root>
+        <main id="konten" tabIndex={-1} className="min-w-0 flex-1">
           {props.children}
         </main>
       </div>
-      {open ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button type="button" className="absolute inset-0 bg-foreground/40" aria-label="Tutup menu" onClick={() => setOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-[248px] bg-surface shadow-float">
-            <button type="button" className="absolute right-2 top-2 grid size-11 place-items-center" aria-label="Tutup menu" onClick={() => setOpen(false)}>
-              <X className="size-5" />
-            </button>
-            {nav}
-          </aside>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -273,7 +298,7 @@ export function Frame(props: {
       admin={props.workspace.isAdmin ?? false}
       logout={props.logout}
     >
-      <div className="mx-auto w-full max-w-[1320px] px-4 pb-28 pt-5 lg:px-8 lg:pt-8">{props.children}</div>
+      <div className="mx-auto w-full min-w-0 max-w-[1320px] px-4 pb-20 pt-6 md:px-6 lg:px-8 lg:pt-8">{props.children}</div>
     </WorkspaceShell>
   );
 }

@@ -90,6 +90,8 @@
   --chart-4: #1d4ed8;
   --chart-5: #92400e;
   --radius: 0.875rem;
+  --motion-duration: 180ms;
+  --workspace-header-height: 3.5rem;
   --sidebar: #ffffff;
   --sidebar-foreground: #0f172a;
   --sidebar-primary: #1d4ed8;
@@ -115,6 +117,39 @@
   --success-bg: #f0fdf4;
   --danger: #b91c1c;
   --danger-bg: #fef2f2;
+}
+
+@layer components {
+  .workspace-feedback {
+    transition: background-color var(--motion-duration) ease, color var(--motion-duration) ease,
+      border-color var(--motion-duration) ease;
+  }
+
+  .workspace-drawer {
+    transition: transform var(--motion-duration) ease-out;
+  }
+
+  .workspace-drawer[data-starting-style],
+  .workspace-drawer[data-ending-style] {
+    transform: translateX(-100%);
+  }
+
+  .workspace-drawer-backdrop {
+    transition: opacity var(--motion-duration) ease;
+  }
+
+  .workspace-drawer-backdrop[data-starting-style],
+  .workspace-drawer-backdrop[data-ending-style] {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .workspace-feedback,
+    .workspace-drawer,
+    .workspace-drawer-backdrop {
+      transition: none;
+    }
+  }
 }
 
 .dark {

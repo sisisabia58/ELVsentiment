@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { LogoutForm } from "@/components/logout-form";
 import { WorkspaceShell } from "./shell";
@@ -68,6 +68,27 @@ describe("cari sekarang navigation", () => {
 });
 
 describe("workspace shell", () => {
+  it("mobile drawer preserves active navigation and restores focus", async () => {
+    render(
+      <WorkspaceShell {...baseProps} active="/cari/riwayat" searchEnabled>
+        <p>Konten</p>
+      </WorkspaceShell>,
+    );
+    const trigger = screen.getByRole("button", { name: "Buka menu navigasi" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const drawer = screen.getByRole("dialog", { name: "Menu navigasi" });
+    const current = within(drawer).getByRole("link", { name: "Riwayat pencarian" });
+    expect(current.getAttribute("aria-current")).toBe("page");
+    const close = within(drawer).getByRole("button", { name: "Tutup menu" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    fireEvent.keyDown(close, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Menu navigasi" })).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    });
+  });
+
   it("gives Profil and Keluar a 44px row in the account menu", () => {
     render(
       <WorkspaceShell
