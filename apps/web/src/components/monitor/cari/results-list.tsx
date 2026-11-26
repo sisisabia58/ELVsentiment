@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, createRef, useEffect, useState, type ReactNode } from "react";
+import { Component, createRef, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, ChevronDown, Heart, MessageSquareText } from "lucide-react";
 import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
@@ -8,6 +8,8 @@ import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
 import type { SnapshotComment, SnapshotResult, SnapshotSource } from "@/monitor/search/load";
 import { supportedProviders } from "@/monitor/search/platforms";
 import { originalPostHref } from "@/monitor/search/post-permalink";
+import { CARI_CITATION_EVENT } from "./evidence-links";
+import { commentTextIsVisible } from "./quote-source";
 import { MoreSourceControl, type MoreSourceActions } from "./more-source-control";
 import { PLATFORM_ORDER, PlatformTile, platformName } from "./platform-tile";
 
@@ -19,14 +21,6 @@ export function formatCompact(value: number): string {
 
 function commentsCollected(platform: string): boolean {
   return supportedProviders(platform, "comments").length > 0;
-}
-
-// Spaces and zero-width/object-replacement characters still look blank.
-const INVISIBLE_COMMENT_CHAR =
-  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u115F\u1160\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFFC]/g;
-
-function commentTextIsVisible(value: string): boolean {
-  return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;
 }
 
 function Engagement(props: { result: SnapshotResult }) {
@@ -58,15 +52,22 @@ function Engagement(props: { result: SnapshotResult }) {
   );
 }
 
+type LocalCitation = { id: string; resultId: string; platform: string; reply: boolean };
+
 function ResultCard(props: {
   result: SnapshotResult;
   comments: SnapshotComment[];
   now: Date;
   showPlatform: boolean;
+  citation: LocalCitation | null;
 }) {
   const result = props.result;
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
-  const [repliesOpen, setRepliesOpen] = useState(false);
+  const [disclosure, setDisclosure] = useState({ citation: props.citation, open: Boolean(props.citation) });
+  if (props.citation && disclosure.citation !== props.citation) {
+    setDisclosure({ citation: props.citation, open: true });
+  }
+  const repliesOpen = disclosure.open;
   const retained = props.comments.filter((comment) => commentTextIsVisible(comment.text));
   const comments = repliesOpen ? retained : retained.slice(0, 3);
   const hiddenRetained = Math.max(0, retained.length - 3);
@@ -80,7 +81,7 @@ function ResultCard(props: {
   const PostPreview = href ? "a" : "div";
 
   return (
-    <article id={`hasil-${result.id}`} className="min-w-0 px-3 py-4 sm:px-5 sm:py-5">
+    <article id={`hasil-${result.id}`} tabIndex={-1} className="min-w-0 px-3 py-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary sm:px-5 sm:py-5">
       <PostPreview
         className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2.5 rounded-lg sm:gap-x-4",
           href && "group focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary")}
@@ -165,8 +166,8 @@ function ResultCard(props: {
           </p>
           <div id={repliesId} className="divide-y divide-border/70">
             {comments.map((comment, index) => (
-              <div key={comment.id} id={`balasan-${comment.id}`}
-                className={cn("flex gap-2.5 px-3 py-2", index >= 3 && "cari-reveal")}>
+              <div key={comment.id} id={`balasan-${comment.id}`} tabIndex={-1}
+                className={cn("flex gap-2.5 px-3 py-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary", index >= 3 && "cari-reveal")}>
                 <span className="shrink-0 text-xs font-semibold tabular-nums text-positif">▲ {comment.likes ?? 0}</span>
                 <div className="min-w-0">
                   <p className="wrap-anywhere text-sm leading-snug text-foreground">{comment.text}</p>
@@ -181,7 +182,7 @@ function ResultCard(props: {
           </div>
           {hiddenRetained > 0 ? (
             <button type="button" aria-expanded={repliesOpen} aria-controls={repliesId}
-              onClick={() => setRepliesOpen(!repliesOpen)}
+              onClick={() => setDisclosure({ citation: props.citation, open: !repliesOpen })}
               className="workspace-feedback flex min-h-11 min-w-11 items-center gap-1.5 rounded-lg px-3 text-left text-xs font-semibold text-primary hover:bg-primary/5">
               {repliesOpen ? "Sembunyikan balasan tambahan" : `Lihat ${hiddenRetained} balasan tersimpan`}
               <ChevronDown className={cn("size-4 shrink-0", repliesOpen && "rotate-180")} aria-hidden="true" />
@@ -242,27 +243,62 @@ export function ResultsList(props: {
   now?: Date;
 }) {
   const [platform, setPlatform] = useState<string | null>(null);
-  const [anchor, setAnchor] = useState<string | null>(null);
-  useEffect(() => {
-    function revealLocalCitation() {
-      const hash = window.location.hash;
-      const result = props.results.find((row) => hash === `#hasil-${row.id}`);
-      setAnchor(result ? hash.slice(1) : null);
-      if (result) setPlatform((selected) => selected === null ? null : result.platform);
-    }
-    window.addEventListener("hashchange", revealLocalCitation);
-    return () => window.removeEventListener("hashchange", revealLocalCitation);
-  }, [props.results]);
+  const [citation, setCitation] = useState<LocalCitation | null>(null);
+  const handledHash = useRef("");
+  const returnLink = useRef<HTMLAnchorElement | null>(null);
 
   useEffect(() => {
-    if (anchor) document.getElementById(anchor)?.scrollIntoView?.();
-  }, [anchor, platform]);
+    function revealLocalCitation(event?: Event) {
+      const hash = window.location.hash;
+      if (!event && hash === handledHash.current) return;
+      if (event instanceof CustomEvent) returnLink.current = event.detail;
+
+      if (!hash) {
+        handledHash.current = "";
+        setCitation(null);
+        if (returnLink.current?.isConnected) returnLink.current.focus({ preventScroll: true });
+        returnLink.current = null;
+        return;
+      }
+
+      for (const result of props.results) {
+        const post = hash === `#hasil-${result.id}`;
+        const reply = hash.startsWith("#balasan-") && (props.commentsByResult[result.id] ?? []).some((comment) =>
+          hash === `#balasan-${comment.id}` && comment.resultId === result.id &&
+          comment.platform === result.platform && commentTextIsVisible(comment.text),
+        );
+        if (!post && !reply) continue;
+        handledHash.current = hash;
+        setCitation({ id: hash.slice(1), resultId: result.id, platform: result.platform, reply });
+        setPlatform((selected) => reply || selected !== null ? result.platform : null);
+        return;
+      }
+
+      setCitation(null);
+    }
+
+    revealLocalCitation();
+    window.addEventListener("hashchange", revealLocalCitation);
+    window.addEventListener(CARI_CITATION_EVENT, revealLocalCitation);
+    return () => {
+      window.removeEventListener("hashchange", revealLocalCitation);
+      window.removeEventListener(CARI_CITATION_EVENT, revealLocalCitation);
+    };
+  }, [props.commentsByResult, props.results]);
+
+  useEffect(() => {
+    if (!citation) return;
+    const target = document.getElementById(citation.id);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: "start" });
+  }, [citation]);
 
   function selectPlatform(next: string | null) {
-    const hash = window.location.hash;
-    if (next && props.results.some((row) => row.platform !== next && hash === `#hasil-${row.id}`)) {
+    if (citation && next && citation.platform !== next) {
       window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-      setAnchor(null);
+      handledHash.current = "";
+      returnLink.current = null;
+      setCitation(null);
     }
     setPlatform(next);
   }
@@ -335,6 +371,7 @@ export function ResultsList(props: {
               comments={props.commentsByResult[result.id] ?? []}
               now={now}
               showPlatform={!selected}
+              citation={citation?.reply && citation.resultId === result.id ? citation : null}
             />
           ))}
         </ResultFeed>

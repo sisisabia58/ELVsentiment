@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SearchSnapshot, SnapshotComment, SnapshotResult } from "@/monitor/search/load";
 import { ConversationBreakdown } from "./conversation-breakdown";
+import { evidenceSources, supportedPlatforms, supportedQuotes, supportedThemes } from "./quote-source";
 
 afterEach(() => {
   cleanup();
@@ -89,9 +90,20 @@ const doneSnapshot: SearchSnapshot = {
   questions: [],
 };
 
+function renderBreakdown() {
+  const ai = doneSnapshot.ai!;
+  const sample = evidenceSources(ai.evidenceIds, results, doneSnapshot.comments);
+  return render(<ConversationBreakdown
+    results={results}
+    platforms={supportedPlatforms(ai, sample)}
+    quotes={supportedQuotes(ai, sample)}
+    themes={supportedThemes(ai, sample)}
+  />);
+}
+
 describe("ConversationBreakdown", () => {
   it("keeps the result counts separate from qualitative platform stance", () => {
-    render(<ConversationBreakdown snapshot={doneSnapshot} />);
+    renderBreakdown();
     expect(screen.getByText("Bagaimana percakapannya")).toBeTruthy();
     expect(screen.getByText("23")).toBeTruthy();
     expect(screen.getByText("Sikap per platform")).toBeTruthy();
@@ -100,12 +112,12 @@ describe("ConversationBreakdown", () => {
     expect(screen.queryByText(/Positif \d+%/)).toBeNull();
   });
 
-  it("shows distinct categorized word-for-word quotes linked to the actual parent", () => {
-    render(<ConversationBreakdown snapshot={doneSnapshot} />);
+  it("shows distinct categorized word-for-word quotes linked to the exact reply", () => {
+    renderBreakdown();
     expect(screen.getByText("Kutipan")).toBeTruthy();
     expect(screen.getByText("Pujian")).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "Praktis sebelum naik kereta." })).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Praktis sebelum naik kereta." }).getAttribute("href")).toBe("#hasil-threads-0");
+    expect(screen.getByRole("link", { name: "Praktis sebelum naik kereta." }).getAttribute("href")).toBe("#balasan-c1");
     expect(screen.getAllByText(/rina · Threads/i).length).toBeGreaterThan(0);
     expect(screen.queryByText("Parafrasa")).toBeNull();
     expect(screen.queryByText("Bukan Rina")).toBeNull();
@@ -115,7 +127,7 @@ describe("ConversationBreakdown", () => {
   });
 
   it("counts distinct retained evidence and derives theme platforms from it", () => {
-    render(<ConversationBreakdown snapshot={doneSnapshot} />);
+    renderBreakdown();
     expect(screen.getByText("Topik utama")).toBeTruthy();
     expect(screen.getByText("Praktis di MRT")).toBeTruthy();
     expect(screen.getByText("Beli sebelum naik kereta.")).toBeTruthy();

@@ -293,7 +293,7 @@ describe("SearchDetail", () => {
     expect(screen.getByText("antrean barayam ciledug tadi malem")).toBeTruthy();
   });
 
-  it("shows the summary beside the results and the breakdown after them", () => {
+  it("puts the takeaway before posts in reading order and in the right desktop column", () => {
     const done = finishedSnapshot();
     done.search.summaryStatus = "done";
     done.ai = {
@@ -312,7 +312,10 @@ describe("SearchDetail", () => {
     expect(screen.getByRole("list", { name: "Sumber ringkasan" })).toBeTruthy();
     expect(screen.getByText(/Cuplikan AI · 1 unggahan dan 0 balasan/)).toBeTruthy();
     const body = document.body.textContent ?? "";
-    expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
+    expect(body.indexOf("Ringkasan rahasia")).toBeLessThan(body.indexOf("Bagaimana percakapannya"));
+    expect(body.indexOf("Ringkasan rahasia")).toBeLessThan(body.indexOf("antrean barayam ciledug tadi malem"));
+    expect(body.indexOf("antrean barayam ciledug tadi malem")).toBeLessThan(body.indexOf("Tanya hasil ini"));
+    expect(screen.getByRole("complementary").classList.contains("lg:col-start-2")).toBe(true);
   });
 
   it("shows each quote link once", () => {

@@ -26,10 +26,20 @@ function asRecords(value: unknown): Record<string, unknown>[] {
   return value.filter((item) => item && typeof item === "object" && !Array.isArray(item));
 }
 
+// Spaces and zero-width/object-replacement characters still look blank.
+const INVISIBLE_COMMENT_CHAR =
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u115F\u1160\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFFC]/g;
+
+export function commentTextIsVisible(value: string): boolean {
+  return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;
+}
+
 function sourceOf(id: string, record: SourceMetadata, parent: Post, kind: EvidenceSource["kind"]): EvidenceSource {
   return {
     id,
-    href: originalPostHref(parent.platform, parent.url) ?? `#hasil-${parent.id}`,
+    href: kind === "reply"
+      ? `#balasan-${id.slice("comment:".length)}`
+      : originalPostHref(parent.platform, parent.url) ?? `#hasil-${parent.id}`,
     platform: record.platform,
     author: (record.authorHandle || record.authorName || "").replace(/^@/, "").trim(),
     kind,
@@ -48,14 +58,13 @@ export function evidenceSources(
   const parents = new Map<string, Post>();
   for (const result of results) {
     const ref = `result:${result.id}`;
-    if (!sample.has(ref)) continue;
     parents.set(result.id, result);
-    byRef.set(ref, sourceOf(ref, result, result, "post"));
+    if (sample.has(ref)) byRef.set(ref, sourceOf(ref, result, result, "post"));
   }
   for (const comment of comments) {
     const ref = `comment:${comment.id}`;
     const parent = parents.get(comment.resultId);
-    if (sample.has(ref) && parent?.platform === comment.platform) {
+    if (sample.has(ref) && parent?.platform === comment.platform && commentTextIsVisible(comment.text)) {
       byRef.set(ref, sourceOf(ref, comment, parent, "reply"));
     }
   }

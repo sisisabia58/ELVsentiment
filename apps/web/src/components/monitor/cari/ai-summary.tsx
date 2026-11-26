@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { cn } from "cn";
 import type { SnapshotAi, SnapshotComment, SnapshotResult } from "@/monitor/search/load";
 import { EvidenceLinks } from "./evidence-links";
-import { PlatformTile, platformName } from "./platform-tile";
-import { evidenceSources, isStance, resolveEvidence, supportedPlatforms } from "./quote-source";
+import { ConversationBreakdown } from "./conversation-breakdown";
+import { evidenceSources, isStance, resolveEvidence, supportedPlatforms, supportedQuotes, supportedThemes } from "./quote-source";
 import { StanceChip } from "./stance-chip";
 
 export function AiSummary(props: {
@@ -15,11 +17,13 @@ export function AiSummary(props: {
   hasMoreResults?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
   const status = props.summaryStatus ?? (props.ai ? "done" : "pending");
   if (status === "skipped") return null;
 
   const ai = props.ai;
-  const sample = evidenceSources(ai?.evidenceIds, props.results ?? [], props.comments ?? []);
+  const results = props.results ?? [];
+  const sample = evidenceSources(ai?.evidenceIds, results, props.comments ?? []);
   const sources = resolveEvidence(ai?.overallSupportingIds, sample);
   const waiting = status === "pending" || status === "running";
   const message = waiting
@@ -37,12 +41,13 @@ export function AiSummary(props: {
   }
 
   const platforms = supportedPlatforms(ai, sample);
-  const extra = Math.max(0, platforms.length - 3);
+  const quotes = supportedQuotes(ai, sample);
+  const themes = supportedThemes(ai, sample);
   const postCount = [...sample.values()].filter((source) => source.kind === "post").length;
   return (
     <section className="rounded-[14px] border border-border bg-surface p-4 shadow-card">
       <h2 className="text-[15px] font-semibold text-foreground">Ringkasan AI</h2>
-      <p className="mt-2 text-[13.5px] leading-6 text-foreground">{ai.overallSummary}</p>
+      <p className="mt-2 text-base leading-6 wrap-anywhere text-foreground">{ai.overallSummary}</p>
       <EvidenceLinks sources={sources} label="Sumber ringkasan" />
       <p className="mt-2 text-[12px] text-muted-foreground">
         {props.hasMoreResults ? "Cuplikan AI dari pencarian awal" : "Cuplikan AI"} · {postCount} unggahan dan {sample.size - postCount} balasan
@@ -50,25 +55,22 @@ export function AiSummary(props: {
       {isStance(ai.overallStance) ? (
         <div className="mt-3"><StanceChip stance={ai.overallStance} /></div>
       ) : null}
-      {platforms.length ? (
-        <ul className="mt-3 space-y-3">
-          {platforms.map((item, index) => (
-            <li key={item.platform} className={index >= 3 && !expanded ? "hidden lg:block" : ""}>
-              <div className="flex items-center gap-2">
-                <PlatformTile platform={item.platform} size={18} />
-                <span className="text-[13px] font-semibold text-foreground">{platformName(item.platform)}</span>
-                <StanceChip stance={item.stance} />
-              </div>
-              <p className="mt-1 text-[13px] leading-5 text-foreground">{item.summary}</p>
-              <EvidenceLinks sources={item.sources} label={`Sumber ${platformName(item.platform)}`} />
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {extra > 0 && !expanded ? (
-        <button type="button" className="mt-2 text-[12.5px] font-medium text-primary lg:hidden" onClick={() => setExpanded(true)}>
-          Lihat {extra} platform lainnya
-        </button>
+      {results.length || platforms.length || themes.length || quotes.length ? (
+        <div className="mt-4 border-t border-border pt-2">
+          <button
+            type="button"
+            aria-controls={detailsId}
+            aria-expanded={expanded}
+            className="workspace-feedback flex min-h-11 w-full items-center justify-between gap-2 rounded-lg px-2 text-left text-sm font-semibold text-primary hover:bg-primary/5 lg:hidden"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? "Sembunyikan detail ringkasan" : "Lihat detail ringkasan"}
+            <ChevronDown className={cn("size-4 shrink-0", expanded && "rotate-180")} aria-hidden="true" />
+          </button>
+          <div id={detailsId} className={cn(expanded ? "cari-reveal" : "hidden", "lg:block")}>
+            <ConversationBreakdown results={results} platforms={platforms} quotes={quotes} themes={themes} />
+          </div>
+        </div>
       ) : null}
     </section>
   );

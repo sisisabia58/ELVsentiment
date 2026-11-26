@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SnapshotResult } from "@/monitor/search/load";
+import { EvidenceLinks } from "./evidence-links";
+import { evidenceSources, resolveEvidence } from "./quote-source";
 import { ResultsList } from "./results-list";
 
 afterEach(() => {
@@ -161,6 +163,52 @@ describe("ResultsList", () => {
       expect(screen.queryByRole("heading", { name: "Hasil Threads" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: /Threads 1/ }));
       expect(window.location.hash).toBe("");
+    } finally {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  });
+
+  it("citation reveals the parent result and hidden reply", async () => {
+    const parent = result({ url: "https://www.threads.net/@sari/post/EXAMPLE0001" });
+    const replies = Array.from({ length: 4 }, (_, index) => ({
+      ...comments.r1[0], id: `retained-${index}`, text: `Balasan ${index}`,
+    }));
+    const results = [parent, result({ id: "yt", platform: "youtube" })];
+    const refs = ["comment:retained-3"];
+    const sources = resolveEvidence(refs, evidenceSources(refs, results, replies));
+    const citationUi = (
+      <>
+        <EvidenceLinks sources={sources} />
+        <ResultsList results={results} commentsByResult={{ r1: replies }} sortMode="relevance" />
+      </>
+    );
+    render(citationUi);
+    fireEvent.click(screen.getByRole("button", { name: /YouTube 1/ }));
+
+    try {
+      const citation = screen.getByRole("link", { name: /anggaprasetya · Threads/ });
+      expect(citation.getAttribute("href")).toBe("#balasan-retained-3");
+      citation.focus();
+      fireEvent.click(citation, { detail: 0 });
+      expect(window.location.hash).toBe("#balasan-retained-3");
+      expect(screen.getByRole("button", { name: /Threads 1/ }).getAttribute("aria-pressed")).toBe("true");
+      const reply = document.getElementById("balasan-retained-3");
+      expect(document.activeElement).toBe(reply);
+      expect(reply?.closest("article")?.id).toBe("hasil-r1");
+      expect(reply?.textContent).toContain("Balasan 3");
+      expect(screen.getByRole("button", { name: "Sembunyikan balasan tambahan" }).getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByRole("link", { name: /buka unggahan asli di Threads/i }).getAttribute("href")).toBe(parent.url);
+
+      window.history.back();
+      await waitFor(() => expect(document.activeElement).toBe(citation));
+      expect(window.location.hash).toBe("");
+      expect(screen.getByRole("button", { name: /Threads 1/ }).getAttribute("aria-pressed")).toBe("true");
+
+      window.history.replaceState(null, "", "#balasan-retained-3");
+      cleanup();
+      render(citationUi);
+      expect(document.activeElement?.id).toBe("balasan-retained-3");
+      expect(screen.getByRole("button", { name: /Threads 1/ }).getAttribute("aria-pressed")).toBe("true");
     } finally {
       window.history.replaceState(null, "", window.location.pathname);
     }

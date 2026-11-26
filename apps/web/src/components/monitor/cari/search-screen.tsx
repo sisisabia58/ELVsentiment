@@ -17,7 +17,6 @@ import { SearchForm, EXAMPLE_SEARCHES, type SearchFormInput } from "./search-for
 import { HistoryList } from "./history-list";
 import { PlatformTile } from "./platform-tile";
 import { AiSummary } from "./ai-summary";
-import { ConversationBreakdown } from "./conversation-breakdown";
 import { AskPanel } from "./ask-panel";
 import type { MoreSourceActions } from "./more-source-control";
 import { ProgressPanel } from "./progress-panel";
@@ -86,7 +85,18 @@ function SearchBody(props: {
     <div className={showSummary
       ? "mt-5 min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)] lg:items-start lg:gap-5"
       : "mt-5 min-w-0"}>
-      <div className="cari-results min-w-0">
+      {showSummary ? (
+        <aside className="cari-reveal mb-5 min-w-0 lg:col-start-2 lg:row-start-1 lg:mb-0">
+          <AiSummary
+            ai={snapshot.ai}
+            summaryStatus={summaryStatus}
+            results={snapshot.results}
+            comments={snapshot.comments}
+            hasMoreResults={snapshot.hasMoreResults}
+          />
+        </aside>
+      ) : null}
+      <div className="cari-results min-w-0 lg:col-start-1 lg:row-start-1">
         <ResultsList
           results={snapshot.results}
           commentsByResult={commentsByResult(snapshot)}
@@ -95,7 +105,6 @@ function SearchBody(props: {
           moreActions={props.moreActions}
           now={props.now}
         />
-        {showSummary && snapshot.ai ? <ConversationBreakdown snapshot={snapshot} /> : null}
         {showSummary ? (
           <div className="mt-5">
             <AskPanel
@@ -108,17 +117,6 @@ function SearchBody(props: {
           </div>
         ) : null}
       </div>
-      {showSummary ? (
-        <aside className="cari-reveal mt-5 min-w-0 lg:mt-0">
-          <AiSummary
-            ai={snapshot.ai}
-            summaryStatus={summaryStatus}
-            results={snapshot.results}
-            comments={snapshot.comments}
-            hasMoreResults={snapshot.hasMoreResults}
-          />
-        </aside>
-      ) : null}
     </div>
   );
 }
