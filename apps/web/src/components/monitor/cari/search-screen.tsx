@@ -123,20 +123,28 @@ function SearchBody(props: {
 
 function useStartSearch() {
   const router = useRouter();
-  const inFlight = useRef(false);
+  const phase = useRef<"idle" | "submitting" | "navigating">("idle");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useLayoutEffect(() => () => {
+    // Next can hide this route in an Activity and restore its draft on Back.
+    if (phase.current === "navigating") {
+      phase.current = "idle";
+      setStarting(false);
+    }
+  }, []);
+
   async function start(input: SearchFormInput) {
-    if (inFlight.current) return;
-    inFlight.current = true;
+    if (phase.current !== "idle") return;
+    phase.current = "submitting";
     setStarting(true);
     setError(null);
     try {
       const result = await startSearchAction(input);
       if (result.ok) {
-        // Keep the departing page locked while Next loads the new search route.
-        // The destination and a later Back navigation each mount their own form.
+        // Keep the old form locked until the route actually leaves view.
+        phase.current = "navigating";
         router.push(`/cari/${result.searchId}`);
         return;
       }
@@ -144,7 +152,7 @@ function useStartSearch() {
     } catch {
       setError("Pencarian gagal dimulai. Coba lagi.");
     }
-    inFlight.current = false;
+    phase.current = "idle";
     setStarting(false);
   }
 

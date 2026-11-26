@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { Activity } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
@@ -387,13 +388,19 @@ const UNFINISHED_AI_COPY = [
 ];
 
 describe("SearchScreen", () => {
-  it("keeps the submitted view locked until navigation and allows a new search after returning", async () => {
+  it("keeps the submitted view locked until navigation and unlocks the preserved form on Back", async () => {
     const start = vi.mocked(startSearchAction);
     push.mockClear();
     start.mockReset();
     start.mockResolvedValue({ ok: true, searchId: "next-search" });
-    const initial = <SearchScreen history={[]} now="2026-11-16T10:00:00Z" />;
-    const { unmount } = render(initial);
+    function route(mode: "visible" | "hidden") {
+      return (
+        <Activity mode={mode}>
+          <SearchScreen history={[]} now="2026-11-16T10:00:00Z" />
+        </Activity>
+      );
+    }
+    const { rerender } = render(route("visible"));
 
     fireEvent.change(screen.getByRole("textbox", { name: "Kata kunci pencarian" }), {
       target: { value: "barayam" },
@@ -405,9 +412,13 @@ describe("SearchScreen", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect((submit as HTMLButtonElement).disabled).toBe(true);
 
-    unmount();
-    render(initial);
-    fireEvent.change(screen.getByRole("textbox", { name: "Kata kunci pencarian" }), {
+    rerender(route("hidden"));
+    expect(screen.queryByRole("button", { name: "Cari" })).toBeNull();
+    rerender(route("visible"));
+    const query = screen.getByRole<HTMLInputElement>("textbox", { name: "Kata kunci pencarian" });
+    expect(query.value).toBe("barayam");
+    expect(query.disabled).toBe(false);
+    fireEvent.change(query, {
       target: { value: "kopi" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cari" }));
