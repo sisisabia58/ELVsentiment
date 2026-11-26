@@ -100,18 +100,24 @@ it.each([
 });
 
 it("admits a selected post beyond the bulk limit with only retained evidence", async () => {
-  const key = await snapshot({ count: 20 });
+  const key = await snapshot({ count: 21 });
   await expect(withCustomer(db, customerId, () => seedProjectFromSearch({ db, customerId, ...key })))
-    .resolves.toEqual({ added: 20, alreadyPresent: 0, skipped: 1 });
+    .resolves.toEqual({ added: 20, alreadyPresent: 0, skipped: 2 });
   await expect(resolve(key)).resolves.toMatchObject({
     ok: true, evidence: {
       id: key.resultId, externalId: key.resultId, authorName: "Pelanggan", text: "Tukuliling dingin #Kopi",
-      publishedAt: "2026-11-01T00:00:00.000Z", rank: 20,
+      publishedAt: "2026-11-01T00:00:00.000Z", rank: 21,
     }, mentionId: null,
   });
+  const peer = await db.query<{ id: string }>(
+    "select id from instant_search_results where search_id = $1 and rank = 20", [key.searchId],
+  );
+  const peerKey = { ...key, resultId: peer.rows[0].id };
+  await expect(resolve(peerKey)).resolves.toMatchObject({ ok: true, mentionId: null });
   const clientFields = { ...key, text: "Client text", source: "youtube", externalId: "client-id" };
   const result = await admit(clientFields);
   expect(result).toEqual({ ok: true, mentionId: expect.any(String) });
+  await expect(resolve(peerKey)).resolves.toMatchObject({ ok: true, mentionId: null });
   const posts = await db.query(`select id, source, external_id, excerpt, author, scoring_status, matched_variants,
     pantau_hashtags, pantau_origin_search_id from mentions where project_id = $1 and external_id = $2`,
     [projectId, key.resultId]);
@@ -161,4 +167,25 @@ it("rechecks eligibility in the insert statement if settings change after the ad
   } finally {
     await db.query("update keyword_variants set active = true where project_id = $1", [projectId]);
   }
+});
+
+it("rolls back a new mention when the snapshot expires before the insert returns", async () => {
+  const key = await snapshot();
+  const expiredDuringInsert: Queryable = {
+    ...db,
+    async query<T>(sql: string, params?: unknown[]) {
+      const rows = await db.query<T>(sql, params);
+      if (sql.includes("insert into mentions")) {
+        expect(rows.rows).toHaveLength(1);
+        // Model expiry while the insert is in flight, after its SQL snapshot was established.
+        await db.exec("reset role");
+        await db.query("update instant_searches set retention_expires_at = now() where id = $1", [key.searchId]);
+        await db.exec("set local role app_user");
+      }
+      return rows;
+    },
+  };
+  const outcome = await admit(key, expiredDuringInsert);
+  const posts = await db.query("select id from mentions where external_id = $1", [key.resultId]);
+  expect({ outcome, posts: posts.rows }).toEqual({ outcome: { ok: false, error: "not_found" }, posts: [] });
 });

@@ -4,7 +4,7 @@ import type { Keyword } from "@/domain/keyword-intent";
 import type { SnapshotResult } from "./load";
 import { SEARCH_RELEVANCE_VERSION } from "./relevance";
 import { isUuid } from "./search-id";
-import { IMPORTABLE_SEARCH, seedEvidenceForPost, type SeedPost } from "./seed-project";
+import { IMPORTABLE_SEARCH, readImportableSearch, seedEvidenceForPost, type SeedPost } from "./seed-project";
 
 export type ReviewKey = { searchId: string; resultId: string; projectId: string };
 export type ReviewDestination = "attention" | "ambiguous";
@@ -103,6 +103,7 @@ export async function admitReviewResult(
 
   // Recheck the result, search, and project in the write statement. Use the
   // server's current row and the variant matches and tags computed for that row.
+  await db.exec("savepoint cari_review_admission");
   const inserted = await db.query<{ id: string }>(
     `${REVIEW_POST}
      insert into mentions (
@@ -116,7 +117,16 @@ export async function admitReviewResult(
     [...reviewParams(customerId, key), randomUUID(), review.evidence.matched_variants,
       review.evidence.hashtags, review.post.saved_state],
   );
-  if (inserted.rows[0]) return { ok: true, mentionId: inserted.rows[0].id };
+  const created = inserted.rows[0];
+  if (created) {
+    // The unique index can hold the insert past its statement snapshot's
+    // retention deadline. Recheck with a fresh clock and undo this write if needed.
+    const retained = await readImportableSearch(db, customerId, key.searchId);
+    if (!retained) await db.exec("rollback to savepoint cari_review_admission");
+    await db.exec("release savepoint cari_review_admission");
+    return retained ? { ok: true, mentionId: created.id } : { ok: false, error: "not_found" };
+  }
+  await db.exec("release savepoint cari_review_admission");
 
   // After a concurrent conflicting insert commits, a new statement can see its row.
   const current = await readReviewAdmission(db, customerId, key);
