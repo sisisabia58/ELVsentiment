@@ -267,9 +267,9 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   );
 
   return (
-    <div ref={detail} className="mt-5 min-w-0">
+    <div ref={detail} className="cari-search-detail mt-5 min-w-0">
       {/* The mobile workspace header scrolls with the page. */}
-      <div ref={stickySearch} className="sticky top-[env(safe-area-inset-top,0px)] z-30 mb-4">
+      <div ref={stickySearch} className="cari-sticky-search sticky top-[env(safe-area-inset-top,0px)] z-30 mb-4">
         <SearchForm
           key={props.initialSnapshot.search.id}
           compact
@@ -355,7 +355,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
           Tidak ada hasil yang cocok dengan kata kunci.
         </p>
       ) : null}
-      <div className="[&_:is([id],[tabindex],a,button,input,textarea)]:scroll-mt-[calc(var(--cari-search-height,0px)+env(safe-area-inset-top,0px)+0.5rem)]">
+      <div>
         <SearchBody key={search.id} snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
       </div>
     </div>

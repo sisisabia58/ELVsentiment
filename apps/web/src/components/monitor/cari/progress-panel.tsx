@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { Check, ChevronDown, Circle, Clock3 } from "lucide-react";
+import { Check, ChevronDown, Circle, Clock3, TriangleAlert } from "lucide-react";
 import { cn } from "cn";
 import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
@@ -110,11 +110,18 @@ function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: M
   );
 }
 
-function ProgressStep({ label, status, active, done }: { label: string; status: string; active: boolean; done: boolean }) {
-  const Icon = done ? Check : active ? Clock3 : Circle;
+function ProgressStep({ label, status, active, done, warning }: {
+  label: string;
+  status: string;
+  active: boolean;
+  done: boolean;
+  warning?: boolean;
+}) {
+  const Icon = warning ? TriangleAlert : done ? Check : active ? Clock3 : Circle;
+  const iconColor = warning ? "text-warning" : done ? "text-positif" : active ? "text-primary" : "text-muted-foreground";
   return (
     <li className="flex min-w-0 items-start gap-2">
-      <Icon className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground", done && "text-positif", active && "text-primary")} aria-hidden="true" />
+      <Icon className={cn("mt-0.5 size-4 shrink-0", iconColor)} aria-hidden="true" />
       <div className="min-w-0">
         <p className="text-[13px] font-semibold text-foreground">{label}</p>
         <p className="text-xs text-muted-foreground">{status}</p>
@@ -177,13 +184,18 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
               : "Menunggu · setelah komentar";
   const summaryDone = summaryStatus === "done";
   const summaryRunning = summaryStatus === "running";
-  const sourcesStatus = sourcesBusy
-    ? "Sedang berjalan"
-    : snapshot.search.status === "failed"
-      ? "Pencarian gagal"
-      : running && done === 0
-        ? "Menunggu"
-        : "Sumber selesai";
+  const failedSources = snapshot.sources.filter((source) => source.state === "failed").length;
+  const searchFailed = snapshot.search.status === "failed";
+  const failureStatus = `${failedSources} sumber gagal`;
+  const sourcesStatus = searchFailed
+    ? "Pencarian gagal"
+    : sourcesBusy
+      ? failedSources > 0 ? `Sedang berjalan · ${failureStatus}` : "Sedang berjalan"
+      : failedSources > 0
+        ? failureStatus
+        : running && done === 0
+          ? "Menunggu"
+          : "Sumber selesai";
 
   return (
     <section className="rounded-xl border border-border bg-surface shadow-card">
@@ -201,7 +213,8 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
             label="Mencari sumber"
             status={sourcesStatus}
             active={sourcesBusy}
-            done={!sourcesBusy && !running && snapshot.search.status !== "failed"}
+            done={!sourcesBusy && !running && !searchFailed && failedSources === 0}
+            warning={searchFailed || failedSources > 0}
           />
           <ProgressStep label="Komentar" status={commentCopy} active={commentRunning} done={commentDone} />
           {props.aiEnabled ? (

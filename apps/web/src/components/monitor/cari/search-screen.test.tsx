@@ -435,13 +435,25 @@ describe("SearchDetail", () => {
     expect(screen.queryByText(/dari 180/)).toBeNull();
   });
 
-  it("renders a finished partial search without pretending every source answered", () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+  it("shows failed sources with results while source details are collapsed", () => {
     const partial = finishedSnapshot();
     partial.search.status = "partial";
-    partial.totals = { sources: 8, done: 6, results: 20 };
+    partial.sources[1] = { ...partial.sources[1], platform: "facebook", safeDetail: "hashtag_only" };
+    partial.sources.push({
+      platform: "reddit",
+      state: "failed",
+      resultCount: 0,
+      latencyMs: null,
+      safeDetail: "deadline",
+      updatedAt: "2026-11-16T10:00:31Z",
+    });
+    partial.totals = { sources: 3, done: 1, results: 1 };
     render(<SearchDetail initialSnapshot={partial} />);
-    expect(screen.getByText(/6 dari 8 sumber menjawab/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Rincian sumber" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("1 sumber gagal")).toBeTruthy();
+    expect(screen.queryByText("Sumber selesai")).toBeNull();
+    expect(screen.getByText(/1 dari 3 sumber menjawab/)).toBeTruthy();
+    expect(screen.getByText(partial.results[0].text)).toBeTruthy();
   });
 });
 

@@ -143,6 +143,10 @@
     opacity: 0;
   }
 
+  .cari-search-detail > :not(.cari-sticky-search) :is([id], [tabindex], a, button, input, textarea) {
+    scroll-margin-top: calc(var(--cari-search-height, 0px) + env(safe-area-inset-top, 0px) + 0.5rem);
+  }
+
   .cari-progress-bar {
     transition: width var(--motion-duration) ease-out;
   }
