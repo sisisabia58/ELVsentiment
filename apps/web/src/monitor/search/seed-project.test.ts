@@ -71,11 +71,13 @@ describe("Cari project seeding", () => {
     const searchId = await snapshot(customerId, { posts: 26 });
     await expect(seed(searchId)).resolves.toEqual({ added: 20, alreadyPresent: 0, skipped: 6 });
     await expect(seed(searchId)).resolves.toEqual({ added: 0, alreadyPresent: 20, skipped: 6 });
-    const found = await db.query(`select source, external_id, author, url, posted_at, pantau_title, pantau_hashtags, pantau_origin_search_id
+    const found = await db.query<{ external_id: string }>(`select source, external_id, author, url, posted_at, pantau_title, pantau_hashtags, pantau_origin_search_id
       from mentions where project_id = $1`, [projectId]);
     expect(found.rows).toHaveLength(20);
     expect(found.rows).not.toContainEqual(expect.objectContaining({ source: "instagram" }));
-    expect(found.rows).not.toContainEqual(expect.objectContaining({ external_id: "post-24" }));
+    expect(found.rows.map((row) => row.external_id).sort()).toEqual(
+      Array.from({ length: 20 }, (_, i) => `post-${i + 1}`).sort(),
+    );
     expect(found.rows).toContainEqual({
       source: "threads", external_id: "post-1", author: "pelanggan",
       url: "https://www.threads.net/@pelanggan/post/123", posted_at: new Date("2026-11-01T00:00:00.000Z"),
