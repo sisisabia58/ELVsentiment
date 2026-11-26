@@ -118,6 +118,50 @@ function failedSnapshot(errorCode: string): SearchSnapshot {
   };
 }
 
+it("mobile filter edits stay in the next search draft", async () => {
+  const initial = finishedSnapshot();
+  initial.search.filters = { dateWindow: "30d", sort: "relevance", language: "all" };
+  const start = vi.mocked(startSearchAction);
+  start.mockClear();
+  start.mockResolvedValue({ ok: true, searchId: "next-search" });
+  const { rerender } = render(<SearchDetail initialSnapshot={initial} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Filter pencarian" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Filter pencarian" }));
+  const dates = within(dialog.getByRole("radiogroup", { name: "Tanggal" }));
+  expect((dates.getByRole("radio", { name: "30 hari terakhir" }) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(dates.getByRole("radio", { name: "7 hari terakhir" }));
+  fireEvent.click(dialog.getByRole("radio", { name: "Bahasa Indonesia" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Tutup filter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Hapus filter Bahasa: Indonesia" }));
+  expect(start).not.toHaveBeenCalled();
+  expect(screen.getByText("30 hari terakhir · Paling cocok")).toBeTruthy();
+
+  rerender(<SearchDetail initialSnapshot={{ ...initial }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Cari" }));
+  await waitFor(() => expect(start).toHaveBeenCalledExactlyOnceWith({
+    query: "barayam",
+    filters: { dateWindow: "7d", sort: "relevance", language: "all" },
+  }));
+});
+
+it("initializes the draft again for a different search ID", () => {
+  const initial = finishedSnapshot();
+  const { rerender } = render(<SearchDetail initialSnapshot={initial} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "Kata kunci pencarian" }), {
+    target: { value: "draft" },
+  });
+
+  const next = { ...initial, search: {
+    ...initial.search, id: "other-id", query: "kopi", filters: {
+      dateWindow: "24h" as const, sort: "relevance" as const, language: "all" as const,
+    },
+  } };
+  rerender(<SearchDetail initialSnapshot={next} />);
+  expect((screen.getByRole("textbox", { name: "Kata kunci pencarian" }) as HTMLInputElement).value).toBe("kopi");
+  expect(screen.getByRole("button", { name: "Hapus filter Tanggal: 24 jam" })).toBeTruthy();
+});
+
 describe("SearchDetail", () => {
   it("keeps the old receipt and reruns its query and filters with no verified evidence", async () => {
     const done = finishedSnapshot();

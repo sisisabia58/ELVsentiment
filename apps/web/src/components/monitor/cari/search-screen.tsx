@@ -121,6 +121,35 @@ function SearchBody(props: {
   );
 }
 
+function useStartSearch() {
+  const router = useRouter();
+  const inFlight = useRef(false);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function start(input: SearchFormInput) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setStarting(true);
+    setError(null);
+    try {
+      const result = await startSearchAction(input);
+      if (result.ok) {
+        router.push(`/cari/${result.searchId}`);
+        return;
+      }
+      setError(ERROR_COPY[result.error] ?? "Pencarian gagal dimulai. Coba lagi.");
+    } catch {
+      setError("Pencarian gagal dimulai. Coba lagi.");
+    } finally {
+      inFlight.current = false;
+      setStarting(false);
+    }
+  }
+
+  return { start, starting, error };
+}
+
 function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComment[]> {
   const grouped: Record<string, SnapshotComment[]> = {};
   for (const comment of snapshot.comments) {
@@ -177,8 +206,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   }
 
   const [monitorError, setMonitorError] = useState<string | null>(null);
-  const [rerunError, setRerunError] = useState<string | null>(null);
-  const [rerunning, setRerunning] = useState(false);
+  const { start, starting, error } = useStartSearch();
   const running = search.status === "queued" || search.status === "running";
   const legacy = search.legacyEvidence === true;
   const aiEnabled = props.aiEnabled === true && !legacy;
@@ -198,25 +226,24 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
       ? (search.errorCode ? FAILED_SEARCH_COPY[search.errorCode] : null) ?? FAILED_SEARCH_FALLBACK
       : null;
 
-  async function rerun() {
-    setRerunning(true);
-    setRerunError(null);
-    try {
-      const result = await startSearchAction({ query: search.query, filters: search.filters });
-      if (result.ok) {
-        router.push(`/cari/${result.searchId}`);
-        return;
-      }
-      setRerunError(ERROR_COPY[result.error] ?? "Pencarian gagal dimulai. Coba lagi.");
-    } catch {
-      setRerunError("Pencarian gagal dimulai. Coba lagi.");
-    } finally {
-      setRerunning(false);
-    }
-  }
-
   return (
     <div className="mt-5 min-w-0">
+      {/* The mobile workspace header scrolls with the page. */}
+      <div className="sticky top-[env(safe-area-inset-top,0px)] z-30 mb-4">
+        <SearchForm
+          key={props.initialSnapshot.search.id}
+          compact
+          initialQuery={props.initialSnapshot.search.query}
+          initialFilters={props.initialSnapshot.search.filters}
+          onSubmit={start}
+          pending={starting}
+        />
+        {error ? (
+          <p role="alert" className="mt-2 rounded-lg border border-negatif/30 bg-negatif-bg px-3 py-2 text-sm text-negatif">
+            {error}
+          </p>
+        ) : null}
+      </div>
       <section className="min-w-0 rounded-xl bg-surface p-4 shadow-card sm:p-5">
         <div className="flex min-w-0 items-start gap-2.5">
           <span aria-hidden="true" className="shrink-0 font-mono font-semibold text-primary">$</span>
@@ -280,14 +307,13 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
             </p>
             <button
               type="button"
-              disabled={rerunning}
-              onClick={() => void rerun()}
+              disabled={starting}
+              onClick={() => void start({ query: search.query, filters: search.filters })}
               className="workspace-feedback inline-flex min-h-11 min-w-11 items-center rounded-lg border border-border px-3 font-medium text-foreground hover:bg-surface-subtle"
             >
-              {rerunning ? "Memulai…" : "Cari ulang"}
+              {starting ? "Memulai…" : "Cari ulang"}
             </button>
           </div>
-          {rerunError ? <p role="alert" className="mt-2 text-negatif">{rerunError}</p> : null}
         </div>
       ) : null}
       <div className="mt-5">
@@ -305,26 +331,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
 
 export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; aiEnabled?: boolean }) {
   const aiEnabled = props.aiEnabled ?? false;
-  const router = useRouter();
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function start(input: SearchFormInput) {
-    setStarting(true);
-    setError(null);
-    try {
-      const result = await startSearchAction(input);
-      if (result.ok) {
-        router.push(`/cari/${result.searchId}`);
-        return;
-      }
-      setError(ERROR_COPY[result.error] ?? "Pencarian gagal dimulai. Coba lagi.");
-    } catch {
-      setError("Pencarian gagal dimulai. Coba lagi.");
-    } finally {
-      setStarting(false);
-    }
-  }
+  const { start, starting, error } = useStartSearch();
 
   async function startExample(query: string, filters: SearchFilters = DEFAULT_FILTERS) {
     await start({ query, filters });
