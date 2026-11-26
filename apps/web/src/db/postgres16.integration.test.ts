@@ -10,6 +10,7 @@ import { runNowAction } from "../app/dasbor/actions";
 import { saveVariantsAction } from "../app/onboarding/actions";
 import { createProject, saveProjectConfiguration } from "../projects/handlers";
 import { createInstantSearch } from "../monitor/search/mutations";
+import { routeCariResult, undoCariRoute } from "../monitor/search/review-routing";
 import { saveProviderSetting } from "../monitor/search/provider-settings";
 import { type Queryable, withCustomer } from "./migrate";
 import { enableRoleLogin, MIGRATION_ADVISORY_LOCK, migrate, sha256 } from "./production-migrate.mjs";
@@ -170,6 +171,53 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
       await admin.end();
     }
   }, 180_000);
+
+  it("isolates manual routes and serializes competing first writes, retries, and stale undo", async () => {
+    await migrate(db, { sqlDir: SQL_DIR });
+    const customerId = randomUUID(), foreignId = randomUUID(), searchId = randomUUID();
+    const local = clientAsQueryable(db);
+    const peer = await connect(dbUrl(DB_NAME));
+    const env = { CARI_SEKARANG_ENABLED: "1", PANTAU_FILTER_TRIAGE_ENABLED: "1" };
+    try {
+      await db.query("insert into customers (id,customer_id,created_at) values ($1,$1,now()),($2,$2,now())", [customerId,foreignId]);
+      const projectId = (await createProject(local, customerId, "Tukuliling")).projectId;
+      await saveProjectConfiguration(local, customerId, { projectId, brandName: "Tukuliling", variants: ["tukuliling"],
+        sources: ["threads"], schedule: { mode: "off", intervalHours: 6 } }, undefined, { x: false, threads: true });
+      await db.query("update projects set pantau_filter_triage=true where id=$1", [projectId]);
+      await db.query(`insert into instant_searches (id,customer_id,query_text,keyword_intent,date_window,sort_mode,
+        language_filter,status,finished_at,deadline_at,retention_expires_at,relevance_version)
+        values ($1,$2,'tukuliling','phrase','all','relevance','all','succeeded',now(),now(),now()+interval '1 day',1)`, [searchId,customerId]);
+      await db.query(`insert into instant_search_sources (search_id,customer_id,platform,provider,state)
+        values ($1,$2,'threads','scrapecreators','answered')`, [searchId,customerId]);
+      const connections = [local, clientAsQueryable(peer)].map((db) => ({ db, customerId, env }));
+      for (const replay of [false,true]) {
+        const resultId = randomUUID();
+        await db.query(`insert into instant_search_results
+          (id,search_id,customer_id,platform,external_id,text,relevance,source_provider,web_index,raw_ref,rank)
+          values ($1,$2,$3,'threads',$4,'Tukuliling dingin','literal_match','scrapecreators',false,'fixture',1)`,
+          [resultId, searchId, customerId, resultId]);
+        const input = { searchId, resultId, projectId, requestId: randomUUID(), expectedRevision: null, destination: "attention" as const };
+        const outcomes = await Promise.all(connections.map((ctx, index) => routeCariResult(ctx,
+          { ...input, requestId: index && !replay ? randomUUID() : input.requestId })));
+        const winner = outcomes.find((outcome) => outcome.ok);
+        if (!winner?.ok) throw new Error("no winning route");
+        if (replay) expect(outcomes).toEqual([winner,winner]);
+        else expect(outcomes).toContainEqual({ ok: false, error: "conflict" });
+        const next = await routeCariResult(connections[0], { ...input, expectedRevision: winner.route.revision,
+          destination: "ambiguous", requestId: randomUUID() });
+        expect(next).toMatchObject({ ok: true, route: { destination: "ambiguous" } });
+        const stale = { projectId, mentionId: winner.mentionId, revision: winner.route.revision! };
+        expect(await undoCariRoute(connections[1], stale)).toEqual({ ok: false, error: "conflict" });
+        expect(await undoCariRoute({ ...connections[0], customerId: foreignId }, stale)).toEqual({ ok: false, error: "not_found" });
+        await withCustomer(local, foreignId, async () => {
+          expect((await local.query("select mention_id from pantau_manual_routes where mention_id=$1", [winner.mentionId])).rows).toEqual([]);
+          expect((await local.query("update pantau_manual_routes set destination='attention' where mention_id=$1 returning mention_id", [winner.mentionId])).rows).toEqual([]);
+        });
+      }
+    } finally {
+      await peer.end();
+    }
+  });
 
   it("applies every sql file to a fresh database and is a no-op the second time", async () => {
     await migrate(db, { sqlDir: SQL_DIR });

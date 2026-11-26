@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "cn";
+import { isOpenUncertain, type PresentedManualRoute } from "@/monitor/present";
 import { projectHref } from "@/monitor/links";
 import { Wordmark } from "./bits";
 
@@ -284,7 +285,7 @@ export function Frame(props: {
     initials: string;
     project: { id: string; name: string; initials: string } | null;
     projects: { id: string; name: string; initials: string }[];
-    mentions: { attentionUnread: boolean; bucket: string; confirmed: boolean; corrected: boolean }[];
+    mentions: { manualRoute?: PresentedManualRoute; attentionUnread: boolean; bucket: string; confirmed: boolean; corrected: boolean }[];
     cariEnabled?: boolean;
     cariAiEnabled?: boolean;
     isAdmin?: boolean;
@@ -293,9 +294,7 @@ export function Frame(props: {
   children: ReactNode;
 }) {
   const attention = props.workspace.mentions.filter((mention) => mention.attentionUnread).length;
-  const uncertain = props.workspace.mentions.filter(
-    (mention) => mention.bucket === "not_sure" && !mention.confirmed && !mention.corrected,
-  ).length;
+  const uncertain = props.workspace.mentions.filter(isOpenUncertain).length;
   return (
     <WorkspaceShell
       active={props.active}

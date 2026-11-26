@@ -3,6 +3,12 @@
 import { withSessionDeps } from "@/auth/request-session";
 import { writeOnboardingDraftCookie } from "@/monitor/onboarding-draft-cookie";
 import { customerIdFromSessionToken } from "@/auth/session";
+import type { Queryable } from "@/db/migrate";
+import type { ReviewKey } from "@/monitor/search/review-result";
+import {
+  readCariReview, routeCariResult, undoCariRoute, type RouteInput, type UndoInput,
+  type ReviewReadResult, type ReviewWriteResult,
+} from "@/monitor/search/review-routing";
 import { readSearchLimits } from "@/monitor/search/limits";
 import { requestMoreSource, type RequestMoreResult } from "@/monitor/search/more-source";
 import {
@@ -126,4 +132,30 @@ export async function startMoreSourceAction(
       dailyLimit: readSearchLimits().cariDailySearchLimit,
     });
   });
+}
+
+async function withReviewSession<T>(action: (ctx: {
+  db: Queryable; customerId: string; env: NodeJS.ProcessEnv;
+}) => Promise<T>) {
+  return withSessionDeps(async (deps) => {
+    let customerId: string;
+    try {
+      customerId = await customerIdFromSessionToken(deps.db, await deps.readSessionToken());
+    } catch {
+      return { ok: false as const, error: "unauthenticated" as const };
+    }
+    return action({ db: deps.db, customerId, env: process.env });
+  });
+}
+
+export async function readCariReviewAction(key: ReviewKey): Promise<ReviewReadResult> {
+  return withReviewSession((ctx) => readCariReview(ctx, key));
+}
+
+export async function routeCariResultAction(input: RouteInput): Promise<ReviewWriteResult> {
+  return withReviewSession((ctx) => routeCariResult(ctx, input));
+}
+
+export async function undoCariRouteAction(input: UndoInput): Promise<ReviewWriteResult> {
+  return withReviewSession((ctx) => undoCariRoute(ctx, input));
 }

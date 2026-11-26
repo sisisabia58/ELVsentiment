@@ -7,7 +7,7 @@ import { SCHEDULED_CAP_COPY, SCHEDULED_CAP_PARTIAL_COPY } from "../projects/dash
 import { buildDashboard, type DashboardModel, type SourceKey } from "./dashboard";
 import { asSources, type SourceCredentials } from "./onboarding-draft";
 import { ALL_SOURCES, loadScheduledSourceAvailability, readMonitorPolicy, reviewTopicChoices, SOURCE_NAME, type SourceId } from "./policy";
-import { presentMention, type PresentedMention } from "./present";
+import { isOpenUncertain, presentMention, type PresentedMention } from "./present";
 import { readStoredMentions } from "./mention-store";
 import { parseRangeKey, type RangeKey } from "./range";
 import { choiceFromRow, type ScheduleChoice } from "./schedule-choice";
@@ -384,7 +384,7 @@ export function dashboardFor(workspace: Workspace, rangeValue: string | undefine
     source,
     now,
     attentionUnread: mentions.filter((mention) => mention.attentionUnread).length,
-    uncertainOpen: mentions.filter((mention) => mention.bucket === "not_sure" && !mention.confirmed && !mention.corrected).length,
+    uncertainOpen: mentions.filter(isOpenUncertain).length,
     partial: workspace.sources.some(
       (item) =>
         !item.configured ||

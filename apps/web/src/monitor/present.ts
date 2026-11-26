@@ -1,6 +1,7 @@
 import { attentionDecision } from "../domain/attention";
 import { displayOf, type OwnerCorrection } from "../domain/display";
 import { failedScoring, routeJudgment, type ParsedJudgment, type ScoringPolicy } from "../domain/routing";
+import type { ReviewDestination } from "./search/review-result";
 import { initialsFrom } from "./format";
 import type { SourceId } from "./policy";
 import { textMatchOf, type TextMatch } from "./relevance";
@@ -52,7 +53,10 @@ type Triage = { status: TriageStatus } & Partial<TriageJudgment>;
 export type MentionBucket = "included" | "excluded" | "not_sure" | "failed" | "pending" | "policy_unapproved";
 export type UncertainField = "relevansi" | "sentimen" | "topik" | "keluhan";
 
+export type PresentedManualRoute = { destination: ReviewDestination; routedAt: string };
+
 export type StoredMention = {
+  manualRoute?: PresentedManualRoute;
   id: string;
   source: SourceId;
   excerpt: string;
@@ -76,6 +80,7 @@ export type StoredMention = {
 };
 
 export type PresentedMention = {
+  manualRoute?: PresentedManualRoute;
   id: string;
   source: SourceId;
   excerpt: string;
@@ -164,13 +169,16 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
         ? "relevant"
         : null;
     const originalSentiment = result?.sentiment === "unclear" ? null : result?.sentiment ?? null;
-    const bucket: MentionBucket = correction
+    const manualRoute = correction?.relevance === "irrelevant" ? undefined : row.manualRoute;
+    const automaticBucket: MentionBucket = correction
       ? correction.relevance === "relevant" ? "included" : "excluded"
       : result?.destination === "attention" || result?.destination === "mention" ? "included"
         : result?.destination === "ambiguous" ? "not_sure"
           : result?.destination === "excluded" ? "excluded"
             : status === "failed" || status === "completed" || status === "unavailable" ? "failed" : "pending";
-    const needsAttention = bucket === "included" && (correction
+    const bucket = manualRoute?.destination === "attention" ? "included"
+      : manualRoute?.destination === "ambiguous" ? "not_sure" : automaticBucket;
+    const needsAttention = manualRoute ? manualRoute.destination === "attention" : bucket === "included" && (correction
       ? row.attentionId !== null
       : result?.destination === "attention");
     const relevance = correction ? correction.relevance : originalRelevance;
@@ -179,6 +187,7 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
         : result ? "no_literal_match" : row.associationStatuses.length ? base.textMatch : "unknown_text";
     return {
       ...base,
+      manualRoute,
       textMatch,
       bucket,
       relevance,
@@ -191,7 +200,7 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
       uncertainFields: bucket === "not_sure" ? [result?.reason === "complaint_unclear" ? "keluhan" : "relevansi"] : [],
       needsAttention,
       attentionUnread: needsAttention && row.readAt === null,
-      scoringStatus: bucket === "pending" ? status === "processing" ? "scoring" : "pending" : bucket === "failed" ? "failed" : "succeeded",
+      scoringStatus: automaticBucket === "pending" ? status === "processing" ? "scoring" : "pending" : automaticBucket === "failed" ? "failed" : "succeeded",
       triage: { ...result, status: status === "completed" && !result ? "failed" : status },
     };
   }
@@ -287,3 +296,10 @@ export const SENTIMENT_LABEL: Record<Sentiment, string> = {
   negative: "Negatif",
   mixed: "Campuran",
 };
+
+export function isOpenUncertain(mention: {
+  bucket: string; confirmed: boolean; corrected: boolean; manualRoute?: PresentedManualRoute;
+}) {
+  return mention.bucket === "not_sure" && (mention.manualRoute?.destination === "ambiguous"
+    || (!mention.confirmed && !mention.corrected));
+}

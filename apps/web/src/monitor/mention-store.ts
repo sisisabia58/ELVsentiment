@@ -48,6 +48,8 @@ type MentionSql = {
   attention_id: string | null;
   attention_unread: boolean | null;
   association_statuses: unknown;
+  manual_destination: "attention" | "ambiguous" | null;
+  routed_at: string | Date | null;
   pantau_filter_triage: boolean;
   triage_status: TriageStatus | null;
   destination: TriageJudgment["destination"] | null;
@@ -99,6 +101,8 @@ function toStored(row: MentionSql): StoredMention {
     correctionAt: iso(row.correction_at),
     attentionId: row.attention_id,
     attentionUnread: row.attention_unread === true,
+    manualRoute: row.manual_destination && row.routed_at
+      ? { destination: row.manual_destination, routedAt: new Date(row.routed_at).toISOString() } : undefined,
     associationStatuses: asTextArray(row.association_statuses),
     triage: row.pantau_filter_triage ? { status: row.triage_status ?? "pending", judgment } : undefined,
   };
@@ -117,10 +121,13 @@ export async function readStoredMentions(
             c.topics as correction_topics, c.created_at as correction_at,
             a.id as attention_id, a.unread as attention_unread,
             assoc.statuses as association_statuses, p.pantau_filter_triage, tj.status as triage_status,
+            mr.destination as manual_destination, mr.routed_at,
             t.destination, t.origin, t.relevance_tier, t.sentiment as triage_sentiment,
             t.reason, t.issue_category, t.verified_excerpt
      from mentions m
      join projects p on p.id = m.project_id and p.customer_id = m.customer_id
+     left join pantau_manual_routes mr
+       on mr.mention_id = m.id and mr.customer_id = m.customer_id and mr.project_id = m.project_id
      left join pantau_triage_jobs tj
        on tj.mention_id = m.id and tj.customer_id = m.customer_id and tj.project_id = m.project_id
        and p.pantau_filter_triage
