@@ -29,11 +29,6 @@ function commentTextIsVisible(value: string): boolean {
   return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;
 }
 
-function retainedComments(comments: SnapshotComment[], replyCount: number | null): SnapshotComment[] {
-  const withText = comments.filter((comment) => commentTextIsVisible(comment.text));
-  return replyCount != null && replyCount >= 0 ? withText.slice(0, replyCount) : withText;
-}
-
 function Engagement(props: { result: SnapshotResult }) {
   const result = props.result;
   const replies = result.replies;
@@ -72,10 +67,11 @@ function ResultCard(props: {
   const result = props.result;
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [repliesOpen, setRepliesOpen] = useState(false);
-  const retained = retainedComments(props.comments, result.replies);
+  const retained = props.comments.filter((comment) => commentTextIsVisible(comment.text));
   const comments = repliesOpen ? retained : retained.slice(0, 3);
   const hiddenRetained = Math.max(0, retained.length - 3);
-  const uncollected = result.replies == null ? 0 : Math.max(0, result.replies - retained.length);
+  const uncollected = Math.max(0, (result.replies ?? 0) - props.comments.length);
+  const replyTotal = Math.max(retained.length, result.replies ?? 0);
   const repliesId = `balasan-hasil-${result.id}`;
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
@@ -165,7 +161,7 @@ function ResultCard(props: {
           <p className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold text-muted-foreground">
             <MessageSquareText className="size-3.5" aria-hidden="true" />
             BALASAN TERATAS
-            <span className="rounded bg-border px-1 tabular-nums text-foreground">{retained.length + uncollected}</span>
+            <span className="rounded bg-border px-1 tabular-nums text-foreground">{replyTotal}</span>
           </p>
           <div id={repliesId} className="divide-y divide-border/70">
             {comments.map((comment, index) => (

@@ -575,7 +575,12 @@ describe("SearchScreen", () => {
   });
 });
 
-it.each(["hasil", "rincian"] as const)("Cari lagi dispatches once and announces additions from %s", async (entry) => {
+it.each([
+  { entry: "hasil", movesFocus: false, outcome: "exhausted" },
+  { entry: "rincian", movesFocus: false, outcome: "exhausted" },
+  { entry: "hasil", movesFocus: true, outcome: "exhausted" },
+  { entry: "hasil", movesFocus: false, outcome: "failed" },
+] as const)("Cari lagi dispatches once and manages focus from $entry ($outcome, moved=$movesFocus)", async ({ entry, movesFocus, outcome }) => {
   const initial = finishedSnapshot();
   const tiktok = {
     ...initial.sources[0],
@@ -588,7 +593,7 @@ it.each(["hasil", "rincian"] as const)("Cari lagi dispatches once and announces 
 
   const updated = {
     ...initial,
-    sources: [{ ...tiktok, more: { state: "exhausted", added: 1, generation: 1 } }, initial.sources[1]],
+    sources: [{ ...tiktok, more: { state: outcome, added: outcome === "exhausted" ? 1 : null, generation: 1 } }, initial.sources[1]],
     results: [...initial.results, post({ platform: "tiktok", id: "r2", text: "hasil tambahan yang cocok" })],
   };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -600,12 +605,22 @@ it.each(["hasil", "rincian"] as const)("Cari lagi dispatches once and announces 
   fireEvent.click(screen.getByRole("button", { name: "TikTok 1" }));
   const buttons = screen.getAllByRole("button", { name: "Cari lagi di TikTok" });
   expect(buttons).toHaveLength(entry === "rincian" ? 2 : 1);
+  buttons[0].focus();
   fireEvent.click(buttons[0]);
   fireEvent.click(buttons.at(-1)!);
   expect(startMoreSourceAction).toHaveBeenCalledExactlyOnceWith(initial.search.id, "tiktok", 0);
+  const disclosure = screen.getByRole("button", { name: "Rincian sumber" });
+  if (movesFocus) disclosure.focus();
   expect(await screen.findByText("hasil tambahan yang cocok", {}, { timeout: 3000 })).not.toBeNull();
   expect(screen.getByText(initial.results[0].text)).not.toBeNull();
-  expect(screen.getAllByRole("status").filter((node) => node.textContent?.includes("1 hasil cocok ditambahkan"))).toHaveLength(1);
+  const announcement = outcome === "exhausted" ? "1 hasil cocok ditambahkan" : "Gagal mengambil hasil tambahan.";
+  expect(screen.getAllByRole("status").filter((node) => node.textContent?.includes(announcement))).toHaveLength(1);
+  if (movesFocus) {
+    expect(document.activeElement).toBe(disclosure);
+  } else {
+    expect(document.activeElement?.tagName).toBe("SPAN");
+    expect(document.activeElement?.textContent).toContain(outcome === "exhausted" ? "Tidak ada halaman tambahan." : announcement);
+  }
   expect(screen.getByRole("button", { name: "TikTok 2" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: "Cari lagi di TikTok" })).toBeNull();
   expect(screen.queryByText(/kredit|Rp\s?\d/i)).toBeNull();

@@ -1,3 +1,5 @@
+import { Component, createRef } from "react";
+import { cn } from "cn";
 import { Plus } from "lucide-react";
 import type { MoreSourceState } from "@/monitor/search/more-source";
 import { platformName } from "./platform-tile";
@@ -39,23 +41,67 @@ export function MoreSourceControl({ platform, more, actions }: {
   const { pending, message } = pagingFeedback(platform, more, actions);
   const actionable = more.state === "available" || pending;
   return (
-    <div className="flex min-w-0 max-w-44 flex-col items-end gap-1">
-      {actionable ? (
-        <button
-          type="button"
-          aria-label={`Cari lagi di ${platformName(platform)}`}
-          aria-busy={pending}
-          aria-disabled={pending}
-          onClick={() => {
-            if (!pending) actions.request(platform, more.generation);
-          }}
-          className="workspace-feedback inline-flex min-h-11 min-w-25 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 text-xs font-semibold text-primary hover:bg-surface-subtle aria-disabled:opacity-65"
-        >
-          <Plus className="size-3.5" aria-hidden="true" />
-          {pending ? "Mencari…" : "Cari lagi"}
-        </button>
-      ) : null}
-      {message ? <span className="text-right text-xs leading-snug text-muted-foreground">{message}</span> : null}
-    </div>
+    <SourcePaging
+      platform={platform}
+      actionable={actionable}
+      pending={pending}
+      message={message}
+      request={() => actions.request(platform, more.generation)}
+    />
   );
+}
+
+type SourcePagingProps = {
+  platform: string;
+  actionable: boolean;
+  pending: boolean;
+  message: string;
+  request: () => void;
+};
+
+class SourcePaging extends Component<SourcePagingProps, object, boolean> {
+  private action = createRef<HTMLButtonElement>();
+  private feedback = createRef<HTMLSpanElement>();
+
+  getSnapshotBeforeUpdate(): boolean {
+    return !this.props.actionable && this.action.current === document.activeElement;
+  }
+
+  componentDidUpdate(_previous: SourcePagingProps, _state: object, restoreFocus?: boolean) {
+    if (restoreFocus) this.feedback.current?.focus({ preventScroll: true });
+  }
+
+  render() {
+    const { platform, actionable, pending, message, request } = this.props;
+    return (
+      <div className="flex min-w-0 max-w-44 flex-col items-end gap-1">
+        {actionable ? (
+          <button
+            ref={this.action}
+            type="button"
+            aria-label={`Cari lagi di ${platformName(platform)}`}
+            aria-busy={pending}
+            aria-disabled={pending}
+            onClick={() => {
+              if (!pending) request();
+            }}
+            className="workspace-feedback inline-flex min-h-11 min-w-25 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 text-xs font-semibold text-primary hover:bg-surface-subtle aria-disabled:opacity-65"
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+            {pending ? "Mencari…" : "Cari lagi"}
+          </button>
+        ) : null}
+        {message ? (
+          <span
+            ref={this.feedback}
+            tabIndex={-1}
+            className={cn("rounded-sm text-right text-xs leading-snug text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+              pending && "invisible")}
+          >
+            {message}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
 }

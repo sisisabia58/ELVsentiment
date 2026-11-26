@@ -277,10 +277,10 @@ describe("ResultsList", () => {
     expect(screen.getByText("enak")).toBeTruthy();
     expect(screen.getByText("3 balasan")).toBeTruthy();
     expect(screen.getAllByText(/▲/)).toHaveLength(1);
-    expect(screen.getByText("2 balasan lainnya belum diambil")).toBeTruthy();
+    expect(screen.getByText("1 balasan lainnya belum diambil")).toBeTruthy();
   });
 
-  it("drops invisible facebook replies and keeps the lainnya count on the rows shown", () => {
+  it("does not count retained Facebook stickers or invisible replies as uncollected", () => {
     render(
       <ResultsList
         results={[result({ id: "r1", platform: "facebook", replies: 3 })]}
@@ -300,13 +300,13 @@ describe("ResultsList", () => {
     expect(screen.queryByText("Miki Yong")).toBeNull();
     expect(screen.queryByText("Stiker")).toBeNull();
     expect(screen.getAllByText(/▲/)).toHaveLength(1);
-    expect(screen.getByText("2 balasan lainnya belum diambil")).toBeTruthy();
+    expect(screen.queryByText(/belum diambil/)).toBeNull();
     const block = screen.getByLabelText(/contoh balasan/i);
     expect(block.textContent).toContain("3");
     expect(block.textContent).not.toContain("4");
   });
 
-  it("shows the stored Zhong Lun text and counts lainnya from the rows on screen", () => {
+  it("shows the stored Zhong Lun text and counts blank replies as collected", () => {
     render(
       <ResultsList
         results={[result({ id: "r1", platform: "facebook", replies: 3, authorName: "Rojaklah" })]}
@@ -349,13 +349,13 @@ describe("ResultsList", () => {
     expect(screen.getByText("Edward Gooi")).toBeTruthy();
     expect(screen.queryByText("Kosong")).toBeNull();
     expect(screen.getAllByText(/▲/)).toHaveLength(2);
-    expect(screen.getByText("1 balasan lainnya belum diambil")).toBeTruthy();
+    expect(screen.queryByText(/belum diambil/)).toBeNull();
     const block = screen.getByLabelText(/contoh balasan/i);
     expect(block.textContent).toContain("3");
     expect(block.textContent).not.toContain("4");
   });
 
-  it("does not show more reply rows than the post reports", () => {
+  it("discloses retained reply rows even if the post reports fewer replies", () => {
     const rows = ["satu", "dua", "tiga", "empat"].map((text, index) => ({
       ...comments.r1[0],
       id: `c${index}`,
@@ -373,7 +373,9 @@ describe("ResultsList", () => {
     );
     expect(screen.getAllByText(/▲/)).toHaveLength(3);
     expect(screen.queryByText("empat")).toBeNull();
-    expect(screen.queryByText(/balasan lainnya/)).toBeNull();
+    expect(screen.queryByText(/belum diambil/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Lihat 1 balasan tersimpan" }));
+    expect(document.getElementById("balasan-c3")?.textContent).toContain("empat");
   });
 
   it("replaces a broken thumbnail with an aria-hidden platform placeholder", () => {
