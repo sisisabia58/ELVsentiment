@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
 import { startMoreSourceAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchDetail, SearchScreen } from "./search-screen";
 
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push }),
 }));
 vi.mock("@/app/cari/start-action", () => ({
   startSearchAction: vi.fn(),
@@ -160,6 +162,34 @@ it("initializes the draft again for a different search ID", () => {
   rerender(<SearchDetail initialSnapshot={next} />);
   expect((screen.getByRole("textbox", { name: "Kata kunci pencarian" }) as HTMLInputElement).value).toBe("kopi");
   expect(screen.getByRole("button", { name: "Hapus filter Tanggal: 24 jam" })).toBeTruthy();
+});
+
+it("updates the result scroll offset as the sticky search form changes height", () => {
+  let resized: () => void = () => {};
+  let height = 105;
+  class SearchResizeObserver {
+    constructor(callback: () => void) {
+      resized = callback;
+    }
+    observe() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", SearchResizeObserver);
+  const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(() => ({ height }) as DOMRect);
+  try {
+    render(<SearchDetail initialSnapshot={finishedSnapshot()} />);
+    const result = screen.getByText("antrean barayam ciledug tadi malem");
+    expect(result.closest<HTMLElement>("[style*='--cari-search-height']")?.style
+      .getPropertyValue("--cari-search-height")).toBe("105px");
+
+    height = 155;
+    act(() => resized());
+    expect(result.closest<HTMLElement>("[style*='--cari-search-height']")?.style
+      .getPropertyValue("--cari-search-height")).toBe("155px");
+  } finally {
+    measure.mockRestore();
+  }
 });
 
 describe("SearchDetail", () => {
@@ -357,6 +387,34 @@ const UNFINISHED_AI_COPY = [
 ];
 
 describe("SearchScreen", () => {
+  it("keeps the submitted view locked until navigation and allows a new search after returning", async () => {
+    const start = vi.mocked(startSearchAction);
+    push.mockClear();
+    start.mockReset();
+    start.mockResolvedValue({ ok: true, searchId: "next-search" });
+    const initial = <SearchScreen history={[]} now="2026-11-16T10:00:00Z" />;
+    const { unmount } = render(initial);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Kata kunci pencarian" }), {
+      target: { value: "barayam" },
+    });
+    const submit = screen.getByRole("button", { name: "Cari" });
+    fireEvent.click(submit);
+    await waitFor(() => expect(push).toHaveBeenCalledExactlyOnceWith("/cari/next-search"));
+    fireEvent.submit(submit.closest("form")!);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+
+    unmount();
+    render(initial);
+    fireEvent.change(screen.getByRole("textbox", { name: "Kata kunci pencarian" }), {
+      target: { value: "kopi" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cari" }));
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(2));
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
   it("lets users select the date, sort, and language filters", () => {
     render(<SearchScreen history={[]} now="2026-11-16T10:00:00Z" />);
 

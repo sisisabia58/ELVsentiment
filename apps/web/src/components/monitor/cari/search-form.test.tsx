@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_FILTERS } from "@/monitor/search/filters";
 import { SearchForm } from "./search-form";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("cari sekarang search form", () => {
   it("shows the cost note, filters, and submits query plus filters", () => {
@@ -59,6 +62,21 @@ describe("cari sekarang search form", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     fireEvent.click(trigger);
     expect((screen.getByRole("radio", { name: "Terbaru" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("closes an open filter sheet and focuses the desktop filter after resizing", async () => {
+    const desktop = Object.assign(new EventTarget(), { matches: false });
+    vi.stubGlobal("matchMedia", () => desktop);
+    render(<SearchForm onSubmit={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Filter pencarian" }));
+    expect(screen.getByRole("dialog", { name: "Filter pencarian" })).toBeTruthy();
+
+    act(() => {
+      desktop.matches = true;
+      desktop.dispatchEvent(new Event("change"));
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Tanggal:/ })));
   });
 
   it("disables the input and submit while pending", () => {

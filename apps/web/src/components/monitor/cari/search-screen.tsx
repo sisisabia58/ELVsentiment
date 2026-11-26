@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, MessageSquareText, Search, Sparkles } from "lucide-react";
 import {
@@ -95,7 +95,7 @@ function SearchBody(props: {
   const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
   return (
     <div className="mt-5 min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)] lg:items-start lg:gap-5">
-      <aside className="mb-5 min-w-0 lg:sticky lg:top-4 lg:order-2 lg:mb-0">
+      <aside className="mb-5 min-w-0 lg:order-2 lg:mb-0">
         <AiSummary
           ai={snapshot.ai}
           summaryStatus={summaryStatus}
@@ -135,16 +135,17 @@ function useStartSearch() {
     try {
       const result = await startSearchAction(input);
       if (result.ok) {
+        // Keep the departing page locked while Next loads the new search route.
+        // The destination and a later Back navigation each mount their own form.
         router.push(`/cari/${result.searchId}`);
         return;
       }
       setError(ERROR_COPY[result.error] ?? "Pencarian gagal dimulai. Coba lagi.");
     } catch {
       setError("Pencarian gagal dimulai. Coba lagi.");
-    } finally {
-      inFlight.current = false;
-      setStarting(false);
     }
+    inFlight.current = false;
+    setStarting(false);
   }
 
   return { start, starting, error };
@@ -205,6 +206,24 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
     }
   }
 
+  const detail = useRef<HTMLDivElement>(null);
+  const stickySearch = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const container = detail.current;
+    const form = stickySearch.current;
+    if (!container || !form) return;
+    const measure = () => container.style.setProperty(
+      "--cari-search-height",
+      `${form.getBoundingClientRect().height}px`,
+    );
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(form);
+    return () => observer.disconnect();
+  }, []);
+
   const [monitorError, setMonitorError] = useState<string | null>(null);
   const { start, starting, error } = useStartSearch();
   const running = search.status === "queued" || search.status === "running";
@@ -227,9 +246,9 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
       : null;
 
   return (
-    <div className="mt-5 min-w-0">
+    <div ref={detail} className="mt-5 min-w-0">
       {/* The mobile workspace header scrolls with the page. */}
-      <div className="sticky top-[env(safe-area-inset-top,0px)] z-30 mb-4">
+      <div ref={stickySearch} className="sticky top-[env(safe-area-inset-top,0px)] z-30 mb-4">
         <SearchForm
           key={props.initialSnapshot.search.id}
           compact
@@ -324,7 +343,9 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
           Tidak ada hasil yang cocok dengan kata kunci.
         </p>
       ) : null}
-      <SearchBody snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
+      <div className="[&_:is([id],[tabindex],a,button,input,textarea)]:scroll-mt-[calc(var(--cari-search-height,0px)+env(safe-area-inset-top,0px)+0.5rem)]">
+        <SearchBody snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
+      </div>
     </div>
   );
 }

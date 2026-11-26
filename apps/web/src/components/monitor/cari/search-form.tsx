@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { ArrowRight, ArrowUpDown, Calendar, Globe, Search, X } from "lucide-react";
 import {
   DATE_LABEL,
@@ -32,17 +32,19 @@ const ERROR_COPY: Record<string, string> = {
   query_too_long: "Kata kunci maksimal 160 karakter.",
 };
 
-function Menu(props: {
+function Menu({ triggerRef, ...props }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   open: boolean;
   onToggle: () => void;
+  triggerRef?: React.Ref<HTMLButtonElement>;
   children: React.ReactNode;
 }) {
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         type="button"
         aria-expanded={props.open}
         onClick={props.onToggle}
@@ -93,6 +95,7 @@ export function SearchForm(props: {
   compact?: boolean;
 }) {
   const queryId = useId();
+  const desktopFilter = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState(props.initialQuery ?? "");
   const [filters, setFilters] = useState<SearchFilters>(props.initialFilters ?? DEFAULT_FILTERS);
   const [open, setOpen] = useState<string | null>(null);
@@ -153,10 +156,11 @@ export function SearchForm(props: {
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-2 px-3 pb-2 pt-1.5">
-        <SearchFilterSheet filters={filters} onChange={setFilters} onReset={resetFilters} />
+        <SearchFilterSheet filters={filters} onChange={setFilters} onReset={resetFilters} desktopFocus={desktopFilter} />
         <div className="hidden flex-wrap gap-2 md:flex">
           <Menu
             label="Tanggal"
+            triggerRef={desktopFilter}
             value={DATE_SHORT_LABEL[filters.dateWindow]}
             icon={<Calendar className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}
             open={open === "date"}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useState, type RefObject } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { SlidersHorizontal, X } from "lucide-react";
 import {
@@ -12,6 +12,8 @@ import {
   SORT_MODES,
   type SearchFilters,
 } from "@/monitor/search/filters";
+
+const DESKTOP_MEDIA_QUERY = "(min-width: 48rem)";
 
 function FilterGroup<Value extends string>({
   label, options, labels, selected, onChange,
@@ -48,13 +50,27 @@ function FilterGroup<Value extends string>({
   );
 }
 
-export function SearchFilterSheet({ filters, onChange, onReset }: {
+export function SearchFilterSheet({ filters, onChange, onReset, desktopFocus }: {
   filters: SearchFilters;
   onChange: (filters: SearchFilters) => void;
   onReset: () => void;
+  desktopFocus?: RefObject<HTMLButtonElement | null>;
 }) {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open || !window.matchMedia) return;
+    const desktop = window.matchMedia(DESKTOP_MEDIA_QUERY);
+    const closeOnDesktop = () => {
+      if (desktop.matches) setOpen(false);
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    closeOnDesktop();
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, [open]);
+
   return (
-    <Dialog.Root>
+    <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger
         className="workspace-feedback inline-flex min-h-11 min-w-11 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-subtle md:hidden"
         aria-label="Filter pencarian"
@@ -65,6 +81,7 @@ export function SearchFilterSheet({ filters, onChange, onReset }: {
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-slate-950/45 transition-opacity duration-(--motion-duration) data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
         <Dialog.Popup
+          finalFocus={() => window.matchMedia?.(DESKTOP_MEDIA_QUERY).matches ? desktopFocus?.current ?? true : true}
           className="fixed inset-x-0 bottom-0 z-50 flex max-h-[calc(100dvh-env(safe-area-inset-top,0px))] flex-col rounded-t-2xl border border-border bg-surface pb-[env(safe-area-inset-bottom,0px)] shadow-float transition-transform duration-(--motion-duration) ease-out data-ending-style:translate-y-full data-starting-style:translate-y-full motion-reduce:transition-none"
         >
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2">
