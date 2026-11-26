@@ -426,7 +426,7 @@ export function SearchScreen(props: { history: SearchHistoryRow[]; now: string; 
             {
               icon: MessageSquareText,
               title: "Baca komentar teratas",
-              body: "Balasan pada 3 pos teratas tiap sumber ikut diambil. Kartu menampilkan sampai 3 balasan; sisanya hanya angka.",
+              body: "Balasan pada 3 pos teratas tiap sumber ikut diambil. Kartu menampilkan 3 balasan teratas dan dapat membuka balasan lain yang tersimpan.",
             },
             ...(aiEnabled
               ? [

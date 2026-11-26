@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { MessageSquareText } from "lucide-react";
+import { Component, createRef, useEffect, useState, type ReactNode } from "react";
+import { ArrowUpRight, ChevronDown, Heart, MessageSquareText } from "lucide-react";
 import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
 import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
@@ -29,10 +29,9 @@ function commentTextIsVisible(value: string): boolean {
   return value.replace(INVISIBLE_COMMENT_CHAR, "").trim().length > 0;
 }
 
-function visibleComments(comments: SnapshotComment[], replyCount: number | null): SnapshotComment[] {
+function retainedComments(comments: SnapshotComment[], replyCount: number | null): SnapshotComment[] {
   const withText = comments.filter((comment) => commentTextIsVisible(comment.text));
-  const cap = replyCount != null && replyCount >= 0 ? Math.min(3, replyCount) : 3;
-  return withText.slice(0, cap);
+  return replyCount != null && replyCount >= 0 ? withText.slice(0, replyCount) : withText;
 }
 
 function Engagement(props: { result: SnapshotResult }) {
@@ -46,7 +45,8 @@ function Engagement(props: { result: SnapshotResult }) {
       ) : null}
       {result.likes != null ? (
         <span className="inline-flex items-center gap-1 rounded-md bg-surface-subtle px-1.5 py-0.5">
-          <span aria-hidden="true">♥</span>
+          <Heart className="size-3" aria-hidden="true" />
+          <span className="sr-only">Suka: </span>
           <span>{formatCompact(result.likes)}</span>
         </span>
       ) : null}
@@ -70,110 +70,171 @@ function ResultCard(props: {
   showPlatform: boolean;
 }) {
   const result = props.result;
-  const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const comments = visibleComments(props.comments, result.replies);
-  function checkThumbnail(image: HTMLImageElement | null) {
-    if (image?.complete && image.naturalWidth === 0) setThumbnailFailed(true);
-  }
-  const remaining = result.replies == null ? 0 : Math.max(0, result.replies - comments.length);
+  const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
+  const [repliesOpen, setRepliesOpen] = useState(false);
+  const retained = retainedComments(props.comments, result.replies);
+  const comments = repliesOpen ? retained : retained.slice(0, 3);
+  const hiddenRetained = Math.max(0, retained.length - 3);
+  const uncollected = result.replies == null ? 0 : Math.max(0, result.replies - retained.length);
+  const repliesId = `balasan-hasil-${result.id}`;
   const heading = result.title?.trim() || result.text.trim() || "Tanpa teks";
   const handle = result.authorHandle?.trim() || result.authorName?.trim() || "";
+  const platform = platformName(result.platform);
   const href = originalPostHref(result.platform, result.url);
   const PostPreview = href ? "a" : "div";
+
   return (
-    <article id={`hasil-${result.id}`} className="border-b border-border pb-4 last:border-b-0 last:pb-0">
+    <article id={`hasil-${result.id}`} className="min-w-0 px-3 py-4 sm:px-5 sm:py-5">
       <PostPreview
-        className={cn("flex gap-4", href && "group rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary")}
+        className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2.5 rounded-lg sm:gap-x-4",
+          href && "group focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary")}
         {...(href ? {
           href,
           target: "_blank",
           rel: "noopener noreferrer",
-          "aria-label": `${heading} (buka unggahan asli di ${platformName(result.platform)}, tab baru)`,
+          "aria-label": `${heading} (buka unggahan asli di ${platform}, tab baru)`,
         } : {})}
       >
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0">
           <h3 className={cn(
-            "line-clamp-4 break-words text-[14.5px] font-semibold leading-6 text-foreground",
-            href && "underline decoration-muted-foreground/60 underline-offset-2 group-hover:text-primary",
+            "line-clamp-4 wrap-anywhere text-base font-semibold leading-snug text-foreground",
+            href && "group-hover:text-primary",
           )}>
             {heading}
           </h3>
           {result.title && result.text && result.text !== result.title ? (
-            <p className="mt-1 line-clamp-4 break-words text-[13px] leading-5 text-muted-foreground">
+            <p className="mt-1.5 line-clamp-3 wrap-anywhere text-sm leading-relaxed text-foreground/80">
               {result.text}
             </p>
           ) : null}
-          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
-            {props.showPlatform ? <span>{platformName(result.platform)}</span> : null}
-            {handle ? (
-              <span className="min-w-0 max-w-full break-all font-mono text-foreground">
-                {handle.startsWith("@") ? handle : `@${handle}`}
-              </span>
-            ) : null}
-            <Engagement result={result} />
-            <span>{result.publishedAt ? formatRelative(result.publishedAt, props.now) : "Tanggal tidak diketahui"}</span>
-          </div>
         </div>
-        <div className="relative h-[86px] w-[86px] shrink-0 overflow-hidden rounded-lg bg-surface-subtle sm:h-[96px] sm:w-[96px]">
-          {result.thumbnailUrl && !thumbnailFailed ? (
+        <div className="relative size-16 shrink-0 overflow-hidden rounded-lg bg-surface-subtle sm:size-24">
+          {result.thumbnailUrl && result.thumbnailUrl !== failedThumbnail ? (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                ref={checkThumbnail}
+                key={result.thumbnailUrl}
+                ref={(image) => {
+                  if (image?.complete && image.naturalWidth === 0) setFailedThumbnail(result.thumbnailUrl);
+                }}
                 src={result.thumbnailUrl}
                 alt="Pratinjau hasil"
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                className="h-full w-full object-cover"
-                onError={() => setThumbnailFailed(true)}
+                className="size-full object-cover"
+                onError={() => setFailedThumbnail(result.thumbnailUrl)}
               />
               <span className="absolute bottom-1 right-1">
                 <PlatformTile platform={result.platform} size={16} />
               </span>
             </>
           ) : (
-            <div
-              data-testid="thumb-placeholder"
-              aria-hidden="true"
-              className="grid h-full w-full place-items-center"
-            >
-              <PlatformTile platform={result.platform} size={30} />
+            <div data-testid="thumb-placeholder" aria-hidden="true" className="grid size-full place-items-center">
+              <PlatformTile platform={result.platform} size={26} />
             </div>
           )}
         </div>
+        <div className="col-span-full flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {props.showPlatform ? (
+            <span className="inline-flex items-center gap-1.5 font-semibold text-foreground">
+              <PlatformTile platform={result.platform} size={14} />
+              {platform}
+            </span>
+          ) : null}
+          {handle ? (
+            <span className="min-w-0 max-w-full wrap-anywhere font-medium">
+              {handle.startsWith("@") ? handle : `@${handle}`}
+            </span>
+          ) : null}
+          {result.publishedAt ? (
+            <time dateTime={result.publishedAt}>{formatRelative(result.publishedAt, props.now)}</time>
+          ) : <span>Tanggal tidak diketahui</span>}
+        </div>
+        <div className="col-span-full flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <Engagement result={result} />
+          {href ? (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary group-hover:underline">
+              Buka di {platform}
+              <ArrowUpRight className="size-3.5" aria-hidden="true" />
+            </span>
+          ) : null}
+        </div>
       </PostPreview>
       {comments.length > 0 ? (
-        <div
-          className="mt-3 rounded-lg border border-border bg-surface-subtle/60"
-          aria-label="Contoh balasan teratas, bukan semua komentar"
-        >
-          <p className="flex items-center gap-1.5 px-3 pt-2.5 text-[11px] font-semibold tracking-wide text-muted-foreground">
-            <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
+        <div className="mt-3 rounded-lg bg-surface-subtle/75" aria-label="Contoh balasan teratas, bukan semua komentar">
+          <p className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold text-muted-foreground">
+            <MessageSquareText className="size-3.5" aria-hidden="true" />
             BALASAN TERATAS
-            <span className="rounded bg-border px-1 text-foreground">{comments.length + remaining}</span>
+            <span className="rounded bg-border px-1 tabular-nums text-foreground">{retained.length + uncollected}</span>
           </p>
-          {comments.map((comment) => (
-            <div key={comment.id} className="flex gap-3 border-b border-border/70 px-3 py-2 last:border-b-0">
-              <span className="w-9 shrink-0 text-[12px] font-semibold tabular-nums text-positif">
-                ▲ {comment.likes ?? 0}
-              </span>
-              <div className="min-w-0">
-                <p className="text-[13px] text-foreground">{comment.text}</p>
-                {comment.authorHandle || comment.authorName ? (
-                  <p className="font-mono text-[11px] text-muted-foreground">
-                    {comment.authorHandle ?? comment.authorName}
-                  </p>
-                ) : null}
+          <div id={repliesId} className="divide-y divide-border/70">
+            {comments.map((comment, index) => (
+              <div key={comment.id} id={`balasan-${comment.id}`}
+                className={cn("flex gap-2.5 px-3 py-2", index >= 3 && "cari-reveal")}>
+                <span className="shrink-0 text-xs font-semibold tabular-nums text-positif">▲ {comment.likes ?? 0}</span>
+                <div className="min-w-0">
+                  <p className="wrap-anywhere text-sm leading-snug text-foreground">{comment.text}</p>
+                  {comment.authorHandle || comment.authorName ? (
+                    <p className="mt-0.5 wrap-anywhere text-xs text-muted-foreground">
+                      {comment.authorHandle ?? comment.authorName}
+                    </p>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ))}
-          {remaining > 0 ? (
-            <p className="px-3 pb-2.5 pt-1 text-[12px] font-medium text-primary">{remaining} balasan lainnya</p>
+            ))}
+          </div>
+          {hiddenRetained > 0 ? (
+            <button type="button" aria-expanded={repliesOpen} aria-controls={repliesId}
+              onClick={() => setRepliesOpen(!repliesOpen)}
+              className="workspace-feedback flex min-h-11 min-w-11 items-center gap-1.5 rounded-lg px-3 text-left text-xs font-semibold text-primary hover:bg-primary/5">
+              {repliesOpen ? "Sembunyikan balasan tambahan" : `Lihat ${hiddenRetained} balasan tersimpan`}
+              <ChevronDown className={cn("size-4 shrink-0", repliesOpen && "rotate-180")} aria-hidden="true" />
+            </button>
+          ) : null}
+          {uncollected > 0 ? (
+            <p className="px-3 pb-3 pt-1 text-xs text-muted-foreground">{uncollected} balasan lainnya belum diambil</p>
           ) : null}
         </div>
       ) : null}
     </article>
   );
+}
+
+type ResultFeedProps = {
+  results: SnapshotResult[];
+  platform: string | null;
+  children: ReactNode;
+};
+
+type ScrollAnchor = { card: HTMLElement; top: number } | null;
+
+// Read the old DOM immediately before React commits polling changes to the feed.
+class ResultFeed extends Component<ResultFeedProps, object, ScrollAnchor> {
+  private feed = createRef<HTMLDivElement>();
+
+  getSnapshotBeforeUpdate(previous: ResultFeedProps): ScrollAnchor {
+    if (previous.platform !== this.props.platform || previous.results === this.props.results) return null;
+    const bounds = this.feed.current?.getBoundingClientRect();
+    if (!bounds || bounds.top >= window.innerHeight || bounds.bottom <= 0) return null;
+    const nextIds = new Set(this.props.results.map((result) => `hasil-${result.id}`));
+    for (const child of this.feed.current?.children ?? []) {
+      if (!(child instanceof HTMLElement) || !nextIds.has(child.id)) continue;
+      const rect = child.getBoundingClientRect();
+      const stickyClearance = parseFloat(getComputedStyle(child).scrollMarginTop) || 0;
+      if (rect.bottom > stickyClearance && rect.top < window.innerHeight) return { card: child, top: rect.top };
+    }
+    return null;
+  }
+
+  componentDidUpdate(_previous: ResultFeedProps, _state: object, anchor?: ScrollAnchor) {
+    if (!anchor) return;
+    const delta = anchor.card.getBoundingClientRect().top - anchor.top;
+    if (delta) window.scrollBy({ top: delta, behavior: "instant" });
+  }
+
+  render() {
+    return <div ref={this.feed} className="divide-y divide-border [overflow-anchor:none]">{this.props.children}</div>;
+  }
 }
 
 export function ResultsList(props: {
@@ -220,18 +281,19 @@ export function ResultsList(props: {
   const visible = selected?.rows ?? props.results;
 
   return (
-    <section className="rounded-[14px] border border-border bg-surface shadow-card">
-      <header className="flex items-center justify-between px-5 pt-4">
-        <h2 className="text-[15px] font-semibold text-foreground">Hasil</h2>
+    <section className="min-w-0 rounded-xl border border-border bg-surface shadow-card">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-3 pt-4 sm:px-5">
+        <h2 className="text-base font-semibold text-foreground">Hasil</h2>
         <span className="text-[12px] text-muted-foreground">{SORT_LABEL[props.sortMode]}</span>
       </header>
-      <div className="flex flex-wrap gap-1.5 px-5 pt-3">
+      <div className="flex flex-wrap gap-1.5 px-3 py-3 sm:px-5">
         <button
           type="button"
+          aria-pressed={platform === null}
           onClick={() => selectPlatform(null)}
           className={cn(
-            "rounded-full px-3 py-1 text-[12.5px] font-medium",
-            platform === null ? "bg-foreground text-background" : "border border-border hover:bg-surface-subtle",
+            "workspace-feedback min-h-11 min-w-11 rounded-full border border-transparent px-3 text-xs font-medium",
+            platform === null ? "bg-primary text-primary-foreground" : "border-border hover:bg-surface-subtle",
           )}
         >
           Semua {props.results.length}
@@ -240,10 +302,11 @@ export function ResultsList(props: {
           <button
             key={group.key}
             type="button"
+            aria-pressed={platform === group.key}
             onClick={() => selectPlatform(group.key)}
             className={cn(
-              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium",
-              platform === group.key ? "bg-foreground text-background" : "border border-border hover:bg-surface-subtle",
+              "workspace-feedback flex min-h-11 min-w-11 items-center gap-1.5 rounded-full border border-transparent px-3 text-xs font-medium",
+              platform === group.key ? "bg-primary text-primary-foreground" : "border-border hover:bg-surface-subtle",
             )}
           >
             <PlatformTile platform={group.key} size={14} />
@@ -251,13 +314,15 @@ export function ResultsList(props: {
           </button>
         ))}
       </div>
-      <div className="mt-3 px-5 py-4">
+      <div className="border-t border-border">
         {selected ? (
-          <div className="mb-3 flex flex-wrap items-center gap-2.5">
-            <PlatformTile platform={selected.key} size={26} />
-            <div className="flex-1">
-              <p className="text-[14px] font-semibold text-foreground">{platformName(selected.key)}</p>
-              <p className="text-[12px] text-muted-foreground">{selected.rows.length} hasil</p>
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-2.5 border-b border-border bg-surface-subtle/60 px-3 py-2 sm:px-5">
+            <div className="flex min-h-11 shrink-0 items-center gap-2.5">
+              <PlatformTile platform={selected.key} size={26} />
+              <div>
+                <p className="text-sm font-semibold text-foreground">{platformName(selected.key)}</p>
+                <p className="text-xs tabular-nums text-muted-foreground">{selected.rows.length} hasil</p>
+              </div>
             </div>
             <MoreSourceControl
               platform={selected.key}
@@ -266,7 +331,7 @@ export function ResultsList(props: {
             />
           </div>
         ) : null}
-        <div className="space-y-4">
+        <ResultFeed results={props.results} platform={platform}>
           {visible.map((result) => (
             <ResultCard
               key={result.id}
@@ -276,7 +341,7 @@ export function ResultsList(props: {
               showPlatform={!selected}
             />
           ))}
-        </div>
+        </ResultFeed>
       </div>
     </section>
   );

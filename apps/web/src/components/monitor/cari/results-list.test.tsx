@@ -63,7 +63,7 @@ const comments = {
 };
 
 describe("ResultsList", () => {
-  it("gives the TikTok heading and preview one keyboard-focusable original-post link", () => {
+  it("original post link names its platform and preserves local citations", () => {
     render(
       <ResultsList
         results={[result({
@@ -76,7 +76,9 @@ describe("ResultsList", () => {
         sortMode="relevance"
       />,
     );
-    const link = screen.getByRole("link", { name: /Review parfum Mandalika/ });
+    const link = screen.getByRole("link", { name: /Review parfum Mandalika.*buka unggahan asli di TikTok/i });
+    expect(link.closest("article")?.id).toBe("hasil-r1");
+    expect(link.textContent).toContain("Buka di TikTok");
     expect(link.getAttribute("href")).toBe("https://www.tiktok.com/@rawamangunfoodies/video/7702423576569253140");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
@@ -164,7 +166,7 @@ describe("ResultsList", () => {
     }
   });
 
-  it("shows at most three top replies and the remaining count", () => {
+  it("discloses retained replies outside the post link and preserves expansion across ranking updates", () => {
     const fourComments = [0, 1, 2, 3].map((index) => ({
       id: `c${index}`,
       resultId: "r1",
@@ -177,17 +179,35 @@ describe("ResultsList", () => {
       likes: 10 - index,
       replies: 0,
     }));
-    render(
+    const post = result({ id: "r1", replies: 5, url: "https://www.threads.net/@sari/post/EXAMPLE0001" });
+    const { rerender } = render(
       <ResultsList
-        results={[result({ id: "r1", replies: 4 })]}
+        results={[post]}
         commentsByResult={{ r1: fourComments }}
         sortMode="relevance"
       />,
     );
     expect(screen.getAllByText(/▲/)).toHaveLength(3);
-    expect(screen.getByText("1 balasan lainnya")).toBeTruthy();
+    expect(screen.getByText("1 balasan lainnya belum diambil")).toBeTruthy();
     expect(screen.getByLabelText(/contoh balasan/i)).toBeTruthy();
-    expect(screen.queryByText("4 hasil")).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Lihat 1 balasan tersimpan" });
+    expect(toggle.closest("a")).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    const reply = screen.getByText("balasan 3").closest("[id]");
+    expect(reply?.id).toBe("balasan-c3");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    rerender(
+      <ResultsList
+        results={[result({ id: "r2" }), post]}
+        commentsByResult={{ r1: fourComments }}
+        sortMode="popular"
+      />,
+    );
+    expect(screen.getByText("balasan 3").closest("[id]")).toBe(reply);
+    fireEvent.click(screen.getByRole("button", { name: "Sembunyikan balasan tambahan" }));
+    expect(screen.queryByText("balasan 3")).toBeNull();
   });
 
   it("shows engagement, thumbnail, top replies, and an undated label", () => {
@@ -223,7 +243,7 @@ describe("ResultsList", () => {
     expect(screen.getByText("9,4 rb")).toBeTruthy();
     expect(screen.getByText("Tanggal tidak diketahui")).toBeTruthy();
     expect(screen.getByText("kriuknya beda sih")).toBeTruthy();
-    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+    expect(screen.getByText("2 balasan lainnya belum diambil")).toBeTruthy();
     expect(screen.getAllByRole("img").length).toBeGreaterThan(0);
     expect(screen.getByText("Paling cocok")).toBeTruthy();
   });
@@ -257,7 +277,7 @@ describe("ResultsList", () => {
     expect(screen.getByText("enak")).toBeTruthy();
     expect(screen.getByText("3 balasan")).toBeTruthy();
     expect(screen.getAllByText(/▲/)).toHaveLength(1);
-    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+    expect(screen.getByText("2 balasan lainnya belum diambil")).toBeTruthy();
   });
 
   it("drops invisible facebook replies and keeps the lainnya count on the rows shown", () => {
@@ -280,7 +300,7 @@ describe("ResultsList", () => {
     expect(screen.queryByText("Miki Yong")).toBeNull();
     expect(screen.queryByText("Stiker")).toBeNull();
     expect(screen.getAllByText(/▲/)).toHaveLength(1);
-    expect(screen.getByText("2 balasan lainnya")).toBeTruthy();
+    expect(screen.getByText("2 balasan lainnya belum diambil")).toBeTruthy();
     const block = screen.getByLabelText(/contoh balasan/i);
     expect(block.textContent).toContain("3");
     expect(block.textContent).not.toContain("4");
@@ -329,7 +349,7 @@ describe("ResultsList", () => {
     expect(screen.getByText("Edward Gooi")).toBeTruthy();
     expect(screen.queryByText("Kosong")).toBeNull();
     expect(screen.getAllByText(/▲/)).toHaveLength(2);
-    expect(screen.getByText("1 balasan lainnya")).toBeTruthy();
+    expect(screen.getByText("1 balasan lainnya belum diambil")).toBeTruthy();
     const block = screen.getByLabelText(/contoh balasan/i);
     expect(block.textContent).toContain("3");
     expect(block.textContent).not.toContain("4");
@@ -420,7 +440,7 @@ describe("ResultsList", () => {
       />,
     );
     const handleNode = screen.getByText(`@${handle}`);
-    expect(handleNode.className).toContain("break-all");
+    expect(handleNode.className).toContain("wrap-anywhere");
     const heading = screen.getByRole("heading", { level: 3 });
     expect(heading.className).toContain("line-clamp-4");
   });

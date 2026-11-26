@@ -575,7 +575,7 @@ describe("SearchScreen", () => {
   });
 });
 
-it("requests the selected source once and shows the merged page without a price", async () => {
+it.each(["hasil", "rincian"] as const)("Cari lagi dispatches once and announces additions from %s", async (entry) => {
   const initial = finishedSnapshot();
   const tiktok = {
     ...initial.sources[0],
@@ -596,15 +596,17 @@ it("requests the selected source once and shows the merged page without a price"
     json: async () => updated,
   }));
   render(<SearchDetail initialSnapshot={initial} />);
-  fireEvent.click(screen.getByRole("button", { name: "Rincian sumber" }));
+  if (entry === "rincian") fireEvent.click(screen.getByRole("button", { name: "Rincian sumber" }));
   fireEvent.click(screen.getByRole("button", { name: "TikTok 1" }));
   const buttons = screen.getAllByRole("button", { name: "Cari lagi di TikTok" });
-  expect(buttons).toHaveLength(2);
-  fireEvent.click(buttons[1]);
+  expect(buttons).toHaveLength(entry === "rincian" ? 2 : 1);
   fireEvent.click(buttons[0]);
+  fireEvent.click(buttons.at(-1)!);
   expect(startMoreSourceAction).toHaveBeenCalledExactlyOnceWith(initial.search.id, "tiktok", 0);
   expect(await screen.findByText("hasil tambahan yang cocok", {}, { timeout: 3000 })).not.toBeNull();
   expect(screen.getByText(initial.results[0].text)).not.toBeNull();
+  expect(screen.getAllByRole("status").filter((node) => node.textContent?.includes("1 hasil cocok ditambahkan"))).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "TikTok 2" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: "Cari lagi di TikTok" })).toBeNull();
   expect(screen.queryByText(/kredit|Rp\s?\d/i)).toBeNull();
 });

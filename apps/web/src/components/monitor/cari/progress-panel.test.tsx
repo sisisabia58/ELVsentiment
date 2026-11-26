@@ -83,6 +83,7 @@ describe("ProgressPanel", () => {
     render(<ProgressPanel snapshot={snapshot({ sources })} moreActions={{ request, busy: () => false, errors: {} }} />);
 
     const tiktok = within(screen.getByRole("group", { name: "Status dan tindakan TikTok" }));
+    expect(tiktok.getByText("TikTok")).toBeTruthy();
     expect(tiktok.getByText("Cakupan sebagian")).toBeTruthy();
     expect(tiktok.getByText("+1 hasil cocok")).toBeTruthy();
     act(() => tiktok.getByRole("button", { name: "Cari lagi di TikTok" }).click());

@@ -5,7 +5,7 @@ import { Check, ChevronDown, Circle, Clock3, TriangleAlert } from "lucide-react"
 import { cn } from "cn";
 import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
-import { MoreSourceControl, type MoreSourceActions } from "./more-source-control";
+import { MoreSourceControl, MoreSourceStatus, type MoreSourceActions } from "./more-source-control";
 import { elapsedSeconds } from "./snapshot-format";
 
 const STATE_LABEL: Record<string, string> = {
@@ -89,23 +89,28 @@ function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: M
     </span>
   );
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 text-[13px] @min-[480px]:grid-cols-[minmax(100px,1fr)_minmax(0,2fr)_32px_minmax(140px,2fr)]">
-      <span className="flex min-w-0 items-center gap-2">
-        <PlatformTile platform={source.platform} size={18} />
-        <span className="truncate">{platformName(source.platform)}</span>
-      </span>
-      <div aria-hidden="true" className="h-2 w-full overflow-hidden rounded-sm bg-surface-subtle">
-        <div
-          className={cn("cari-progress-bar h-full", active ? "bg-primary/50" : "bg-primary")}
-          style={{ width: `${active ? 50 : width}%` }}
-        />
+    <div
+      role="group"
+      aria-label={`Status dan tindakan ${platformName(source.platform)}`}
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 border-t border-border/60 py-2 text-[13px]"
+    >
+      <div className="col-span-full flex min-w-0 items-start justify-between gap-2">
+        <span className="flex min-w-0 shrink-0 items-center gap-2 pt-1 font-medium">
+          <PlatformTile platform={source.platform} size={18} />
+          {platformName(source.platform)}
+        </span>
+        <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} />
       </div>
-      <span className="text-right tabular-nums">{answered ? source.resultCount : "—"}</span>
-      <div className="col-span-full flex min-w-0 justify-end [&_button]:min-h-11 @min-[480px]:col-span-1">
-        {source.more && props.moreActions ? (
-          <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} sourceStatus={sourceStatus} />
-        ) : sourceStatus}
+      <div className="flex min-w-0 items-center gap-2">
+        <div aria-hidden="true" className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-subtle">
+          <div
+            className={cn("cari-progress-bar h-full", active ? "bg-primary/50" : "bg-primary")}
+            style={{ width: `${active ? 50 : width}%` }}
+          />
+        </div>
+        <span className="tabular-nums text-muted-foreground">{answered ? source.resultCount : "—"}</span>
       </div>
+      {sourceStatus}
     </div>
   );
 }
@@ -131,7 +136,7 @@ function ProgressStep({ label, status, active, done, warning }: {
 }
 
 export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean; moreActions?: MoreSourceActions }) {
-  const snapshot = props.snapshot;
+  const { snapshot, moreActions } = props;
   const [detailsChoice, setDetailsChoice] = useState<boolean>();
   const detailsId = useId();
   const detailsOpen = detailsChoice ?? snapshot.results.length === 0;
@@ -222,6 +227,9 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
           ) : null}
         </ol>
       </div>
+      {moreActions ? snapshot.sources.map(({ platform, more }) => more ? (
+        <MoreSourceStatus key={platform} platform={platform} more={more} actions={moreActions} />
+      ) : null) : null}
       {snapshot.sources.length > 0 ? (
         <div className="border-t border-border">
           <button
@@ -240,7 +248,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
             onFocusCapture={() => setDetailsChoice(true)}
           >
             <div className="cari-reveal grid gap-4 px-3 pb-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_180px] lg:items-start">
-              <div className="@container min-w-0 space-y-2.5">
+              <div className="min-w-0">
                 {snapshot.sources.map((source) => (
                   <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} />
                 ))}
