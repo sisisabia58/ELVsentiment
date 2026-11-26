@@ -213,6 +213,57 @@ describe("SearchDetail", () => {
     }));
   });
 
+  it("keeps the user's source detail choice as results and status change", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const initial = snapshot({ results: [], totals: { sources: 8, done: 0, results: 0 } });
+    const withPost = snapshot();
+    const { rerender } = render(<SearchDetail initialSnapshot={initial} />);
+    const details = screen.getByRole("button", { name: "Rincian sumber" });
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+    rerender(<SearchDetail initialSnapshot={withPost} />);
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(details);
+    rerender(<SearchDetail initialSnapshot={finishedSnapshot()} />);
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(details);
+    rerender(<SearchDetail initialSnapshot={withPost} />);
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("first posts stay visible through pending and stale states", async () => {
+    vi.useFakeTimers();
+    try {
+      const initial = snapshot({
+        results: [post(), post({ id: "r2", platform: "reddit", text: "unggahan Reddit" })],
+      });
+      const done = { ...initial, search: { ...initial.search, status: "succeeded", summaryStatus: "done" } };
+      const fetchSnapshot = vi.fn()
+        .mockResolvedValueOnce({ ok: false })
+        .mockResolvedValue({ ok: true, json: async () => done });
+      vi.stubGlobal("fetch", fetchSnapshot);
+      render(<SearchDetail initialSnapshot={initial} aiEnabled />);
+      expect(screen.getByText("Menunggu · setelah komentar")).toBeTruthy();
+      const platform = screen.getByRole("button", { name: "Threads 1" });
+      fireEvent.click(platform);
+      platform.focus();
+      const firstPost = screen.getByText(initial.results[0].text);
+      expect(screen.queryByText("unggahan Reddit")).toBeNull();
+
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      expect(screen.getByText("Koneksi terputus. Menampilkan hasil terakhir.")).toBeTruthy();
+      expect(screen.getByText(initial.results[0].text)).toBe(firstPost);
+
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+      expect(screen.getByText(initial.results[0].text)).toBe(firstPost);
+      expect(screen.queryByText("unggahan Reddit")).toBeNull();
+      expect(document.activeElement).toBe(platform);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("explains a new successful search with zero relevant results", () => {
     const done = finishedSnapshot();
     done.search.summaryStatus = "skipped";
@@ -316,6 +367,23 @@ describe("SearchDetail", () => {
     expect(screen.queryByText(/dtk/)).toBeNull();
     expect(screen.queryByText(/kredit/)).toBeNull();
     expect(screen.queryByText(/300 dtk/)).toBeNull();
+  });
+
+  it("reruns a failed search only after an explicit request", async () => {
+    const failed = failedSnapshot("deadline");
+    const start = vi.mocked(startSearchAction);
+    start.mockClear();
+    start.mockResolvedValue({ ok: true, searchId: "retried" });
+    render(<SearchDetail initialSnapshot={failed} />);
+    expect(start).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Cari lagi di/ })).toBeNull();
+    const retry = screen.getByRole("button", { name: "Cari ulang" });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    await waitFor(() => expect(start).toHaveBeenCalledExactlyOnceWith({
+      query: failed.search.query,
+      filters: failed.search.filters,
+    }));
   });
 
   it("maps other failed searches to Indonesian copy", () => {
@@ -516,6 +584,7 @@ it("requests the selected source once and shows the merged page without a price"
     json: async () => updated,
   }));
   render(<SearchDetail initialSnapshot={initial} />);
+  fireEvent.click(screen.getByRole("button", { name: "Rincian sumber" }));
   fireEvent.click(screen.getByRole("button", { name: "TikTok 1" }));
   const buttons = screen.getAllByRole("button", { name: "Cari lagi di TikTok" });
   expect(buttons).toHaveLength(2);

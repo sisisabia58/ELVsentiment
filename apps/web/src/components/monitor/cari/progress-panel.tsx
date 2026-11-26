@@ -1,12 +1,12 @@
-import { Check, Loader2 } from "lucide-react";
+"use client";
+
+import { useId, useState } from "react";
+import { Check, ChevronDown, Circle, Clock3 } from "lucide-react";
 import { cn } from "cn";
 import type { SearchSnapshot, SnapshotSource } from "@/monitor/search/load";
 import { PlatformTile, platformName } from "./platform-tile";
 import { MoreSourceControl, type MoreSourceActions } from "./more-source-control";
 import { elapsedSeconds } from "./snapshot-format";
-
-// Comments ship with this milestone. The AI summary stays hidden until it does.
-const SHOW_COMMENT_STEP = true;
 
 const STATE_LABEL: Record<string, string> = {
   answered: "Selesai",
@@ -43,7 +43,6 @@ function DotMap(props: { total: number; done: number }) {
           cy={dot.y}
           r="1.9"
           fill={dot.on ? "#1d4ed8" : "#cbd5e1"}
-          className={dot.on ? "animate-pulse" : undefined}
         />
       ))}
       {props.total > 0 ? (
@@ -57,88 +56,83 @@ function DotMap(props: { total: number; done: number }) {
   );
 }
 
-function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: MoreSourceActions; hasMoreControls: boolean }) {
+function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: MoreSourceActions }) {
   const source = props.source;
   const label = STATE_LABEL[source.state] ?? source.state;
+  const active = source.state === "searching" || source.state === "queued";
+  const answered = source.state === "answered";
   const width = source.resultCount > 0 ? Math.max(4, Math.round((source.resultCount / props.max) * 100)) : 0;
-  const latency =
-    source.latencyMs != null
-      ? `${(source.latencyMs / 1000).toFixed(1).replace(".", ",")} dtk`
-      : source.state === "searching" || source.state === "queued"
-        ? "…"
-        : "—";
+  const latency = source.latencyMs == null ? null : `${(source.latencyMs / 1000).toFixed(1).replace(".", ",")} dtk`;
   const sourceStatus = (
     <span className="min-w-0 wrap-anywhere text-right text-[11px] leading-tight text-muted-foreground">
-      {source.safeDetail === "hashtag_only" ? (
-        <span>Hanya mendukung tagar</span>
+      {source.state === "failed" ? (
+        source.safeDetail === "deadline" ? "Gagal · waktu habis" : "Gagal"
+      ) : active ? (
+        "Mencari"
+      ) : source.safeDetail === "hashtag_only" ? (
+        "Hanya mendukung tagar"
       ) : source.safeDetail === "partial_coverage" ? (
-        <span>Cakupan sebagian</span>
+        "Cakupan sebagian"
       ) : source.safeDetail === "web_index_selection" ? (
-        <span>Cakupan indeks terbatas</span>
-      ) : source.state === "answered" && source.resultCount === 0 ? (
+        answered && source.resultCount === 0 ? "0 hasil · cakupan indeks terbatas" : "Cakupan indeks terbatas"
+      ) : answered && source.resultCount === 0 ? (
         <span className="font-medium text-foreground">Selesai · 0 hasil</span>
-      ) : source.state === "answered" ? (
+      ) : answered ? (
         <span>
-          <span className="font-medium text-foreground">Selesai</span> · {latency}
+          <span className="font-medium text-foreground">Selesai</span>{latency ? ` · ${latency}` : ""}
         </span>
-      ) : source.state === "searching" || source.state === "queued" ? (
-        <span>Mencari</span>
       ) : source.safeDetail === "deadline" ? (
-        <span>waktu habis</span>
+        "waktu habis"
       ) : (
         label
       )}
     </span>
   );
   return (
-    <div
-      className={cn(
-        "grid items-center text-[13px]",
-        props.hasMoreControls
-          ? "grid-cols-[8px_minmax(68px,90px)_minmax(0,1fr)_20px_minmax(110px,138px)] gap-1.5 @min-[520px]:grid-cols-[14px_112px_minmax(0,1fr)_32px_220px] @min-[520px]:gap-2"
-          : "grid-cols-[10px_minmax(74px,102px)_minmax(0,1fr)_24px_minmax(60px,110px)] gap-2 lg:grid-cols-[14px_112px_minmax(0,1fr)_32px_132px]",
-        (source.state === "unavailable" || source.state === "failed") && "opacity-70",
-      )}
-    >
-      <span
-        className={cn(
-          "h-2 w-2 rounded-full",
-          source.state === "answered"
-            ? "bg-positif"
-            : source.state === "searching" || source.state === "queued"
-              ? "animate-pulse bg-primary"
-              : "border border-muted-foreground",
-        )}
-        aria-hidden="true"
-      />
-      <span className="flex items-center gap-2 truncate">
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 text-[13px] @min-[480px]:grid-cols-[minmax(100px,1fr)_minmax(0,2fr)_32px_minmax(140px,2fr)]">
+      <span className="flex min-w-0 items-center gap-2">
         <PlatformTile platform={source.platform} size={18} />
         <span className="truncate">{platformName(source.platform)}</span>
       </span>
-      <div className="h-2.5 w-full overflow-hidden rounded-sm bg-surface-subtle">
-        {source.state === "answered" ? (
-          <div className="h-full bg-primary" style={{ width: `${width}%` }} />
-        ) : source.state === "searching" || source.state === "queued" ? (
-          <div className="h-full w-1/2 animate-pulse bg-primary/50" />
-        ) : null}
+      <div aria-hidden="true" className="h-2 w-full overflow-hidden rounded-sm bg-surface-subtle">
+        <div
+          className={cn("cari-progress-bar h-full", active ? "bg-primary/50" : "bg-primary")}
+          style={{ width: `${active ? 50 : width}%` }}
+        />
       </div>
-      <span className="text-right tabular-nums">{source.state === "answered" ? source.resultCount : "—"}</span>
-      {source.more && props.moreActions ? (
-        <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} sourceStatus={sourceStatus} />
-      ) : sourceStatus}
+      <span className="text-right tabular-nums">{answered ? source.resultCount : "—"}</span>
+      <div className="col-span-full flex min-w-0 justify-end [&_button]:min-h-11 @min-[480px]:col-span-1">
+        {source.more && props.moreActions ? (
+          <MoreSourceControl platform={source.platform} more={source.more} actions={props.moreActions} sourceStatus={sourceStatus} />
+        ) : sourceStatus}
+      </div>
     </div>
+  );
+}
+
+function ProgressStep({ label, status, active, done }: { label: string; status: string; active: boolean; done: boolean }) {
+  const Icon = done ? Check : active ? Clock3 : Circle;
+  return (
+    <li className="flex min-w-0 items-start gap-2">
+      <Icon className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground", done && "text-positif", active && "text-primary")} aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="text-[13px] font-semibold text-foreground">{label}</p>
+        <p className="text-xs text-muted-foreground">{status}</p>
+      </div>
+    </li>
   );
 }
 
 export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiEnabled?: boolean; moreActions?: MoreSourceActions }) {
   const snapshot = props.snapshot;
+  const [detailsChoice, setDetailsChoice] = useState<boolean>();
+  const detailsId = useId();
+  const detailsOpen = detailsChoice ?? snapshot.results.length === 0;
   const now = props.now ?? new Date();
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
-  const hasMoreControls = Boolean(props.moreActions && snapshot.sources.some((source) => source.more));
   const max = Math.max(1, ...snapshot.sources.map((source) => source.resultCount));
-  const finished = ["succeeded", "partial", "failed"].includes(snapshot.search.status);
-  const running = !finished;
+  const running = snapshot.search.status === "queued" || snapshot.search.status === "running";
   const elapsed = elapsedSeconds(snapshot, now);
   const sourcesBusy = snapshot.sources.some((source) => source.state === "queued" || source.state === "searching");
   const commentCount = snapshot.comments.length;
@@ -183,121 +177,68 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
               : "Menunggu · setelah komentar";
   const summaryDone = summaryStatus === "done";
   const summaryRunning = summaryStatus === "running";
+  const sourcesStatus = sourcesBusy
+    ? "Sedang berjalan"
+    : snapshot.search.status === "failed"
+      ? "Pencarian gagal"
+      : running && done === 0
+        ? "Menunggu"
+        : "Sumber selesai";
 
   return (
-    <section className="rounded-[14px] border border-border bg-surface shadow-card">
-      <div className="grid gap-0 md:grid-cols-[300px_minmax(0,1fr)]">
-        <div className="relative border-b border-border p-5 md:border-b-0 md:border-r">
-          <DotMap total={total} done={done} />
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            <div>
-              <p className="text-[20px] font-semibold tabular-nums text-foreground">
-                {done}/{total}
-              </p>
-              <p className="text-[11px] text-muted-foreground">sumber selesai</p>
-            </div>
-            <div>
-              <p className="text-[20px] font-semibold tabular-nums text-foreground">
-                {snapshot.totals.results} hasil
-              </p>
-              <p className="text-[11px] text-muted-foreground">cocok</p>
-            </div>
-            <div>
-              <p className="text-[20px] font-semibold tabular-nums text-foreground">
-                {elapsed === null ? "—" : `${elapsed} dtk`}
-              </p>
-              <p className="text-[11px] text-muted-foreground">{running ? "berjalan" : "selesai"}</p>
-            </div>
-          </div>
+    <section className="rounded-xl border border-border bg-surface shadow-card">
+      <div className="space-y-3 px-3 py-3 sm:px-4">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h2 className="font-semibold tabular-nums text-foreground">
+            {snapshot.totals.results} hasil cocok
+          </h2>
+          <p className="text-xs tabular-nums text-muted-foreground">
+            {done}/{total} sumber selesai{elapsed === null ? "" : ` · ${elapsed} dtk`}
+          </p>
         </div>
-        <div className="@container p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="flex items-center gap-2 text-[15px] font-semibold text-foreground">
-              {running ? (
-                <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-              ) : (
-                <Check className="h-4 w-4 text-positif" aria-hidden="true" />
-              )}
-              {running ? `Mencari ${total} sumber` : `${total} sumber`}
-            </h2>
-          </div>
-          <div className="mt-4 space-y-2.5">
-            {snapshot.sources.map((source) => (
-              <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} hasMoreControls={hasMoreControls} />
-            ))}
-          </div>
-        </div>
+        <ol className={cn("grid gap-2.5 sm:gap-3", props.aiEnabled ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+          <ProgressStep
+            label="Mencari sumber"
+            status={sourcesStatus}
+            active={sourcesBusy}
+            done={!sourcesBusy && !running && snapshot.search.status !== "failed"}
+          />
+          <ProgressStep label="Komentar" status={commentCopy} active={commentRunning} done={commentDone} />
+          {props.aiEnabled ? (
+            <ProgressStep label="Ringkasan AI" status={summaryCopy} active={summaryRunning} done={summaryDone} />
+          ) : null}
+        </ol>
       </div>
-      <ol className={cn("grid border-t border-border", props.aiEnabled ? "sm:grid-cols-3" : SHOW_COMMENT_STEP && "sm:grid-cols-2")}>
-        <li className="flex items-center gap-3 px-5 py-3.5">
-          <span
-            className={cn(
-              "grid h-7 w-7 place-items-center rounded-full",
-              running ? "bg-primary text-primary-foreground" : "bg-positif-bg text-positif",
-            )}
+      {snapshot.sources.length > 0 ? (
+        <div className="border-t border-border">
+          <button
+            type="button"
+            className="workspace-feedback flex min-h-11 w-full items-center justify-between gap-2 rounded-b-xl px-3 text-left text-sm font-medium text-foreground hover:bg-surface-subtle sm:px-4"
+            aria-expanded={detailsOpen}
+            aria-controls={detailsId}
+            onClick={() => setDetailsChoice(!detailsOpen)}
           >
-            {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Check className="h-3.5 w-3.5" aria-hidden="true" />}
-          </span>
-          <div>
-            <p className="text-[13px] font-semibold text-foreground">Mencari sumber</p>
-            <p className="text-[11.5px] text-muted-foreground">
-              {done} dari {total} selesai
-            </p>
+            Rincian sumber
+            <ChevronDown className={cn("size-4 shrink-0", detailsOpen && "rotate-180")} aria-hidden="true" />
+          </button>
+          <div
+            id={detailsId}
+            hidden={!detailsOpen}
+            onFocusCapture={() => setDetailsChoice(true)}
+          >
+            <div className="cari-reveal grid gap-4 px-3 pb-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_180px] lg:items-start">
+              <div className="@container min-w-0 space-y-2.5">
+                {snapshot.sources.map((source) => (
+                  <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} />
+                ))}
+              </div>
+              <div className="hidden lg:block">
+                <DotMap total={total} done={done} />
+              </div>
+            </div>
           </div>
-        </li>
-        {SHOW_COMMENT_STEP ? (
-          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-            <span
-              className={cn(
-                "grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold",
-                commentDone
-                  ? "bg-positif-bg text-positif"
-                  : commentRunning
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border text-muted-foreground",
-              )}
-            >
-              {commentDone ? (
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : commentRunning ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                "2"
-              )}
-            </span>
-            <div>
-              <p className="text-[13px] font-semibold text-foreground">Komentar</p>
-              <p className="text-[11.5px] text-muted-foreground">{commentCopy}</p>
-            </div>
-          </li>
-        ) : null}
-        {props.aiEnabled ? (
-          <li className="flex items-center gap-3 border-t border-border px-5 py-3.5 sm:border-l sm:border-t-0">
-            <span
-              className={cn(
-                "grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold",
-                summaryDone
-                  ? "bg-positif-bg text-positif"
-                  : summaryRunning
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border text-muted-foreground",
-              )}
-            >
-              {summaryDone ? (
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : summaryRunning ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                "3"
-              )}
-            </span>
-            <div>
-              <p className="text-[13px] font-semibold text-foreground">Ringkasan AI</p>
-              <p className="text-[11.5px] text-muted-foreground">{summaryCopy}</p>
-            </div>
-          </li>
-        ) : null}
-      </ol>
+        </div>
+      ) : null}
     </section>
   );
 }

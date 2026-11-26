@@ -61,6 +61,20 @@ const snapshotWithStates = snapshot({
 });
 
 describe("ProgressPanel", () => {
+  it("empty, indexed zero, and failed source use distinct copy", () => {
+    const [base] = snapshotWithStates.sources;
+    const sources: SearchSnapshot["sources"] = [
+      { ...base, resultCount: 0 },
+      { ...base, platform: "x", resultCount: 0, safeDetail: "web_index_selection" },
+      { ...base, platform: "reddit", state: "failed", resultCount: 0, safeDetail: "deadline" },
+    ];
+    render(<ProgressPanel snapshot={snapshot({ sources, totals: { sources: 3, done: 2, results: 0 } })} />);
+    expect(screen.getByText("Selesai · 0 hasil")).toBeTruthy();
+    expect(screen.getByText("0 hasil · cakupan indeks terbatas")).toBeTruthy();
+    expect(screen.getByText("Gagal · waktu habis")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Cari lagi di Reddit/ })).toBeNull();
+  });
+
   it("keeps the additional search action with the source status", () => {
     const request = vi.fn();
     const sources = snapshotWithStates.sources.map((source) => source.platform === "tiktok"

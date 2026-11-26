@@ -80,43 +80,45 @@ function SearchBody(props: {
 }) {
   const snapshot = props.snapshot;
   if (snapshot.results.length === 0) return null;
-  const results = (
-    <ResultsList
-      results={snapshot.results}
-      commentsByResult={commentsByResult(snapshot)}
-      sortMode={snapshot.search.filters.sort}
-      sources={snapshot.sources}
-      moreActions={props.moreActions}
-      now={props.now}
-    />
-  );
-  if (!props.aiEnabled || props.running) return <div className="mt-5">{results}</div>;
+  const showSummary = props.aiEnabled && !props.running;
   const summaryStatus = snapshot.search.summaryStatus === "pending" ? "failed" : snapshot.search.summaryStatus;
-  const showBreakdown = Boolean(snapshot.ai && snapshot.results.length > 0);
   return (
-    <div className="mt-5 min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)] lg:items-start lg:gap-5">
-      <aside className="mb-5 min-w-0 lg:order-2 lg:mb-0">
-        <AiSummary
-          ai={snapshot.ai}
-          summaryStatus={summaryStatus}
+    <div className={showSummary
+      ? "mt-5 min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)] lg:items-start lg:gap-5"
+      : "mt-5 min-w-0"}>
+      <div className="cari-results min-w-0">
+        <ResultsList
           results={snapshot.results}
-          comments={snapshot.comments}
-          hasMoreResults={snapshot.hasMoreResults}
+          commentsByResult={commentsByResult(snapshot)}
+          sortMode={snapshot.search.filters.sort}
+          sources={snapshot.sources}
+          moreActions={props.moreActions}
+          now={props.now}
         />
-      </aside>
-      <div className="min-w-0 lg:order-1">
-        {results}
-        {showBreakdown ? <ConversationBreakdown snapshot={snapshot} /> : null}
-        <div className="mt-5">
-          <AskPanel
-            searchId={snapshot.search.id}
-            questions={snapshot.questions}
-            suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Apa yang sering ditanyakan?"]}
+        {showSummary && snapshot.ai ? <ConversationBreakdown snapshot={snapshot} /> : null}
+        {showSummary ? (
+          <div className="mt-5">
+            <AskPanel
+              searchId={snapshot.search.id}
+              questions={snapshot.questions}
+              suggestions={["Apa keluhan utama?", "Apa yang dipuji?", "Apa yang sering ditanyakan?"]}
+              results={snapshot.results}
+              comments={snapshot.comments}
+            />
+          </div>
+        ) : null}
+      </div>
+      {showSummary ? (
+        <aside className="cari-reveal mt-5 min-w-0 lg:mt-0">
+          <AiSummary
+            ai={snapshot.ai}
+            summaryStatus={summaryStatus}
             results={snapshot.results}
             comments={snapshot.comments}
+            hasMoreResults={snapshot.hasMoreResults}
           />
-        </div>
-      </div>
+        </aside>
+      ) : null}
     </div>
   );
 }
@@ -253,6 +255,17 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
       ? (search.errorCode ? FAILED_SEARCH_COPY[search.errorCode] : null) ?? FAILED_SEARCH_FALLBACK
       : null;
 
+  const rerun = (
+    <button
+      type="button"
+      disabled={starting}
+      onClick={() => void start({ query: search.query, filters: search.filters })}
+      className="workspace-feedback inline-flex min-h-11 min-w-11 items-center rounded-lg border border-border px-3 font-medium text-foreground hover:bg-surface-subtle disabled:opacity-60"
+    >
+      {starting ? "Memulai…" : "Cari ulang"}
+    </button>
+  );
+
   return (
     <div ref={detail} className="mt-5 min-w-0">
       {/* The mobile workspace header scrolls with the page. */}
@@ -312,12 +325,10 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </p>
       ) : null}
       {failureCopy ? (
-        <p
-          role="alert"
-          className="mt-2 rounded-lg border border-negatif/30 bg-negatif-bg px-3 py-2 text-[13px] text-negatif"
-        >
-          {failureCopy}
-        </p>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-negatif/30 bg-negatif-bg px-3 py-2 text-[13px]">
+          <p role="alert" className="text-negatif">{failureCopy}</p>
+          {!legacy ? rerun : null}
+        </div>
       ) : null}
       {stale ? (
         <p className="mt-2 text-[12px] text-muted-foreground" role="status">
@@ -332,19 +343,12 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
                 ? "Hasil tersimpan yang bisa diverifikasi ditampilkan di bawah. Cari ulang untuk memperbarui hasil."
                 : "Tidak ada hasil tersimpan yang bisa diverifikasi. Cari ulang untuk mencari hasil terbaru."}
             </p>
-            <button
-              type="button"
-              disabled={starting}
-              onClick={() => void start({ query: search.query, filters: search.filters })}
-              className="workspace-feedback inline-flex min-h-11 min-w-11 items-center rounded-lg border border-border px-3 font-medium text-foreground hover:bg-surface-subtle"
-            >
-              {starting ? "Memulai…" : "Cari ulang"}
-            </button>
+            {rerun}
           </div>
         </div>
       ) : null}
       <div className="mt-5">
-        <ProgressPanel snapshot={snapshot} now={now} aiEnabled={aiEnabled} moreActions={moreActions} />
+        <ProgressPanel key={search.id} snapshot={snapshot} now={now} aiEnabled={aiEnabled} moreActions={moreActions} />
       </div>
       {!legacy && !running && !failureCopy && snapshot.results.length === 0 ? (
         <p className="mt-5 rounded-[14px] border border-border bg-surface px-5 py-4 text-[13px] text-muted-foreground">
@@ -352,7 +356,7 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </p>
       ) : null}
       <div className="[&_:is([id],[tabindex],a,button,input,textarea)]:scroll-mt-[calc(var(--cari-search-height,0px)+env(safe-area-inset-top,0px)+0.5rem)]">
-        <SearchBody snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
+        <SearchBody key={search.id} snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
       </div>
     </div>
   );

@@ -143,11 +143,31 @@
     opacity: 0;
   }
 
+  .cari-progress-bar {
+    transition: width var(--motion-duration) ease-out;
+  }
+
+  .cari-reveal,
+  .cari-results article[id^="hasil-"] {
+    animation: cari-reveal var(--motion-duration) ease-out;
+  }
+
+  @keyframes cari-reveal {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .workspace-feedback,
     .workspace-drawer,
-    .workspace-drawer-backdrop {
+    .workspace-drawer-backdrop,
+    .cari-progress-bar {
       transition: none;
+    }
+
+    .cari-reveal,
+    .cari-results article[id^="hasil-"] {
+      animation: none;
     }
   }
 }
