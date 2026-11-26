@@ -10,8 +10,6 @@ import { elapsedSeconds } from "./snapshot-format";
 
 const STATE_LABEL: Record<string, string> = {
   answered: "Selesai",
-  searching: "Mencari",
-  queued: "Mencari",
   unavailable: "Tidak tersedia",
   failed: "Gagal",
 };
@@ -56,10 +54,15 @@ function DotMap(props: { total: number; done: number }) {
   );
 }
 
-function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: MoreSourceActions }) {
+function sourceUnfinished(source: SnapshotSource): boolean {
+  return source.state === "queued" || source.state === "searching";
+}
+
+function SourceRow(props: { source: SnapshotSource; max: number; running: boolean; moreActions?: MoreSourceActions }) {
   const source = props.source;
   const label = STATE_LABEL[source.state] ?? source.state;
-  const active = source.state === "searching" || source.state === "queued";
+  const unfinished = sourceUnfinished(source);
+  const active = props.running && unfinished;
   const answered = source.state === "answered";
   const width = source.resultCount > 0 ? Math.max(4, Math.round((source.resultCount / props.max) * 100)) : 0;
   const latency = source.latencyMs == null ? null : `${(source.latencyMs / 1000).toFixed(1).replace(".", ",")} dtk`;
@@ -71,6 +74,8 @@ function SourceRow(props: { source: SnapshotSource; max: number; moreActions?: M
         "Mencari"
       ) : source.safeDetail === "hashtag_only" ? (
         "Hanya mendukung tagar"
+      ) : unfinished ? (
+        "Belum selesai"
       ) : source.safeDetail === "partial_coverage" ? (
         "Cakupan sebagian"
       ) : source.safeDetail === "web_index_selection" ? (
@@ -146,7 +151,8 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
   const max = Math.max(1, ...snapshot.sources.map((source) => source.resultCount));
   const running = snapshot.search.status === "queued" || snapshot.search.status === "running";
   const elapsed = elapsedSeconds(snapshot, now);
-  const sourcesBusy = snapshot.sources.some((source) => source.state === "queued" || source.state === "searching");
+  const unfinishedSources = snapshot.sources.filter(sourceUnfinished).length;
+  const sourcesBusy = running && unfinishedSources > 0;
   const commentCount = snapshot.comments.length;
   const commentStatus = snapshot.search.commentStatus ?? "pending";
   const commentDetail = snapshot.search.commentDetail ?? null;
@@ -198,9 +204,11 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
       ? failedSources > 0 ? `Sedang berjalan · ${failureStatus}` : "Sedang berjalan"
       : failedSources > 0
         ? failureStatus
-        : running && done === 0
-          ? "Menunggu"
-          : "Sumber selesai";
+        : unfinishedSources > 0
+          ? `${unfinishedSources} sumber belum selesai`
+          : running && done === 0
+            ? "Menunggu"
+            : "Sumber selesai";
 
   return (
     <section className="rounded-xl border border-border bg-surface shadow-card">
@@ -218,7 +226,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
             label="Mencari sumber"
             status={sourcesStatus}
             active={sourcesBusy}
-            done={!sourcesBusy && !running && !searchFailed && failedSources === 0}
+            done={unfinishedSources === 0 && !running && !searchFailed && failedSources === 0}
             warning={searchFailed || failedSources > 0}
           />
           <ProgressStep label="Komentar" status={commentCopy} active={commentRunning} done={commentDone} />
@@ -250,7 +258,7 @@ export function ProgressPanel(props: { snapshot: SearchSnapshot; now?: Date; aiE
             <div className="cari-reveal grid gap-4 px-3 pb-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_180px] lg:items-start">
               <div className="min-w-0">
                 {snapshot.sources.map((source) => (
-                  <SourceRow key={source.platform} source={source} max={max} moreActions={props.moreActions} />
+                  <SourceRow key={source.platform} source={source} max={max} running={running} moreActions={props.moreActions} />
                 ))}
               </div>
               <div className="hidden lg:block">

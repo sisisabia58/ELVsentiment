@@ -214,6 +214,41 @@ describe("ResultsList", () => {
     }
   });
 
+  it("returns focus to the first citation after backing out of two citations", async () => {
+    const results = [
+      result({ id: "focus-a", platform: "threads", url: null, authorHandle: "@first-citation" }),
+      result({ id: "focus-b", platform: "youtube", url: null, authorHandle: "@second-citation" }),
+    ];
+    const refs = results.map(({ id }) => `result:${id}`);
+    render(
+      <>
+        <EvidenceLinks sources={resolveEvidence(refs, evidenceSources(refs, results, []))} />
+        <ResultsList results={results} commentsByResult={{}} sortMode="relevance" />
+      </>,
+    );
+    const first = screen.getByRole("link", { name: "first-citation · Threads" });
+    const second = screen.getByRole("link", { name: "second-citation · YouTube" });
+
+    try {
+      first.focus();
+      fireEvent.click(first, { detail: 0 });
+      expect(document.activeElement?.id).toBe("hasil-focus-a");
+
+      second.focus();
+      fireEvent.click(second, { detail: 0 });
+      expect(document.activeElement?.id).toBe("hasil-focus-b");
+
+      window.history.back();
+      await waitFor(() => expect(document.activeElement?.id).toBe("hasil-focus-a"));
+      expect(window.location.hash).toBe("#hasil-focus-a");
+      window.history.back();
+      await waitFor(() => expect(window.location.hash).toBe(""));
+      expect(document.activeElement).toBe(first);
+    } finally {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  });
+
   it("discloses retained replies outside the post link and preserves expansion across ranking updates", () => {
     const fourComments = [0, 1, 2, 3].map((index) => ({
       id: `c${index}`,

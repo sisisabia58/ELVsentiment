@@ -105,6 +105,30 @@ describe("ProgressPanel", () => {
     expect(screen.queryByText("Ringkasan AI")).toBeNull();
   });
 
+  it.each([true, false])("shows terminal partial sources as inactive (includes failure: %s)", (includesFailure) => {
+    const sources = snapshotWithStates.sources
+      .filter((source) => includesFailure || source.state !== "failed")
+      .map((source) => source.platform === "youtube" ? { ...source, safeDetail: "hashtag_only" } : source);
+    render(<ProgressPanel snapshot={snapshot({
+      sources,
+      search: { ...snapshot().search, status: "partial", finishedAt: "2026-11-16T10:00:40Z" },
+    })} />);
+    expect(screen.queryAllByText(/Sedang berjalan|Menunggu · sumber masih berjalan/)).toHaveLength(0);
+    expect(screen.getByText(includesFailure ? "1 sumber gagal" : "4 sumber belum selesai")).toBeTruthy();
+    expect(screen.getByText("Dilewati · tidak ada balasan")).toBeTruthy();
+    for (const platform of ["Instagram", "Facebook"]) {
+      const row = within(screen.getByRole("group", { name: `Status dan tindakan ${platform}` }));
+      expect(row.getByText("Belum selesai")).toBeTruthy();
+      expect(row.queryByText("Mencari")).toBeNull();
+    }
+    const youtube = within(screen.getByRole("group", { name: "Status dan tindakan YouTube" }));
+    expect(youtube.getByText("Hanya mendukung tagar")).toBeTruthy();
+    if (includesFailure) {
+      const reddit = within(screen.getByRole("group", { name: "Status dan tindakan Reddit" }));
+      expect(reddit.getByText("Gagal")).toBeTruthy();
+    }
+  });
+
   it("shows insufficient evidence as a settled AI step", () => {
     render(
       <ProgressPanel

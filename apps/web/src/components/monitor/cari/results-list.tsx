@@ -8,7 +8,7 @@ import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
 import type { SnapshotComment, SnapshotResult, SnapshotSource } from "@/monitor/search/load";
 import { supportedProviders } from "@/monitor/search/platforms";
 import { originalPostHref } from "@/monitor/search/post-permalink";
-import { CARI_CITATION_EVENT } from "./evidence-links";
+import { CARI_CITATION_EVENT, type CariCitationOrigin } from "./evidence-links";
 import { commentTextIsVisible } from "./quote-source";
 import { MoreSourceControl, type MoreSourceActions } from "./more-source-control";
 import { PLATFORM_ORDER, PlatformTile, platformName } from "./platform-tile";
@@ -251,7 +251,10 @@ export function ResultsList(props: {
     function revealLocalCitation(event?: Event) {
       const hash = window.location.hash;
       if (!event && hash === handledHash.current) return;
-      if (event instanceof CustomEvent) returnLink.current = event.detail;
+      if (event instanceof CustomEvent) {
+        const origin = event.detail as CariCitationOrigin;
+        if (!origin.previousHash) returnLink.current = origin.link;
+      }
 
       if (!hash) {
         handledHash.current = "";

@@ -4,6 +4,7 @@ import type { MouseEvent, ReactNode } from "react";
 import { type EvidenceSource, sourceLabel, sourceLinkProps } from "./quote-source";
 
 export const CARI_CITATION_EVENT = "cari-citation";
+export type CariCitationOrigin = { link: HTMLAnchorElement; previousHash: string };
 
 export function EvidenceLink({ source, className, children }: {
   source: EvidenceSource;
@@ -14,8 +15,11 @@ export function EvidenceLink({ source, className, children }: {
     if (!source.href.startsWith("#") || event.defaultPrevented ||
         event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
-    if (window.location.hash !== source.href) window.history.pushState(null, "", source.href);
-    window.dispatchEvent(new CustomEvent(CARI_CITATION_EVENT, { detail: event.currentTarget }));
+    const previousHash = window.location.hash;
+    if (previousHash !== source.href) window.history.pushState(null, "", source.href);
+    window.dispatchEvent(new CustomEvent<CariCitationOrigin>(CARI_CITATION_EVENT, {
+      detail: { link: event.currentTarget, previousHash },
+    }));
   }
 
   return <a {...sourceLinkProps(source)} className={className} onClick={followCitation}>{children}</a>;
