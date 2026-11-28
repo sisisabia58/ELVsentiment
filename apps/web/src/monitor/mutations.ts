@@ -54,7 +54,8 @@ export async function saveMentionReview(
     await db.query("select id from mentions where id = $1 and customer_id = $2 for update", [mentionId, customerId]);
     const [row] = await readStoredMentions(db, customerId, { mentionId });
     if (!row) return { ok: false as const, reason: "not_found" as const };
-    const shown = presentMention(row, policy.scoring);
+    // A manual queue choice does not change the assessment or its durable attention state.
+    const shown = presentMention({ ...row, manualRoute: undefined }, policy.scoring);
     if (next.sentiment === "mixed" && (!row.triage || shown.sentiment !== "mixed")) {
       return { ok: false as const, reason: "invalid" as const };
     }
@@ -67,7 +68,7 @@ export async function saveMentionReview(
       next,
     );
     const assessmentChanged = shown.relevance !== next.relevance || shown.sentiment !== next.sentiment;
-    if (row.triage && shown.bucket === "not_sure" && !assessmentChanged) {
+    if (shown.requiresAssessmentChange && !assessmentChanged) {
       return { ok: false as const, reason: "invalid" as const };
     }
     if (row.triage && row.correction && !changed) {

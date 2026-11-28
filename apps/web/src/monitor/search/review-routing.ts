@@ -17,7 +17,7 @@ type Failure = { ok: false; error: ReviewError };
 export type ReviewReadResult = Failure | {
   ok: true; evidence: SnapshotResult; mentionId: string | null; triage: NonNullable<StoredMention["triage"]> | null; route: ManualRoute;
 };
-export type ReviewWriteResult = Failure | { ok: true; mentionId: string; route: ManualRoute };
+export type ReviewWriteResult = Failure | { ok: true; mentionId: string; route: ManualRoute; replayed?: true };
 
 class Rejected extends Error {
   constructor(readonly code: ReviewError) { super(code); }
@@ -83,14 +83,16 @@ export function routeCariResult(ctx: Context, input: RouteInput): Promise<Review
     const retained = await resolveReviewResult(ctx.db, ctx.customerId, input);
     if (!retained.ok) throw new Rejected(retained.error);
     if (retained.mentionId !== mentionId) throw new Rejected("ineligible");
+    // A correction can block a new decision without invalidating a previously accepted request.
+    const route = await currentRoute(ctx.db, mentionId);
+    const replay = await ctx.db.query("select 1 from pantau_manual_route_requests where mention_id=$1 and request_id=$2",
+      [mentionId, input.requestId]);
+    if (replay.rows.length) return { ok: true as const, mentionId, route, replayed: true as const };
+
     const corrected = await ctx.db.query(
       "select 1 from owner_corrections where mention_id=$1 and customer_id=$2 and relevance='irrelevant'",
       [mentionId, ctx.customerId]);
     if (corrected.rows.length) throw new Rejected("ineligible");
-    const route = await currentRoute(ctx.db, mentionId);
-    const replay = await ctx.db.query("select 1 from pantau_manual_route_requests where mention_id=$1 and request_id=$2",
-      [mentionId, input.requestId]);
-    if (replay.rows.length) return { ok: true as const, mentionId, route };
     if (route.revision !== input.expectedRevision) throw new Rejected("conflict");
     const revision = randomUUID();
     await ctx.db.query(`insert into pantau_manual_routes

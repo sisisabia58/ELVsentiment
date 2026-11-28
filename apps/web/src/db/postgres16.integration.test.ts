@@ -199,9 +199,9 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
         const input = { searchId, resultId, projectId, requestId: randomUUID(), expectedRevision: null, destination: "attention" as const };
         const outcomes = await Promise.all(connections.map((ctx, index) => routeCariResult(ctx,
           { ...input, requestId: index && !replay ? randomUUID() : input.requestId })));
-        const winner = outcomes.find((outcome) => outcome.ok);
+        const winner = outcomes.find((outcome) => outcome.ok && !outcome.replayed);
         if (!winner?.ok) throw new Error("no winning route");
-        if (replay) expect(outcomes).toEqual([winner,winner]);
+        if (replay) expect(outcomes).toEqual(expect.arrayContaining([winner, { ...winner, replayed: true }]));
         else expect(outcomes).toContainEqual({ ok: false, error: "conflict" });
         const next = await routeCariResult(connections[0], { ...input, expectedRevision: winner.route.revision,
           destination: "ambiguous", requestId: randomUUID() });

@@ -104,6 +104,7 @@ export type PresentedMention = {
   originalSentiment: Sentiment | null;
   originalRelevance: "relevant" | "irrelevant" | null;
   uncertainFields: UncertainField[];
+  requiresAssessmentChange?: boolean;
   needsAttention: boolean;
   attentionUnread: boolean;
   attentionId: string | null;
@@ -197,6 +198,7 @@ export function presentMention(row: StoredMention, policy: ScoringPolicy): Prese
       sentimentConfidence: null,
       originalSentiment,
       originalRelevance,
+      requiresAssessmentChange: automaticBucket === "not_sure",
       uncertainFields: bucket === "not_sure" ? [result?.reason === "complaint_unclear" ? "keluhan" : "relevansi"] : [],
       needsAttention,
       attentionUnread: needsAttention && row.readAt === null,

@@ -3,6 +3,9 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { applyMigration, pgliteQueryable, withCustomer } from "@/db/migrate";
 import { readStoredMentions } from "../mention-store";
+import { saveMentionReview } from "../mutations";
+import { readMonitorPolicy } from "../policy";
+import { presentMention } from "../present";
 import { createProject, saveProjectConfiguration } from "@/projects/handlers";
 import { readCariReview, routeCariResult, undoCariRoute } from "./review-routing";
 
@@ -61,9 +64,60 @@ it("requires the opted-in current project and blocks an irrelevant owner correct
   expect(await routeCariResult(ctx, { ...input, expectedRevision: initial.route.revision, requestId: randomUUID() }))
     .toEqual({ ok: false, error: "ineligible" });
 
+  expect(await routeCariResult(ctx, input)).toEqual({ ...initial, replayed: true });
+
   const other = (await createProject(db, customerId, "Another")).projectId;
   expect(await readCariReview(ctx, k)).toEqual({ ok: false, error: "not_found" });
   await db.query("update projects set created_at=created_at-interval '1 day' where id=$1", [other]);
+});
+
+async function routeAssessedMention(destination: "attention" | "ambiguous", automaticallyAmbiguous = false) {
+  const routed = await routeCariResult(ctx, { ...await key(), destination, expectedRevision: null, requestId: randomUUID() });
+  if (!routed.ok || !routed.route.revision) throw new Error("Test route was not saved");
+  const { mentionId } = routed;
+  await db.query(`insert into pantau_triage_jobs (mention_id,customer_id,project_id,source,status)
+    values ($1,$2,$3,'threads','completed')
+    on conflict (mention_id) do update set status=excluded.status`, [mentionId, customerId, projectId]);
+  await db.query(`insert into pantau_triage_judgments
+    (mention_id,customer_id,project_id,destination,origin,relevance_tier,sentiment,actionability,reason,model_version)
+    values ($1,$2,$3,$4,'opencode','literal_match','negative','not_actionable',$5,'fixture')`,
+    [mentionId, customerId, projectId, automaticallyAmbiguous ? "ambiguous" : "mention",
+      automaticallyAmbiguous ? "complaint_unclear" : "non_actionable"]);
+  return { mentionId, revision: routed.route.revision };
+}
+
+async function presentedMention(mentionId: string) {
+  const [stored] = await withCustomer(db, customerId, () => readStoredMentions(db, customerId, { mentionId }));
+  return presentMention(stored, readMonitorPolicy().scoring);
+}
+
+const confirmNegative = { relevance: "relevant", sentiment: "negative" } as const;
+
+it("does not leave an attention item after confirmation and Undo of manual attention", async () => {
+  const route = await routeAssessedMention("attention");
+  expect(await presentedMention(route.mentionId)).toMatchObject({ needsAttention: true });
+  expect(await saveMentionReview(db, customerId, route.mentionId, { ...confirmNegative, topics: [] }))
+    .toEqual({ ok: true, action: "confirm" });
+  expect(await undoCariRoute(ctx, { projectId, ...route })).toMatchObject({ ok: true, route: { destination: null } });
+  expect(await presentedMention(route.mentionId)).toMatchObject({
+    bucket: "included", confirmed: true, needsAttention: false, attentionId: null,
+  });
+});
+
+it("accepts confirmation and topic changes for an assessed mention manually routed to ambiguity", async () => {
+  const { mentionId } = await routeAssessedMention("ambiguous");
+  expect(await presentedMention(mentionId)).toMatchObject({ bucket: "not_sure", requiresAssessmentChange: false });
+  expect(await saveMentionReview(db, customerId, mentionId, { ...confirmNegative, topics: [] }))
+    .toEqual({ ok: true, action: "confirm" });
+  expect(await saveMentionReview(db, customerId, mentionId, { ...confirmNegative, topics: ["lainnya"] }))
+    .toEqual({ ok: true, action: "correct" });
+});
+
+it("requires a changed assessment for an automatically uncertain mention manually routed to attention", async () => {
+  const { mentionId } = await routeAssessedMention("attention", true);
+  expect(await presentedMention(mentionId)).toMatchObject({ bucket: "included", requiresAssessmentChange: true });
+  expect(await saveMentionReview(db, customerId, mentionId, { ...confirmNegative, topics: [] }))
+    .toEqual({ ok: false, reason: "invalid" });
 });
 
 it("replays requests, restores a previous choice and clears the first choice after expiry", async () => {
@@ -73,7 +127,7 @@ it("replays requests, restores a previous choice and clears the first choice aft
   if (!first.ok) throw new Error(first.error);
   const second = await routeCariResult(ctx, { ...input, destination: "ambiguous", expectedRevision: first.route.revision, requestId: randomUUID() });
   if (!second.ok) throw new Error(second.error);
-  expect(await routeCariResult(ctx,input)).toEqual(second);
+  expect(await routeCariResult(ctx,input)).toEqual({ ...second, replayed: true });
   const undo = { projectId, mentionId: first.mentionId, revision: second.route.revision! };
   const restored = await undoCariRoute(ctx, undo);
   expect(restored).toMatchObject({ ok: true, route: { destination: "attention" } });
@@ -81,6 +135,7 @@ it("replays requests, restores a previous choice and clears the first choice aft
   const other = await routeCariResult(ctx, { ...input, ...await key(), requestId: randomUUID() });
   if (!other.ok) throw new Error(other.error);
   await db.query("update instant_searches set retention_expires_at=now() where id=$1", [searchId]);
+  expect(await routeCariResult(ctx, input)).toEqual({ ok: false, error: "not_found" });
   const cleared = await undoCariRoute(ctx, { projectId, mentionId: other.mentionId, revision: other.route.revision! });
   expect(cleared).toMatchObject({ ok: true, route: { destination: null, revision: expect.any(String) } });
 });

@@ -29,7 +29,7 @@ export function ReviewForm(props: {
     relevance !== (mention.relevance ?? "") ||
     (relevance === "relevant" && sentiment !== (mention.sentiment ?? ""));
   const changed = assessmentChanged || topics.join("\0") !== mention.topics.join("\0");
-  const needsAssessmentChange = Boolean(triage) && mention.bucket === "not_sure" && !assessmentChanged;
+  const needsAssessmentChange = mention.requiresAssessmentChange && !assessmentChanged;
 
   return (
     <form
