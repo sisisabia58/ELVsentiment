@@ -5,7 +5,7 @@ import { projectHref } from "@/monitor/links";
 import { selectedSourcesReady, type Workspace } from "@/monitor/load";
 import type { PresentedMention, Sentiment } from "@/monitor/present";
 import { ISSUE_CATEGORY_LABEL, SENTIMENT_LABEL, TRIAGE_STATUS_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
-import { inWindow, mentionInWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
+import { inWindow, parseRangeKey, rangeWindow, windowTimestamp } from "@/monitor/range";
 import { TEXT_MATCH_LABEL, textMatchCounts } from "@/monitor/relevance";
 import { emptyCollectionBody } from "@/monitor/copy";
 import { EmptyState, ManualRouteTag, PageHeader, Panel, SentimentTag, SourceMark } from "./bits";
@@ -263,11 +263,11 @@ function rowsFor(
   start: Date,
   end: Date,
 ): PresentedMention[] {
-  return workspace.mentions.filter((mention) => {
-    const inRange = mode !== "sebutan" && mention.manualRoute
-      ? inWindow(mention.manualRoute.routedAt, start, end)
-      : mentionInWindow(mention, start, end);
-    if (!inRange) return false;
+  const timestamp = mode === "sebutan"
+    ? windowTimestamp
+    : (mention: PresentedMention) => mention.manualRoute?.routedAt ?? windowTimestamp(mention);
+  const rows = workspace.mentions.filter((mention) => {
+    if (!inWindow(timestamp(mention), start, end)) return false;
     if (source === "x" || source === "threads" || source === "instagram" || source === "tiktok") {
       if (mention.source !== source) return false;
     }
@@ -276,6 +276,10 @@ function rowsFor(
     if (mode === "belum-yakin") return mention.bucket === "not_sure";
     return mention.bucket === "included" || mention.bucket === "pending" || mention.bucket === "failed" || mention.bucket === "policy_unapproved";
   });
+  if (mode !== "sebutan") {
+    rows.sort((left, right) => Date.parse(timestamp(right)) - Date.parse(timestamp(left)));
+  }
+  return rows;
 }
 
 function MentionLine(props: { mention: PresentedMention; now: string; href: string; mode: string }) {

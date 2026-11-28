@@ -150,3 +150,34 @@ it("uses the manual route date in review queues while keeping the post date and 
   rerender(view("perlu-perhatian", auto));
   expect(screen.queryByText(auto.excerpt)).toBeNull();
 });
+
+it.each([
+  ["perlu-perhatian", "attention"],
+  ["belum-yakin", "ambiguous"],
+] as const)("puts a recently routed older post on the first %s page ahead of automatic entries", (mode, destination) => {
+  const auto = {
+    ...complaint(),
+    bucket: destination === "attention" ? "included" as const : "not_sure" as const,
+    needsAttention: destination === "attention",
+  };
+  const now = "2026-11-26T10:00:00.000Z";
+  const oldPost = {
+    ...auto, id: "older-post", excerpt: "Unggahan lama dipindah hari ini",
+    postedAt: "2026-09-07T10:00:00.000Z", manualRoute: { destination, routedAt: now },
+  };
+  const automaticPosts = Array.from({ length: 10 }, (_, index) => ({
+    ...auto, id: `auto-${index}`, excerpt: `Otomatis ${index + 1}`,
+    postedAt: "2026-11-25T10:00:00.000Z",
+  }));
+  render(<MentionsScreen
+    now={now} page={1} range="7" source="" query="" mode={mode}
+    workspace={{ ...workspace(true), mentions: [...automaticPosts, oldPost] }}
+  />);
+  const rows = screen.getAllByRole("listitem").filter((row) => row.querySelector("time"));
+  expect(rows).toHaveLength(10);
+  expect(rows[0].textContent).toContain(oldPost.excerpt);
+  expect(rows[0].querySelector("time")?.dateTime).toBe(oldPost.postedAt);
+  expect(rows[1].textContent).toContain(automaticPosts[0].excerpt);
+  expect(rows[9].textContent).toContain(automaticPosts[8].excerpt);
+  expect(screen.getByText("1–10 dari 11 sebutan")).toBeTruthy();
+});

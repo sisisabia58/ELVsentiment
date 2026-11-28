@@ -140,8 +140,13 @@ function ReviewContent({ searchId, resultId, result, projectId }: ReviewProps) {
     setUndo(null);
     if (!response.ok) {
       setFeedback({ tone: "error", text: ERROR_LABEL[response.error] });
-      if (response.error === "conflict") refreshReview();
-      else setReview(null);
+      if (response.error === "conflict") {
+        // Keep focus inside the dialog when the stale route controls are disabled.
+        feedbackRef.current?.focus();
+        refreshReview();
+      } else {
+        setReview(null);
+      }
       return;
     }
     const { mentionId, route, replayed } = response;

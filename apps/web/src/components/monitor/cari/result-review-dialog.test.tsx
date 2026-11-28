@@ -136,9 +136,13 @@ it("refreshes the route after a stale write and waits for a new choice", async (
   });
   open();
   await screen.findByText("Menunggu penilaian");
-  fireEvent.click(choice("Perlu perhatian"));
+  const trigger = choice("Perlu perhatian");
+  trigger.focus();
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);
   expect(await screen.findByText("Rute manual: Belum yakin")).toBeTruthy();
-  expect(screen.getByText("Rute berubah di tempat lain. Periksa rute terbaru sebelum memilih lagi.")).toBeTruthy();
+  const conflict = screen.getByText("Rute berubah di tempat lain. Periksa rute terbaru sebelum memilih lagi.");
+  expect(document.activeElement).toBe(conflict);
   expect(routeCariResultAction).toHaveBeenCalledTimes(1);
   fireEvent.click(choice("Perlu perhatian"));
   expect(await screen.findByText("Disimpan ke Perlu perhatian.")).toBeTruthy();
