@@ -633,3 +633,20 @@ describe("ResultsList", () => {
   });
 });
 
+
+it("offers review only on supported native posts while the feature is enabled", () => {
+  const results = [
+    result({ id: "native" }),
+    result({ id: "indexed", platform: "instagram", webIndex: true }),
+    result({ id: "fallback", externalId: "url:fallback" }),
+    result({ id: "unsupported", platform: "x" }),
+  ];
+  const onReview = vi.fn();
+  const props = { results, commentsByResult: {}, sortMode: "relevance" as const };
+  const { rerender } = render(<ResultsList {...props} />);
+  expect(screen.queryByRole("button", { name: "Tinjau" })).toBeNull();
+  rerender(<ResultsList {...props} onReview={onReview} />);
+  const review = screen.getByRole("button", { name: "Tinjau" });
+  fireEvent.click(review);
+  expect(onReview).toHaveBeenCalledExactlyOnceWith("native", review);
+});

@@ -20,6 +20,7 @@ import { AiSummary } from "./ai-summary";
 import { AskPanel } from "./ask-panel";
 import type { MoreSourceActions } from "./more-source-control";
 import { ProgressPanel } from "./progress-panel";
+import { ResultReviewDialog } from "./result-review-dialog";
 import { ResultsList } from "./results-list";
 import { elapsedSeconds } from "./snapshot-format";
 import { useSearchPoll } from "./use-search-poll";
@@ -76,6 +77,7 @@ function SearchBody(props: {
   aiEnabled: boolean;
   running: boolean;
   moreActions: MoreSourceActions;
+  onReview?: (resultId: string, trigger: HTMLButtonElement) => void;
 }) {
   const snapshot = props.snapshot;
   if (snapshot.results.length === 0) return null;
@@ -103,6 +105,7 @@ function SearchBody(props: {
           sortMode={snapshot.search.filters.sort}
           sources={snapshot.sources}
           moreActions={props.moreActions}
+          onReview={props.onReview}
           now={props.now}
         />
         {showSummary ? (
@@ -167,7 +170,14 @@ function commentsByResult(snapshot: SearchSnapshot): Record<string, SnapshotComm
   return grouped;
 }
 
-export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: string; aiEnabled?: boolean }) {
+export function SearchDetail(props: {
+  initialSnapshot: SearchSnapshot;
+  now?: string;
+  aiEnabled?: boolean;
+  reviewEnabled?: boolean;
+  reviewProjectId?: string | null;
+  reviewProjectName?: string | null;
+}) {
   const { snapshot, stale, refresh } = useSearchPoll(
     props.initialSnapshot.search.id,
     props.initialSnapshot,
@@ -236,6 +246,17 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
   const { start, starting, error } = useStartSearch();
   const running = search.status === "queued" || search.status === "running";
   const legacy = search.legacyEvidence === true;
+  const reviewEnabled = props.reviewEnabled && !legacy && (search.status === "succeeded" || search.status === "partial");
+  const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const reviewTrigger = useRef<HTMLButtonElement>(null);
+  const selectedResult = snapshot.results.find((result) => result.id === selectedResultId);
+
+  function openReview(resultId: string, trigger: HTMLButtonElement) {
+    reviewTrigger.current = trigger;
+    setSelectedResultId(resultId);
+    setReviewOpen(true);
+  }
   const aiEnabled = props.aiEnabled === true && !legacy;
   const done = snapshot.totals.done;
   const total = snapshot.totals.sources;
@@ -354,8 +375,28 @@ export function SearchDetail(props: { initialSnapshot: SearchSnapshot; now?: str
         </p>
       ) : null}
       <div>
-        <SearchBody key={search.id} snapshot={snapshot} now={now} aiEnabled={aiEnabled && !failureCopy} running={running} moreActions={moreActions} />
+        <SearchBody
+          key={search.id}
+          snapshot={snapshot}
+          now={now}
+          aiEnabled={aiEnabled && !failureCopy}
+          running={running}
+          moreActions={moreActions}
+          onReview={reviewEnabled ? openReview : undefined}
+        />
       </div>
+      {selectedResultId && selectedResult ? (
+        <ResultReviewDialog
+          open={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          searchId={search.id}
+          resultId={selectedResultId}
+          result={selectedResult}
+          projectId={props.reviewProjectId ?? null}
+          projectName={props.reviewProjectName ?? null}
+          returnFocus={reviewTrigger}
+        />
+      ) : null}
     </div>
   );
 }

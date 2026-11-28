@@ -53,6 +53,8 @@ type Triage = { status: TriageStatus } & Partial<TriageJudgment>;
 export type MentionBucket = "included" | "excluded" | "not_sure" | "failed" | "pending" | "policy_unapproved";
 export type UncertainField = "relevansi" | "sentimen" | "topik" | "keluhan";
 
+export const MANUAL_ROUTE_LABEL = { attention: "Perlu perhatian", ambiguous: "Belum yakin" } satisfies Record<ReviewDestination, string>;
+
 export type PresentedManualRoute = { destination: ReviewDestination; routedAt: string };
 
 export type StoredMention = {

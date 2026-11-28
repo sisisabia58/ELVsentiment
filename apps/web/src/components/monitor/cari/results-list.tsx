@@ -1,9 +1,10 @@
 "use client";
 
 import { Component, createRef, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, ChevronDown, Heart, MessageSquareText } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Heart, ListChecks, MessageSquareText } from "lucide-react";
 import { cn } from "cn";
 import { formatRelative } from "@/monitor/format";
+import { isNativePantauResult } from "@/monitor/search/feature";
 import { SORT_LABEL, type SortMode } from "@/monitor/search/filters";
 import type { SnapshotComment, SnapshotResult, SnapshotSource } from "@/monitor/search/load";
 import { supportedProviders } from "@/monitor/search/platforms";
@@ -52,6 +53,8 @@ function Engagement(props: { result: SnapshotResult }) {
   );
 }
 
+type ReviewResult = (resultId: string, trigger: HTMLButtonElement) => void;
+
 type LocalCitation = { id: string; resultId: string; platform: string; reply: boolean };
 
 function ResultCard(props: {
@@ -60,6 +63,7 @@ function ResultCard(props: {
   now: Date;
   showPlatform: boolean;
   citation: LocalCitation | null;
+  onReview?: ReviewResult;
 }) {
   const result = props.result;
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
@@ -157,6 +161,17 @@ function ResultCard(props: {
           ) : null}
         </div>
       </PostPreview>
+      {props.onReview && isNativePantauResult(result.platform, result.externalId, result.webIndex) ? (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          className="workspace-feedback mt-2 inline-flex min-h-11 min-w-11 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-semibold text-primary hover:bg-info-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          onClick={(event) => props.onReview?.(result.id, event.currentTarget)}
+        >
+          <ListChecks className="size-4" aria-hidden="true" />
+          Tinjau
+        </button>
+      ) : null}
       {comments.length > 0 ? (
         <div className="mt-3 rounded-lg bg-surface-subtle/75" aria-label="Contoh balasan teratas, bukan semua komentar">
           <p className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold text-muted-foreground">
@@ -240,6 +255,7 @@ export function ResultsList(props: {
   sortMode: SortMode;
   sources?: SnapshotSource[];
   moreActions?: MoreSourceActions;
+  onReview?: ReviewResult;
   now?: Date;
 }) {
   const [platform, setPlatform] = useState<string | null>(null);
@@ -374,6 +390,7 @@ export function ResultsList(props: {
               comments={props.commentsByResult[result.id] ?? []}
               now={now}
               showPlatform={!selected}
+              onReview={props.onReview}
               citation={citation?.reply && citation.resultId === result.id ? citation : null}
             />
           ))}

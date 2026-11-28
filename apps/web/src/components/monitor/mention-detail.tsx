@@ -3,7 +3,7 @@ import { LogoutForm } from "@/components/logout-form";
 import { projectHref } from "@/monitor/links";
 import type { Workspace } from "@/monitor/load";
 import type { PresentedMention } from "@/monitor/present";
-import { EmptyState, PageHeader, SourceMark } from "./bits";
+import { EmptyState, ManualRouteTag, PageHeader, SourceMark } from "./bits";
 import { ReviewForm } from "./review-form";
 import { Frame } from "./shell";
 
@@ -12,7 +12,7 @@ export function MentionDetail(props: { workspace: Workspace; mention: PresentedM
   const mention = props.mention;
   return (
     <Frame active="/sebutan" workspace={props.workspace} logout={<LogoutForm />}>
-      <Link href={projectHref("/sebutan", projectId)} className="text-sm font-medium text-primary">
+      <Link href={projectHref("/sebutan", projectId)} className="inline-flex min-h-11 items-center text-sm font-medium text-primary">
         Kembali ke Sebutan
       </Link>
       {props.workspace.projectMissing ? (
@@ -33,6 +33,7 @@ export function MentionDetail(props: { workspace: Workspace; mention: PresentedM
           <p className="mt-3 text-sm text-muted-foreground">
             <SourceMark source={mention.source} /> {mention.authorLabel}
           </p>
+          {mention.manualRoute ? <div className="mt-2"><ManualRouteTag destination={mention.manualRoute.destination} /></div> : null}
           <div className="mt-5 rounded-[14px] border border-border bg-surface p-4 shadow-card lg:p-5">
             <ReviewForm mention={mention} topics={props.workspace.topicLabels} />
           </div>

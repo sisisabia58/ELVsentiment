@@ -3,7 +3,7 @@ import { Activity } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSnapshot, SnapshotResult } from "@/monitor/search/load";
-import { startMoreSourceAction, startSearchAction } from "@/app/cari/start-action";
+import { readCariReviewAction, startMoreSourceAction, startSearchAction } from "@/app/cari/start-action";
 import { SearchDetail, SearchScreen } from "./search-screen";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
@@ -12,6 +12,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
 }));
 vi.mock("@/app/cari/start-action", () => ({
+  readCariReviewAction: vi.fn(),
   startSearchAction: vi.fn(),
   startMoreSourceAction: vi.fn(),
 }));
@@ -627,4 +628,47 @@ it.each([
   expect(screen.getByRole("button", { name: "TikTok 2" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: "Cari lagi di TikTok" })).toBeNull();
   expect(screen.queryByText(/kredit|Rp\s?\d/i)).toBeNull();
+});
+
+it("reviews a paged result and returns focus to its card without resetting the feed", async () => {
+  const initial = finishedSnapshot();
+  const tiktok = {
+    ...initial.sources[0], platform: "tiktok",
+    more: { state: "available" as const, added: null, generation: 0 },
+  };
+  initial.results = [post({ platform: "tiktok" })];
+  initial.sources = [tiktok];
+  const paged = post({ platform: "tiktok", id: "paged", text: "unggahan halaman tambahan", replies: 4 });
+  const updated: SearchSnapshot = {
+    ...initial, results: [...initial.results, paged],
+    sources: [{ ...tiktok, more: { state: "exhausted", added: 1, generation: 1 } }],
+    comments: Array.from({ length: 4 }, (_, index) => ({
+      id: `reply-${index}`, resultId: paged.id, platform: "tiktok", externalId: `reply-${index}`,
+      text: `Balasan tersimpan ${index + 1}`, authorHandle: null, authorName: null, publishedAt: null, likes: null, replies: null,
+    })),
+  };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => updated }));
+  vi.mocked(startMoreSourceAction).mockResolvedValue({ ok: true, jobId: "more-job" });
+  vi.mocked(readCariReviewAction).mockResolvedValue({
+    ok: true, evidence: paged, mentionId: null, triage: null, route: { destination: null, revision: null },
+  });
+  render(<SearchDetail initialSnapshot={initial} reviewEnabled reviewProjectId="active" reviewProjectName="Kedai Contoh" />);
+  fireEvent.click(screen.getByRole("button", { name: "TikTok 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cari lagi di TikTok" }));
+  const card = (await screen.findByText(paged.text)).closest("article")!;
+  fireEvent.click(within(card).getByRole("button", { name: "Lihat 1 balasan tersimpan" }));
+  const trigger = within(card).getByRole("button", { name: "Tinjau" });
+  trigger.focus();
+  fireEvent.click(trigger);
+
+  const dialog = screen.getByRole("dialog", { name: "Tinjau unggahan" });
+  expect(within(dialog).getByText("Kedai Contoh")).toBeTruthy();
+  await waitFor(() => expect(readCariReviewAction).toHaveBeenCalledExactlyOnceWith({
+    searchId: initial.search.id, resultId: paged.id, projectId: "active",
+  }));
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByText("Balasan tersimpan 4").closest("article")).toBe(card);
+  expect(screen.getByRole("button", { name: "TikTok 2" }).getAttribute("aria-pressed")).toBe("true");
 });

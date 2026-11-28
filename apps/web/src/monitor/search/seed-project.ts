@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "@/db/migrate";
 import type { Keyword } from "@/domain/keyword-intent";
-import type { Env } from "./feature";
+import { isNativePantauResult, type Env } from "./feature";
 import { isUuid } from "./search-id";
 import { savedEvidenceRelevance, SEARCH_RELEVANCE_VERSION } from "./relevance";
-
-export const PANTAU_TRIAGE_SOURCES = ["threads", "instagram", "tiktok"];
 
 export function pantauFilterTriageEnabled(env: Env = process.env): boolean {
   return /^(1|true)$/i.test(env.PANTAU_FILTER_TRIAGE_ENABLED?.trim() ?? "");
@@ -38,8 +36,8 @@ export type SeedPost = {
 };
 
 export function seedEvidenceForPost(post: SeedPost, enabledSources: ReadonlySet<string>, variants: Keyword[]) {
-  if (!PANTAU_TRIAGE_SOURCES.includes(post.platform) || !enabledSources.has(post.platform)
-      || !post.answered || post.web_index || !post.external_id.trim() || post.external_id.startsWith("url:")) return null;
+  if (!isNativePantauResult(post.platform, post.external_id, post.web_index)
+      || !enabledSources.has(post.platform) || !post.answered) return null;
   if (post.relevance !== "literal_match" && post.relevance !== "all_words_match") return null;
   // Check the retained caption/title against the final variants for admission.
   // The worker makes the authoritative canonical relevance determination.

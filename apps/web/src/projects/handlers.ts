@@ -8,7 +8,8 @@ import { asSources, workingSources, type SourceCredentials, type SourceId } from
 import { applySchedule, normalizeSchedule, readLimits, type ScheduleLimits } from "./schedules";
 import type { ScheduleChoice } from "../monitor/schedule-choice";
 import { toPersist } from "../monitor/schedule-choice";
-import { PANTAU_TRIAGE_SOURCES, pantauFilterTriageEnabled, readImportableSearch, seedProjectFromSearch } from "../monitor/search/seed-project";
+import { PANTAU_TRIAGE_SOURCES } from "../monitor/search/feature";
+import { pantauFilterTriageEnabled, readImportableSearch, seedProjectFromSearch } from "../monitor/search/seed-project";
 
 export type KeywordInput = string | { text: string; intent: KeywordIntent };
 

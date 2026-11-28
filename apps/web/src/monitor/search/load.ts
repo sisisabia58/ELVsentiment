@@ -53,6 +53,7 @@ export type SnapshotSource = {
 };
 
 export type SnapshotResult = {
+  webIndex?: boolean;
   id: string;
   platform: string;
   externalId: string;
@@ -235,6 +236,7 @@ export async function loadSearchSnapshot(
       id: string;
       platform: string;
       external_id: string;
+      web_index: boolean;
       author_name: string | null;
       author_handle: string | null;
       url: string | null;
@@ -251,7 +253,7 @@ export async function loadSearchSnapshot(
       rank: number | null;
       collected_at: string | Date;
     }>(
-      `select id, platform, external_id, author_name, author_handle, url, text, title,
+      `select id, platform, external_id, web_index, author_name, author_handle, url, text, title,
               published_at, thumbnail_url, views, likes, replies, shares, language,
               relevance, rank, collected_at
        from instant_search_results
@@ -269,6 +271,7 @@ export async function loadSearchSnapshot(
       if (relevance !== "literal_match" && relevance !== "all_words_match") continue;
       counts.set(result.platform, (counts.get(result.platform) ?? 0) + 1);
       results.push({
+        ...(result.web_index ? { webIndex: true } : {}),
         id: result.id,
         platform: result.platform,
         externalId: result.external_id,

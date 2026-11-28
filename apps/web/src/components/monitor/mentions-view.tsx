@@ -5,10 +5,10 @@ import { projectHref } from "@/monitor/links";
 import { selectedSourcesReady, type Workspace } from "@/monitor/load";
 import type { PresentedMention, Sentiment } from "@/monitor/present";
 import { ISSUE_CATEGORY_LABEL, SENTIMENT_LABEL, TRIAGE_STATUS_LABEL, UNCERTAIN_LABEL } from "@/monitor/present";
-import { mentionInWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
+import { inWindow, mentionInWindow, parseRangeKey, rangeWindow } from "@/monitor/range";
 import { TEXT_MATCH_LABEL, textMatchCounts } from "@/monitor/relevance";
 import { emptyCollectionBody } from "@/monitor/copy";
-import { EmptyState, PageHeader, Panel, SentimentTag, SourceMark } from "./bits";
+import { EmptyState, ManualRouteTag, PageHeader, Panel, SentimentTag, SourceMark } from "./bits";
 import { ReviewForm } from "./review-form";
 import { Frame } from "./shell";
 import { TextMatchSummary } from "./text-match-summary";
@@ -147,8 +147,11 @@ export function MentionsScreen(props: {
           {review ? (
             <aside className="rounded-[14px] border border-border bg-surface p-4 shadow-card lg:sticky lg:top-4 lg:p-5">
               <div className="flex items-start justify-between gap-3">
-                <h2 className="text-[15px] font-semibold">Tinjau penilaian</h2>
-                <Link href={listHref} className="text-sm font-medium text-primary">Tutup</Link>
+                <div className="min-w-0">
+                  <h2 className="text-[15px] font-semibold">Tinjau penilaian</h2>
+                  {review.manualRoute ? <div className="mt-1"><ManualRouteTag destination={review.manualRoute.destination} /></div> : null}
+                </div>
+                <Link href={listHref} className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center text-sm font-medium text-primary">Tutup</Link>
               </div>
               <div className="mt-4">
                 <ReviewForm key={review.id} mention={review} topics={props.workspace.topicLabels} />
@@ -261,7 +264,10 @@ function rowsFor(
   end: Date,
 ): PresentedMention[] {
   return workspace.mentions.filter((mention) => {
-    if (!mentionInWindow(mention, start, end)) return false;
+    const inRange = mode !== "sebutan" && mention.manualRoute
+      ? inWindow(mention.manualRoute.routedAt, start, end)
+      : mentionInWindow(mention, start, end);
+    if (!inRange) return false;
     if (source === "x" || source === "threads" || source === "instagram" || source === "tiktok") {
       if (mention.source !== source) return false;
     }
@@ -296,10 +302,11 @@ function MentionLine(props: { mention: PresentedMention; now: string; href: stri
         <p className="mt-1 line-clamp-2 text-sm leading-6">{mention.excerpt}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           <SentimentTag sentiment={mention.sentiment} />
+          {mention.manualRoute ? <ManualRouteTag destination={mention.manualRoute.destination} /> : null}
           <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium">
             {TEXT_MATCH_LABEL[mention.textMatch]}
           </span>
-          {mention.needsAttention ? <span className="rounded-full bg-negatif-bg px-2 py-0.5 text-xs font-medium text-negatif">{mention.triage ? "Perlu perhatian" : "Sentimen negatif"}</span> : null}
+          {mention.needsAttention && !mention.manualRoute ? <span className="rounded-full bg-negatif-bg px-2 py-0.5 text-xs font-medium text-negatif">{mention.triage ? "Perlu perhatian" : "Sentimen negatif"}</span> : null}
           {mention.triage?.issueCategory ? (
             <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium">
               {ISSUE_CATEGORY_LABEL[mention.triage.issueCategory]}

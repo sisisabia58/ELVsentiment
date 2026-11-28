@@ -6,6 +6,7 @@ import { SearchDetail } from "@/components/monitor/cari/search-screen";
 import { Frame } from "@/components/monitor/shell";
 import { withClient } from "@/db/pg";
 import { cariSekarangEnabled } from "@/monitor/search/feature";
+import { pantauFilterTriageEnabled } from "@/monitor/search/seed-project";
 import { isUuid, loadSearchSnapshot } from "@/monitor/search/load";
 import { requireWorkspace } from "@/monitor/session-page";
 
@@ -19,7 +20,15 @@ export async function CariDetailPageBody({ id }: { id: string }) {
   if (!snapshot) notFound();
   return (
     <Frame active="/cari" workspace={workspace} logout={<LogoutForm />}>
-      <SearchDetail key={snapshot.search.id} initialSnapshot={snapshot} now={now.toISOString()} aiEnabled={workspace.cariAiEnabled === true} />
+      <SearchDetail
+        key={snapshot.search.id}
+        initialSnapshot={snapshot}
+        now={now.toISOString()}
+        aiEnabled={workspace.cariAiEnabled === true}
+        reviewEnabled={pantauFilterTriageEnabled()}
+        reviewProjectId={workspace.project?.id ?? null}
+        reviewProjectName={workspace.project?.name ?? null}
+      />
     </Frame>
   );
 }

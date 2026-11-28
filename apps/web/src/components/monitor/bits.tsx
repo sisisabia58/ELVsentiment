@@ -2,7 +2,16 @@ import type { ReactNode } from "react";
 import { Activity } from "lucide-react";
 import { cn } from "cn";
 import { describeChange, formatNumber, formatSigned } from "@/monitor/format";
+import { MANUAL_ROUTE_LABEL, type PresentedManualRoute } from "@/monitor/present";
 import { SOURCE_NAME, type SourceId } from "@/monitor/sources";
+
+export function ManualRouteTag({ destination }: Pick<PresentedManualRoute, "destination">) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-primary/15 bg-info-bg px-2 py-0.5 text-xs font-medium text-primary">
+      Rute manual: {MANUAL_ROUTE_LABEL[destination]}
+    </span>
+  );
+}
 
 export function Wordmark() {
   return (

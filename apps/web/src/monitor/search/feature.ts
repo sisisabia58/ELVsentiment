@@ -1,3 +1,9 @@
+export const PANTAU_TRIAGE_SOURCES = ["threads", "instagram", "tiktok"];
+
+export function isNativePantauResult(platform: string, externalId: string, webIndex?: boolean): boolean {
+  return PANTAU_TRIAGE_SOURCES.includes(platform) && !webIndex && Boolean(externalId.trim()) && !externalId.startsWith("url:");
+}
+
 export type Env = Record<string, string | undefined>;
 
 function flag(value: string | undefined): boolean {
