@@ -201,11 +201,15 @@ describe.skipIf(!ADMIN_URL)("production migrations on Postgres 16", { timeout: 6
           { ...input, requestId: index && !replay ? randomUUID() : input.requestId })));
         const winner = outcomes.find((outcome) => outcome.ok && !outcome.replayed);
         if (!winner?.ok) throw new Error("no winning route");
-        if (replay) expect(outcomes).toEqual(expect.arrayContaining([winner, { ...winner, replayed: true }]));
+        if (replay) {
+          expect(outcomes).toEqual([winner, winner]);
+          expect(await routeCariResult(connections[1], { ...input, requestId: input.requestId.toUpperCase() })).toEqual(winner);
+        }
         else expect(outcomes).toContainEqual({ ok: false, error: "conflict" });
         const next = await routeCariResult(connections[0], { ...input, expectedRevision: winner.route.revision,
           destination: "ambiguous", requestId: randomUUID() });
         expect(next).toMatchObject({ ok: true, route: { destination: "ambiguous" } });
+        if (replay) expect(await routeCariResult(connections[1], input)).toEqual({ ...next, replayed: true });
         const stale = { projectId, mentionId: winner.mentionId, revision: winner.route.revision! };
         expect(await undoCariRoute(connections[1], stale)).toEqual({ ok: false, error: "conflict" });
         expect(await undoCariRoute({ ...connections[0], customerId: foreignId }, stale)).toEqual({ ok: false, error: "not_found" });

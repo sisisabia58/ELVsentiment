@@ -167,3 +167,27 @@ it("shows an absent judgment before the post is saved", async () => {
   open();
   expect(await screen.findByText("Belum ada penilaian otomatis.")).toBeTruthy();
 });
+
+it("retries a lost save response with the same ID and offers Undo for the recovered save", async () => {
+  vi.mocked(routeCariResultAction)
+    .mockRejectedValueOnce(new Error("response lost"))
+    .mockResolvedValueOnce({
+      ok: true, mentionId: "mention", route: { destination: "attention", revision: "recovered" },
+    });
+  vi.mocked(undoCariRouteAction).mockResolvedValue({
+    ok: true, mentionId: "mention", route: { destination: null, revision: "undone" },
+  });
+  open();
+  await screen.findByText("Menunggu penilaian");
+  fireEvent.click(choice("Perlu perhatian"));
+  expect(await screen.findByText("Keputusan gagal disimpan. Coba lagi.")).toBeTruthy();
+  fireEvent.click(choice("Perlu perhatian"));
+  expect(await screen.findByText("Disimpan ke Perlu perhatian.")).toBeTruthy();
+  const [initial, retried] = vi.mocked(routeCariResultAction).mock.calls;
+  expect(retried[0]).toEqual(initial[0]);
+  fireEvent.click(choice("Urungkan"));
+  expect(await screen.findByText("Keputusan diurungkan.")).toBeTruthy();
+  expect(undoCariRouteAction).toHaveBeenCalledExactlyOnceWith({
+    projectId: key.projectId, mentionId: "mention", revision: "recovered",
+  });
+});

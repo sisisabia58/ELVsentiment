@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { withCustomer, type Queryable } from "@/db/migrate";
 import { readStoredMentions } from "../mention-store";
 import type { StoredMention } from "../present";
@@ -71,6 +71,18 @@ async function lockMention(ctx: Context, projectId: string, mentionId: string) {
   return found.rows[0].source;
 }
 
+// Retrying an accepted request must recover its own revision. A distinct UUID
+// version prevents caller-provided request IDs from reusing random Undo revisions.
+function routeRevision(mentionId: string, requestId: string): string {
+  const bytes = createHash("sha256").update(`pantau-route:${mentionId}:${requestId.toLowerCase()}`).digest();
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return [
+    bytes.toString("hex", 0, 4), bytes.toString("hex", 4, 6), bytes.toString("hex", 6, 8),
+    bytes.toString("hex", 8, 10), bytes.toString("hex", 10, 16),
+  ].join("-");
+}
+
 export function routeCariResult(ctx: Context, input: RouteInput): Promise<ReviewWriteResult> {
   return inProject(ctx, input?.projectId, async () => {
     if (!["attention", "ambiguous"].includes(input.destination) || !isUuid(input.requestId)
@@ -87,14 +99,18 @@ export function routeCariResult(ctx: Context, input: RouteInput): Promise<Review
     const route = await currentRoute(ctx.db, mentionId);
     const replay = await ctx.db.query("select 1 from pantau_manual_route_requests where mention_id=$1 and request_id=$2",
       [mentionId, input.requestId]);
-    if (replay.rows.length) return { ok: true as const, mentionId, route, replayed: true as const };
+    const revision = routeRevision(mentionId, input.requestId);
+    const accepted = replay.rows.length > 0;
+    const latest = { ok: true as const, mentionId, route };
+    const staleReplay = { ...latest, replayed: true as const };
+    if (accepted && route.revision !== revision) return staleReplay;
 
     const corrected = await ctx.db.query(
       "select 1 from owner_corrections where mention_id=$1 and customer_id=$2 and relevance='irrelevant'",
       [mentionId, ctx.customerId]);
+    if (accepted) return corrected.rows.length ? staleReplay : latest;
     if (corrected.rows.length) throw new Rejected("ineligible");
     if (route.revision !== input.expectedRevision) throw new Rejected("conflict");
-    const revision = randomUUID();
     await ctx.db.query(`insert into pantau_manual_routes
       (mention_id,customer_id,project_id,source,destination,routed_at,revision,undoable)
       values ($1,$2,$3,$4,$5,clock_timestamp(),$6,true)

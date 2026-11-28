@@ -125,6 +125,7 @@ it("replays requests, restores a previous choice and clears the first choice aft
   const input = { ...k, destination: "attention" as const, expectedRevision: null, requestId: randomUUID() };
   const first = await routeCariResult(ctx, input);
   if (!first.ok) throw new Error(first.error);
+  expect(await routeCariResult(ctx, input)).toEqual(first);
   const second = await routeCariResult(ctx, { ...input, destination: "ambiguous", expectedRevision: first.route.revision, requestId: randomUUID() });
   if (!second.ok) throw new Error(second.error);
   expect(await routeCariResult(ctx,input)).toEqual({ ...second, replayed: true });
